@@ -412,7 +412,7 @@ def stop_launch(proc):
 
 
 def _terminate(signum, frame):
-    """Turn SIGTERM into an exit that runs the ``finally`` blocks (stops the launch)."""
+    """Turn SIGINT and SIGTERM into an exit that runs the ``finally`` blocks."""
     raise SystemExit(128 + signum)
 
 
@@ -438,36 +438,46 @@ def main(argv=None):
     if unknown:
         parser.error('boat(s) not in the roster %s: %s' % (roster, ', '.join(unknown)))
 
-    signal.signal(signal.SIGTERM, _terminate)
     import rclpy
-    rclpy.init()
+    from rclpy.signals import SignalHandlerOptions
+    # rclpy's own handlers shut the context down under us, and the stop-the-launch
+    # code below would then never run; take the signals ourselves.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+    signal.signal(signal.SIGINT, _terminate)
+    signal.signal(signal.SIGTERM, _terminate)
     test = proc = None
     try:
-        # Everything that can fail sits inside this try, and the launch (about 50
-        # processes) starts last, so a failed constructor cannot leak it.
-        test = SelfTest(boats, args.joysticks, colors)
-        if args.start_launch:
-            proc = start_launch(launch_command(
-                boats if args.boats else None, args.roster, args.joysticks,
-                args.launch_args))
-            test.launch = proc
         try:
-            test.wait_for_nodes(args.startup_timeout)
-            if all(ok for _, ok in test.results):
-                test.check_graph(args.tf_seconds)
-                test.check_platforms()
-                test.check_solo(args.drive_seconds)
-                test.check_together(args.drive_seconds + 2.0)
-                test.check_coverage(30.0)
-            test.reset()
-        except LaunchExited as error:
-            test.record('the launch keeps running', False, str(error))
+            # Everything that can fail sits inside these tries, and the launch (about
+            # 50 processes) starts last, so a failed constructor cannot leak it.
+            test = SelfTest(boats, args.joysticks, colors)
+            if args.start_launch:
+                proc = start_launch(launch_command(
+                    boats if args.boats else None, args.roster, args.joysticks,
+                    args.launch_args))
+                test.launch = proc
+            try:
+                test.wait_for_nodes(args.startup_timeout)
+                if all(ok for _, ok in test.results):
+                    test.check_graph(args.tf_seconds)
+                    test.check_platforms()
+                    test.check_solo(args.drive_seconds)
+                    test.check_together(args.drive_seconds + 2.0)
+                    test.check_coverage(30.0)
+                test.reset()
+            except LaunchExited as error:
+                test.record('the launch keeps running', False, str(error))
+        finally:
+            # First, before any ROS teardown that could itself raise: nothing may
+            # keep the 50-process launch alive.
+            if proc is not None:
+                stop_launch(proc)
     finally:
-        if test is not None:
-            test.close()
-        rclpy.shutdown()
-        if proc is not None:
-            stop_launch(proc)
+        try:
+            if test is not None:
+                test.close()
+        finally:
+            rclpy.try_shutdown()
     failed = [name for name, ok in test.results if not ok]
     print('%d of %d checks passed' % (len(test.results) - len(failed), len(test.results)))
     return 1 if failed else 0
