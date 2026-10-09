@@ -26,3 +26,18 @@ Parent umbrella: #87. The helm_manager `initial_piloting_mode` parameter has MER
 - [ ] Recommendation: expose `cell_size` (hard-coded 1.0), `ping_interval` (hard-coded 0.2) and `beam_count` as launch arguments with current values as defaults, for work item 6.
 - [ ] Recommendation: `initial_piloting_mode` is read-only and defaults empty; set it via a layered config file or scoped SetParameter (helm_manager_launch.py has no passthrough).
 - [ ] Recommendation: `marine_simulation` has no README (only the repo-root README.md); decide where the acceptance-criterion docs go.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-09 13:12 -04:00
+**By**: Claude Code Agent (Claude Sonnet)
+
+**Plan**: `.agent/work-plans/issue-88/plan.md` at `0189fd8`
+**Branch**: feature/issue-88 at `0189fd8`
+**Phases**: single
+
+### Open questions
+- [ ] Venue and start poses: default is Ben's Portsmouth position on a small grid with depth checked against US5NH02M.tiff; is the demo anywhere else?
+- [ ] Which controller models will be used, so the joy_to_helm axis map and slow-mode default can be set?
+- [ ] Include the cube base_link_frame fix in sim_robot_launch.py (changes existing single-boat behaviour) as its own commit, or leave it to a later issue?
+- [ ] Boat names: boat1..boat4 (proposed) or themed names (they become namespaces, frame prefixes, CAMP tab titles)?
