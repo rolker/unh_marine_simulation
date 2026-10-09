@@ -113,3 +113,42 @@ Revision after the Plan Review (changes-requested, 88c1ddf). All four must-fixes
 - [ ] launch_ros `SetParameter`/`SetRemap` leak across `GroupAction`s once an outer scope holds a list; the demo uses scoped subclasses. Consider the same in the real launches before they gain a second vehicle.
 - [ ] ROS discovery with `ROS_LOCALHOST_ONLY=1` was incomplete for the ~50-process stack (observed twice).
 - [ ] PR two: cube `base_link_frame` in `sim_robot_launch.py`, `cw4.yaml` key, measurements (host recorded: 16 CPUs, 31 GB), deferred items.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-09 14:44 -04:00
+**By**: Claude Code Agent (Claude Sonnet)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-88 at `6be5e05`
+**Mode**: pre-push
+**Depth**: Deep (reason: 1970 changed lines, 15 files outside .agent/)
+**Must-fix**: 8 | **Suggestions**: 12
+**Round**: 1 | **Ship**: continue — 8 must-fix, all with a precise fix; two are correctness (set_pose / roster NaN freezes the shared asv_sim; flaky and sign-blind set_pose test). One address-findings round, then a light re-check, should be enough.
+
+Specialists: static analysis (ament_flake8 / pep257 / xmllint / lint_cmake clean on all new files; yamllint style notes only), governance, plan drift, Claude adversarial Lens A + Lens B (fresh sub-agents), cross-model (gemini + codex, both EXIT=0), local model off. Live four-boat self-test re-run here on a private ROS_DOMAIN_ID: 15 of 15 pass, nothing left running. Build + test: asv_sim 20 tests, 0 failures, 1 skipped (copyright, pre-existing skip); marine_simulation 88 per colcon (68 in the xunit files), 8 failures, all in files this branch did not touch (copyright bizzyboat_massabesic_launch.py; flake8 I100 simulator_launch.py:43; pep257 D213 in bizzyboat_massabesic_launch.py, gazebo_ben_launch.py, gazebo_simulator_launch.py; plus the 3 CTest wrappers of those).
+
+### Findings
+- [ ] (must-fix) set_pose accepts NaN/inf/out-of-range lat-lon and zero-norm quaternion and replies success=True; NaN makes geodesic.direct loop forever (reproduced, timeout exit 124), freezing the one shared asv_sim for all boats — validate, return success=False, add a test — `asv_sim/asv_sim/platform.py:168`
+- [ ] (must-fix) _number() lets NaN through (both range comparisons are False), so a roster with .nan start lat/lon/heading passes fail-fast and hangs asv_sim at first update — add math.isfinite and a test — `marine_simulation/launch/demo_boats_launch.py:125`
+- [ ] (must-fix) test_set_pose_heading_is_a_compass_heading cannot catch a yaw-sign error (heading 90 = yaw 0) and the abs(north) < east/3 bound fails about 3 percent of runs on correct code (model noise); use heading 0 or 200 and a looser or seeded check — `asv_sim/test/test_multi_platform.py:174`
+- [ ] (must-fix) demo_boats_selftest --start-launch starts the 50-process launch before rclpy.init()/SelfTest(), outside try/finally; a constructor failure leaks the whole stack (and the next try then has two asv_sim) — `marine_simulation/scripts/demo_boats_selftest.py:333`
+- [ ] (must-fix) assign_joysticks only checks os.path.exists: an -event-joystick link (the very name the owner first gave) passes and joy_linux then reads garbage silently; duplicate detection compares strings, not realpath — require the resolved target to match js<N> and dedupe on realpath — `marine_simulation/launch/demo_boats_launch.py:207`
+- [ ] (must-fix) enable_joysticks / enable_nav parsing is lenient: anything outside true/1/yes/on means off, so enable_joysticks:=ture starts four boats with no pads and no message; parse strictly and raise — `marine_simulation/launch/demo_boats_launch.py:437`
+- [ ] (must-fix) .agents/README.md pitfalls are wrong on two counts: "Single-vehicle launches never notice" and "sim_robot_launch.py still leaves the cube's unset". Captured the real sim_robot_launch.py: a top-level SetParameter makes the outer list exist, so its groups leak (sonar_frame_id, ping_interval, grid_file reach d2p and cube; sea_surface_frame reaches chart_datum and nav2), and cube_bathymetry gets base_link_frame=ben/base_link only through that leak. Fix the text, plan.md Facts / PR two, and the Implementation entry — `.agents/README.md` (SetParameter/SetRemap and Frame-defaults bullets)
+- [ ] (must-fix) README pad checklist item 7 says A, B and X request a mode change; A does not (joy_to_helm only publishes when the request differs from the current state, already manual) — only B and X stall — `marine_simulation/README.md:105`
+- [ ] (suggestion) No unit test pins ScopedSetParameter / ScopedSetRemap (the reason the subclasses exist); a 15-line LaunchService test over two sibling GroupActions with an outer list would — `marine_simulation/test/test_demo_boats_launch.py`
+- [ ] (suggestion) Pitfall bullet says use the scoped classes "for any launch" but they live inside the demo launch (not importable) and SetParametersFromFile has no scoped version; ScopedSetRemap only matters once an outer ros_remaps list exists — `.agents/README.md`
+- [ ] (suggestion) chart_datum defaults its geoid and VDatum grids to ~/data/world/datum; if absent it only warns, then <boat>/chart_datum and chart_datum_mhhw never appear (self-test fails after 90 s, launch looks fine). Document the requirement and preflight it — `marine_simulation/README.md`, `demo_boats_launch.py:334`
+- [ ] (suggestion) Self-test: --start-launch does not forward --boats/--roster, hard-codes enable_joysticks:=false (so --joysticks can never pass), does not notice an early launch exit, ignores SIGTERM; platform_sender / /marine/platforms (the CAMP tab names and colours) is not checked — `demo_boats_selftest.py:298,333`
+- [ ] (suggestion) Graph check blind spots: a single boat publishing an unprefixed non-shared topic is not flagged (needs two boats), publishers in the root namespace (asv_sim) and all subscribers are invisible, joy_linux may publish an absolute /diagnostics — say so in the docstring or tighten — `marine_simulation/scripts/check_multi_boat_graph.py:98`
+- [ ] (suggestion) Unvalidated inputs: autorepeat_rate <= 2 Hz stops a held stick (asv_sim zeroes commands after 0.5 s), deadzone outside [0,1), mbes_grid_file path, cell_size / beam_count / ping_interval positivity, installed joy_linux (raw PackageNotFound after boats have started) — `demo_boats_launch.py:430-442`
+- [ ] (suggestion) Name pattern uses re.match with $ (accepts a trailing newline) — use fullmatch; FRAME_SUFFIXES is unused (self-test has its own BOAT_FRAMES) — `demo_boats_launch.py:73,76,150`
+- [ ] (suggestion) set_pose heading not normalised (negative for yaw > 90 degrees; cosmetic, dynamics fix it at first step); reset_callback ignores Bool.data — `asv_sim/asv_sim/platform.py:161,182`
+- [ ] (suggestion) Test hygiene: all test platforms share model demo (so a model mix-up passes); sim_reset test never asserts the boats left start first; Rig() built outside try so a failed AsvSim() leaves rclpy initialised for later tests; roster test name promises depth check it does not do — `asv_sim/test/test_multi_platform.py:146,193`, `test_demo_boats_launch.py:86`
+- [ ] (suggestion) package.xml lacks explicit exec_depends for what the scripts import (rclpy, sensor_msgs, std_msgs, tf2_msgs, marine_interfaces, ament_index_python) — `marine_simulation/package.xml`
+- [ ] (suggestion) README: sim_reset does not clear CUBE (the cleanup/configure cycle is a host procedure, say so); advise a private ROS_DOMAIN_ID for the demo itself; the first example fails until demo_joysticks.yaml is copied and edited — `marine_simulation/README.md:12,107`
+- [ ] (suggestion) joy_linux 3.3.0 source (fetched, tag 3.3.0) appears to re-open the device after loss, so respawn is probably unnecessary, but the replug step in the checklist is still unverified until the dry run — `marine_simulation/launch/demo_boats_launch.py:398`
+
+### Follow-up issue (not a change here)
+- [ ] launch_ros SetParameter/SetRemap/SetParametersFromFile extend the context list in place; sim_robot_launch.py (top-level use_sim_time SetParameter, then nested groups) and any launch with an outer list leak group values to later nodes. The cube's base_link_frame is correct today only through the leak, so the scoped fix and the explicit cube base_link_frame (PR two) must land together. Reproduction scripts: robotcap.py approach (patch Node.execute, print global_params).
