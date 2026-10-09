@@ -40,8 +40,9 @@ Facts the design rests on (read from source, not assumed):
 - `ben_description`'s `publish_state_launch.py` does not pass `namespace` to xacro (links stay `ben/...`), so the demo launch starts `robot_state_publisher` + `joint_state_publisher`
   itself with `xacro ben_mesh.xacro namespace:=<boat>` (verified: yields `<boat>/base_link`, `/motion_sensor`, `/mbes_ram`, `/mbes`).
 - Frame-name hazards found beyond the review: `chart_datum` and `sea_surface_estimator` default `mhhw_frame` to the UNPREFIXED `chart_datum_mhhw` (four boats would publish one child frame
-  under four parents), `sea_surface_estimator` defaults `chart_datum_frame` unprefixed, and `cube_bathymetry` defaults `base_link_frame` to `base_link`. The demo launch sets all per boat;
-  the equivalent fix in `sim_robot_launch.py` (cube only) is PR two.
+  under four parents), `sea_surface_estimator` defaults `chart_datum_frame` unprefixed, and `cube_bathymetry` defaults `base_link_frame` to `base_link`. The demo launch sets all per boat.
+  `sim_robot_launch.py` never sets the cube's `base_link_frame`: the cube gets `ben/base_link` only because of the launch_ros leak (below, Implementation Notes), so PR two's explicit
+  cube `base_link_frame` is what makes the real launch correct, and any later scoping of that launch depends on it.
 - `asv_sim/config/cw4.yaml` sets `models.cw4.max_bucket_change_rate`, but the declared name is `bucket_change_rate` (`model.py`); the key is silently ignored (value equals the default). PR two.
 - `/marine/platforms` (`platform_sender`), `/tf`, `/tf_static`, `/rosout`, `/parameter_events` are legitimately shared topics; `earth` is a legitimately shared TF parent.
 
@@ -113,12 +114,13 @@ Not started: `udp_bridge`, `command_bridge`, `mission_manager`, nav2, `s57_grids
 4. `ros2 topic echo --once /<boat>/joy` after launching: `axes` has 8 entries and `buttons` has 11. A pad reporting fewer buttons makes `joy_to_helm` silently ignore it (it reads `buttons[9]` and `[10]`).
 5. Move each stick and trigger once: left stick up = `axes[1]` positive (throttle), right stick left/right = `axes[3]` (rudder), left trigger = `axes[2]` goes from 1.0 toward -1.0 (full speed; otherwise throttle is scaled to 0.35).
 6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug/replug one pad and confirm it still drives the same boat.
-7. Do not press A/B/X: `joy_to_helm` requests a mode change nobody handles and stalls until the next heartbeat.
+7. Do not press B or X: `joy_to_helm` requests a mode change nobody handles and stalls until the next heartbeat. A asks for `manual`, which the boat is already in, so it does nothing.
 
 ## PR two (separate PR; "Part of #88", closes it)
 
-- `sim_robot_launch.py` cube `base_link_frame` fix (own commit, host-approved: changes existing single-boat CA-window behaviour) and `asv_sim/config/cw4.yaml` `max_bucket_change_rate` -> `bucket_change_rate` key fix (value unchanged).
+- `sim_robot_launch.py` cube `base_link_frame` set explicitly (own commit, host-approved: changes existing single-boat CA-window behaviour; today the value arrives only through the leak, so this must land before, or together with, any scoped fix of that launch) and `asv_sim/config/cw4.yaml` `max_bucket_change_rate` -> `bucket_change_rate` key fix (value unchanged).
 - Multi-platform measurements (1 boat, 4 boats default, 4 boats coarse; CPU and RSS, script output pasted; host recorded) and the repeat on the event machine at the dry run.
+- Follow-up issue (not PR two): scope `SetParameter`/`SetRemap`/`SetParametersFromFile` in `sim_robot_launch.py` and the other launches with an outer list; it must be coupled with the explicit cube `base_link_frame` above, because the leak is what currently feeds the cube.
 - Deferred: the `cell_size`/`ping_interval`/`beam_count` arguments on `sim_robot_launch.py` and a snapshot test; real nav includes (`nav2`, `mission_manager`, `s57_grids`) behind `enable_nav` and its smoke test; launch-flattening tests; follow-ups: `mru_transform` (prefix defaults), `ben_description` (namespace passthrough), `ben_project11` (`ben.yaml` hard-coded prefix, `ben_core_launch.py` nav gate), `unh_marine_autonomy` (manual-only `robot_core_launch.py` argument, if wanted).
 
 ## Files to Change (PR one)
@@ -131,7 +133,7 @@ Not started: `udp_bridge`, `command_bridge`, `mission_manager`, nav2, `s57_grids
 | `marine_simulation/config/demo_roster.yaml`, `demo_params.yaml`, `demo_joysticks.yaml` | new roster, node parameters, joystick bindings |
 | `marine_simulation/launch/demo_boats_launch.py` | new demo launch |
 | `marine_simulation/scripts/check_multi_boat_graph.py`, `demo_boats_selftest.py` | graph check and self-test |
-| `marine_simulation/test/test_demo_boats_launch.py`, `test_check_multi_boat_graph.py` | unit tests |
+| `marine_simulation/test/test_demo_boats_launch.py`, `test_check_multi_boat_graph.py`, `test_demo_boats_selftest.py` | unit tests |
 | `marine_simulation/CMakeLists.txt`, `package.xml` | install scripts, test registration, exec/test deps |
 | `marine_simulation/README.md` (new), `.agents/README.md` | docs |
 
@@ -185,8 +187,9 @@ PR one: about 8 atomic commits in this repo, none in other repos, aiming to land
 
 ## Implementation Notes
 
-- **Scoped actions.** `launch_ros` `SetParameter` / `SetRemap` / `SetParametersFromFile` append to the context's existing `global_params` / `ros_remaps` list IN PLACE, so once an outer scope owns the list a nested `GroupAction`'s values survive the end of the group and land on the next boat's nodes (seen: boat two's `chart_datum` got boat one's frames and died). The demo launch uses copy-on-write subclasses so each boat's group really is a scope. The existing single-boat launches never notice.
+- **Scoped actions.** `launch_ros` `SetParameter` / `SetRemap` / `SetParametersFromFile` append to the context's existing `global_params` / `ros_remaps` list IN PLACE, so once an outer scope owns the list a nested `GroupAction`'s values survive the end of the group and land on the next boat's nodes (seen: boat two's `chart_datum` got boat one's frames and died). The demo launch uses copy-on-write subclasses (`ScopedSetParameter`, `ScopedSetRemap`) so each boat's group really is a scope; there is no scoped `SetParametersFromFile`, and the remaps list leaks only once an outer `ros_remaps` list exists. The existing single-boat launches DO leak, they just have one vehicle to hide it: `sim_robot_launch.py` starts with a top-level `use_sim_time` `SetParameter`, which creates the outer list, so `sonar_frame_id`, `ping_interval` and `grid_file` from the mbes_sim group reach `detections_to_pointcloud` and the cube, `sea_surface_frame` reaches `chart_datum` and nav2, and the cube's `base_link_frame` (`ben/base_link`) arrives only through the leak. Scoping those launches therefore needs the explicit cube `base_link_frame` first (PR two). Pre-push review round 1 found this; the first draft of this note and of `.agents/README.md` claimed the opposite.
 - **`joy_linux` device.** `dev` is opened with the js API, so the by-path link ending in `-joystick` is the right one (host-confirmed); `dev_ff` is empty because the only evdev use is force feedback.
 - **ROS discovery for the test.** The four-boat stack is about 50 processes. With `ROS_LOCALHOST_ONLY=1` or `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST` a second process on this host saw only part of the graph (no Python node, not even `asv_sim`, for minutes); with the default range it saw everything. Run the self-test with default discovery, on a private `ROS_DOMAIN_ID`.
 - **Empty `draft_dir`.** An empty string cannot be a `-p` command-line override (`Failed to parse global arguments`), which is why the cube's two disk parameters live in the parameter file, not in a `SetParameter`.
 - **Throttle is not proportional.** The `asv_sim` jet model runs at about 2 m/s at 0.3 throttle, so a self-test that ranks boats by throttle fails; the idle-boat form is what proves independence.
+- **Round 1 review fixes (address-findings).** `set_pose` refuses non-finite values, out-of-range latitude/longitude and a zero-length quaternion (a NaN position hangs `geodesic.direct` inside the one shared node), normalises the stored heading, and `sim_reset` ignores `false`. The launch checks finiteness, parses booleans strictly, requires joystick links to resolve to distinct `jsN` nodes, and refuses to start without the datum grids `chart_datum` needs (`~/data/world/datum/geoid/us_noaa_g2018u0.tif`, `vdatum/*_mllw.gtx`), without `joy_linux` (when joysticks are on), or with a `deadzone`/`autorepeat_rate`/`mbes_grid_file`/`cell_size`/`beam_count`/`ping_interval` that cannot work. The self-test starts its launch last, inside the `try`, forwards `--boats`/`--roster`/`--joysticks`, stops on SIGTERM, notices an early launch exit and checks `/marine/platforms` names and colours. The graph check also flags a single boat publishing an unprefixed topic and documents what it cannot see. The demo's `joy_linux` node has no `respawn`; joy_linux 3.3.0 is expected to re-open a lost device itself, still unverified until the dry run.
