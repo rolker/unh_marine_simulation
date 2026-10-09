@@ -393,9 +393,15 @@ def test_the_stock_actions_do_leak_which_is_why_the_scoped_ones_exist():
         _probe(seen, 'after'),
     ])
     _, params, remaps = seen[0]
-    # If launch_ros ever scopes these itself, the subclasses can go.
-    assert 'boat' in [k for k, _ in params]
-    assert ('a', 'first/a') in remaps
+    # This is a canary, not a regression test. If it fails, launch_ros has started
+    # scoping SetParameter / SetRemap inside a GroupAction itself: that is good news.
+    # Delete ScopedSetParameter, ScopedSetRemap and test_scoped_actions_do_not_leak_
+    # into_the_next_group, use the stock actions in demo_boats_launch.py, and drop the
+    # matching pitfall bullet in .agents/README.md.
+    fixed = ('launch_ros now scopes SetParameter/SetRemap inside a GroupAction: delete '
+             'the Scoped* subclasses and this test (see the comment above)')
+    assert 'boat' in [k for k, _ in params], fixed
+    assert ('a', 'first/a') in remaps, fixed
 
 
 # --- names and frames come from the roster -----------------------------------------
