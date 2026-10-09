@@ -21,6 +21,9 @@ import transforms3d
 
 # Approximate meters-to-degrees at mid-latitudes
 _METERS_PER_DEG_LAT = 111320.0
+# set_pose refuses an orientation quaternion with a component beyond this: a
+# rotation is at most 1 per component, so anything this far out is a bug upstream.
+_MAX_QUATERNION_COMPONENT = 1e6
 
 
 class Platform:
@@ -178,32 +181,46 @@ class Platform:
 
         A request that cannot be a place on Earth (NaN or infinite values,
         latitude outside [-90, 90], longitude outside [-180, 180], or a
-        quaternion with no direction) is refused with ``success = False`` and
-        leaves the platform where it is. A NaN position would otherwise hang
-        the geodesic solver inside the one node that simulates every boat.
+        quaternion with no direction or with components beyond
+        ``_MAX_QUATERNION_COMPONENT``) is refused with ``success = False`` and
+        leaves the platform where it is. A NaN position or heading would
+        otherwise hang the geodesic solver inside the one node that simulates
+        every boat. The quaternion need not be unit length: it is normalised
+        (scaled by its largest component first, so a huge one cannot overflow).
         """
         pose = req.pose.pose
         q = pose.orientation
         lat = pose.position.latitude
         lon = pose.position.longitude
         quaternion = (q.x, q.y, q.z, q.w)
+        scale = max(abs(v) for v in quaternion)
         problem = None
+        heading = None
         if not all(math.isfinite(v) for v in (lat, lon) + quaternion):
             problem = 'a value is not finite'
         elif not -90.0 <= lat <= 90.0:
             problem = 'latitude %s is outside [-90, 90]' % lat
         elif not -180.0 <= lon <= 180.0:
             problem = 'longitude %s is outside [-180, 180]' % lon
-        elif math.sqrt(sum(v * v for v in quaternion)) < 1e-6:
+        elif scale < 1e-6:
             problem = 'the orientation quaternion has zero length'
+        elif scale > _MAX_QUATERNION_COMPONENT:
+            problem = ('the orientation quaternion has a component of %g, '
+                       'far from a rotation' % scale)
+        else:
+            x, y, z, w = (v / scale for v in quaternion)
+            norm = math.sqrt(x * x + y * y + z * z + w * w)
+            x, y, z, w = x / norm, y / norm, z / norm, w / norm
+            yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+            heading = (90.0 - math.degrees(yaw)) % 360.0
+            if not math.isfinite(heading):
+                problem = 'the orientation does not give a finite heading'
         if problem is not None:
             self.node.get_logger().error(
                 'set_pose for %s refused: %s' % (self.name, problem))
             res.success = False
             return res
-        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
-                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self.dynamics.set(lat, lon, (90.0 - math.degrees(yaw)) % 360.0)
+        self.dynamics.set(lat, lon, heading)
         res.success = True
         return res
 

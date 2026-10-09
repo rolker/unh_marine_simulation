@@ -235,6 +235,21 @@ def test_set_pose_stores_a_heading_in_zero_to_360(rig):
         assert math.degrees(platform.dynamics.heading) == pytest.approx(heading)
 
 
+@pytest.mark.parametrize('quaternion, heading', [
+    ((0.0, 0.0, 1.0, 1.0), 0.0),            # not unit length: yaw 90 degrees = north
+    ((0.0, 0.0, 1e5, 1e5), 0.0),           # large, still a direction
+    ((0.0, 0.0, 1e-5, 1e-5), 0.0),          # small, still a direction
+    ((0.0, 0.0, 2.0, 0.0), 270.0),          # yaw 180 degrees = west
+], ids=['non-unit', 'large', 'small', 'z-only'])
+def test_set_pose_normalises_the_quaternion(rig, quaternion, heading):
+    platform = next(p for p in rig.sim.platforms if p.name == 'charlie')
+    request = SetPose.Request()
+    (request.pose.pose.orientation.x, request.pose.pose.orientation.y,
+     request.pose.pose.orientation.z, request.pose.pose.orientation.w) = quaternion
+    assert platform.set_pose(request, SetPose.Response()).success
+    assert math.degrees(platform.dynamics.heading) == pytest.approx(heading)
+
+
 NAN, INF = float('nan'), float('inf')
 
 
@@ -249,8 +264,11 @@ NAN, INF = float('nan'), float('inf')
     (43.0, -70.7, (0.0, 0.0, 0.0, 0.0)),
     (43.0, -70.7, (0.0, 0.0, NAN, 1.0)),
     (43.0, -70.7, (INF, 0.0, 0.0, 1.0)),
+    (43.0, -70.7, (1e308, 1e308, 1e308, -1e308)),
+    (43.0, -70.7, (0.0, 0.0, 1e7, 1e7)),
 ], ids=['nan-lat', 'nan-lon', 'inf-lat', 'inf-lon', 'lat-high', 'lat-low',
-        'lon-high', 'zero-quaternion', 'nan-quaternion', 'inf-quaternion'])
+        'lon-high', 'zero-quaternion', 'nan-quaternion', 'inf-quaternion',
+        'huge-quaternion', 'implausible-quaternion'])
 def test_set_pose_refuses_a_pose_that_is_not_on_earth(rig, lat, lon, quaternion):
     before = {n: rig.fresh_fix(n) for n in PLATFORMS}
     assert not rig.call_set_pose('bravo', lat, lon, quaternion=quaternion).success
