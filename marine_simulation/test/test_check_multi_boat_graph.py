@@ -77,3 +77,15 @@ def test_unprefixed_topic_published_by_two_boats_is_reported_unless_shared():
             '/marine/platforms': [('platform_sender', '/one'), ('platform_sender', '/two')]}
     problems = graph.cross_boat_publishers(pubs, BOATS)
     assert len(problems) == 1 and problems[0].startswith('/odom ')
+
+
+def test_unprefixed_topic_published_by_a_single_boat_is_reported():
+    pubs = {'/odom': [('a', '/one')], '/tf': [('rsp', '/one')]}
+    problems = graph.cross_boat_publishers(pubs, BOATS)
+    assert len(problems) == 1 and problems[0].startswith('/odom ')
+
+
+def test_root_namespace_publishers_are_ignored_by_design():
+    pubs = {'/asv_sim/environment/tide_level': [('asv_sim', '/')],
+            '/diagnostics': [('joy_node', '/')]}
+    assert graph.cross_boat_publishers(pubs, BOATS) == []

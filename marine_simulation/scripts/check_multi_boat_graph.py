@@ -36,14 +36,29 @@ can be tested without ROS:
 
 - no two nodes share a fully qualified name,
 - every TF child frame has exactly one parent (``earth`` may parent many),
-- no boat's nodes publish another boat's topics, and no topic outside the boats'
-  namespaces is published by the nodes of two different boats.
+- no boat's nodes publish another boat's topics, and no boat's node publishes a
+  topic outside the boats' namespaces (other than the shared ones below).
 
 Run against a running ``demo_boats_launch.py``::
 
     ros2 run marine_simulation check_multi_boat_graph.py
 
 Exit status 0 when every check passes, 1 when one fails.
+
+What it cannot see:
+
+- Only publishers are examined. A node that subscribes to another boat's topic
+  (or to an unprefixed one) is invisible here.
+- A node in the root namespace (``asv_sim`` simulates every boat) belongs to no
+  boat, so it may publish anywhere; a mistake inside ``asv_sim`` is not caught.
+  Its per-boat topics are checked for presence by ``demo_boats_selftest.py``.
+- A node is attributed to a boat by its namespace alone. A boat's node launched
+  without the boat namespace looks like a root node, and shows up as a duplicate
+  node name or a missing node in the self-test rather than here.
+- ``SHARED_TOPICS`` is a fixed list; a node that publishes a different absolute
+  topic is reported until it is added there on purpose. ``/diagnostics`` is on the
+  list because diagnostic_updater based nodes (``joy_linux`` may be one) publish it
+  unprefixed.
 """
 
 import argparse
@@ -59,6 +74,7 @@ import yaml
 # global fleet list). A new entry here should be a deliberate decision.
 SHARED_TOPICS = frozenset({
     '/marine/platforms', '/tf', '/tf_static', '/rosout', '/parameter_events', '/clock',
+    '/diagnostics',
 })
 
 
@@ -108,8 +124,9 @@ def cross_boat_publishers(
     and may publish anywhere.
 
     - A topic inside boat X's namespace must not be published by boat Y's nodes.
-    - A topic outside every boat's namespace must not be published by the nodes
-      of two boats, unless it is in ``shared_topics``.
+    - A topic outside every boat's namespace must not be published by a boat's
+      nodes at all, unless it is in ``shared_topics``: a single boat doing it
+      is an unprefixed topic that the second boat will collide with.
     """
     shared = set(shared_topics)
     problems = []
@@ -123,7 +140,7 @@ def cross_boat_publishers(
             if wrong:
                 problems.append('%s belongs to %s but is published by %s'
                                 % (topic, owner, ', '.join(wrong)))
-        elif len(publishing) > 1:
+        elif publishing:
             problems.append('%s is outside the boat namespaces but published by %s'
                             % (topic, ', '.join(publishing)))
     return problems
