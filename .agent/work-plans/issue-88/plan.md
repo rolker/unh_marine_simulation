@@ -7,135 +7,174 @@ https://github.com/rolker/unh_marine_simulation/issues/88
 ## Context
 
 Part of #87 (Ocean Discovery Day demo, Oct 23-24). Settled by the owner on 2026-10-09 (checkpoint after the `## Issue Review`
-in `progress.md`): (1) the boats are a NEW demo platform in `asv_sim`, four instances; (2) a demo-specific launch composes the
-nodes directly, with an off-by-default nav-stack argument; (3) bridge off, joystick mapping by config; (4) the absolute tide
-topic is the intended shared topic; (5) `cell_size` / `ping_interval` / `beam_count` become launch arguments; (6) tests plus a
-`marine_simulation` README and `.agents/README.md`, verified against the launch source.
+in `progress.md`, then again after the `## Plan Review`): (1) the boats are a NEW demo platform in `asv_sim`, four instances;
+(2) a demo-specific launch composes the nodes directly; the nav stack stays includable only as a fail-fast `enable_nav` switch
+(declared, default off, refuses with "not wired yet" if set); (3) bridge off, joystick mapping by config; (4) the absolute tide
+topic is the intended shared topic; (5) tests plus a `marine_simulation` README and `.agents/README.md`, verified against the
+launch source; (6) venue is Portsmouth Harbour (the packaged `US5NH02M.tiff` grid), start poses near Ben's position and depth-checked;
+(7) controllers are Xbox-layout pads (GameSir G7 SE, wired, XInput mode); (8) boat names are tied to the controller colours, in this order:
+`bluefin` (blue), `clownfish` (orange), `urchin` (purple), `beluga` (white); each boat's `platform_sender` `color` matches its pad so CAMP tabs match;
+names stay config-only; (9) controller assignment must survive reboots: use the `joy_linux` driver bound to a physical USB port by a
+`/dev/input/by-path/` link, not `joy`'s plug-order `device_id`.
 
 Facts the design rests on (read from source, not assumed):
 - `asv_sim` is one node (`asv_sim`, root namespace) holding N platforms. Per platform it publishes `<namespace>/position|orientation|velocity`,
-  subscribes `<namespace>/throttle|rudder`, and exposes `~/<name>/have_commands|set_pose|sim_reset`. Models are shared by name.
-- `sim_robot_launch.py` keeps `asv_helm` OUTSIDE `sim_group`; `no_sim` therefore gates asv_sim + mbes_sim + detections_to_pointcloud + cube together.
-  The demo launch does not go through it (decision 2), so that coupling is sidestepped rather than fixed.
-- Per boat the CUBE chain needs `mru_transform` (the `<ns>/odom`, `<ns>/map`, `<ns>/base_link` TF), `sea_surface_estimator` (`<ns>/map_tide`) and the URDF
-  static TF (`motion_sensor`, `mbes` through a prismatic `mbes_ram` joint, so a `joint_state_publisher` is required, not only `robot_state_publisher`).
-- `helm_manager` publishes its heartbeat only when `asv_helm` publishes `status/helm`, and `joy_to_helm` publishes only when the heartbeat says `manual`;
-  so `asv_helm` and `helm_manager` are both needed even with no nav stack. `initial_piloting_mode` is read-only and must be set from YAML/launch.
-- `joy` 3.3.0 parameters: `device_id`, `device_name`, `deadzone`, `autorepeat_rate`, `sticky_buttons`, `coalesce_interval_ms`. No `/dev/input/js<N>` path.
-  Identical controllers share a name, so `device_name` cannot tell four identical pads apart; SDL index order follows enumeration/plug order.
-- Frame-name hazards found beyond the review: `chart_datum` and `sea_surface_estimator` default `mhhw_frame` to the UNPREFIXED `chart_datum_mhhw`
-  (four boats would publish one child frame under four parents), `sea_surface_estimator` defaults `chart_datum_frame` unprefixed, and `cube_bathymetry`
-  defaults `base_link_frame` to `base_link` (`sim_robot_launch.py` sets it only for `detections_to_pointcloud`, so the CA window falls back to the full resident set).
-- `asv_sim/config/cw4.yaml` sets `models.cw4.max_bucket_change_rate`, but the declared name is `bucket_change_rate` (`model.py`); the key is silently ignored (value equals the default).
+  subscribes `<namespace>/throttle|rudder`, and exposes `~/<name>/have_commands|set_pose|sim_reset`. Models are shared by name. `Platform` declares
+  defaults for every key, so a platform name that has no config silently becomes a `default`-model boat at 0,0 (the launch fail-fast check, not `asv_sim`, guards typos).
+- `sim_robot_launch.py` keeps `asv_helm` OUTSIDE `sim_group`; `no_sim` therefore gates asv_sim + mbes_sim + detections_to_pointcloud + cube together; it also runs
+  `mbes_sim` in the root namespace (one `/mbes_sim`). The demo launch does not go through it, so both are sidestepped rather than fixed.
+- Per boat the CUBE chain needs `mru_transform` (the `<b>/odom`, `<b>/map`, `<b>/base_link` TF), `sea_surface_estimator` (`<b>/map_tide`) and the URDF static TF
+  (`motion_sensor`, `mbes` through a prismatic `mbes_ram` joint, so a `joint_state_publisher` is required, not only `robot_state_publisher`).
+- `helm_manager` publishes its heartbeat only when `asv_helm` publishes `status/helm`, and `joy_to_helm` publishes only when the heartbeat says `manual`; so `asv_helm`
+  and `helm_manager` are both needed even with no nav stack. `initial_piloting_mode` is read-only and must be set from YAML/launch; `helm_manager` also needs the
+  `piloting_modes` lists that `marine_autonomy/config/robot.yaml` supplies to real boats.
+- `joy_to_helm` reads `buttons[0..2]` and `buttons[9]`/`[10]` on every message and swallows `IndexError` silently (`joy_to_helm.py`, `except IndexError: pass`), so a pad that
+  reports fewer than 11 buttons just does not drive. Defaults (throttle axis 1, rudder axis 3, slow-mode axis 2: throttle is scaled by 0.35 unless axis 2 < 0) match the
+  `js`-API (xpad) ordering of 8 axes and 11 buttons. Pressing buttons 0/1/2 makes `joy_to_helm` request a mode change on `marine/send_command` (nobody listens: no `command_bridge`)
+  and set its own state until the next heartbeat re-asserts `manual`, so those buttons cause a brief stall, not a mode change.
+- `joy` 3.3.0 (the only joystick driver installed on the dev host) selects by SDL `device_id`/`device_name`: a plug-order index and a shared name for identical pads, so it cannot
+  pin four identical pads. `joy_linux` 3.3.0 (apt candidate `ros-jazzy-joy-linux`, not installed on the dev host) has a `dev` parameter. Per its source (fetched, not run here)
+  it opens `dev` with the **js API** (`/dev/input/jsN`, `struct js_event`), NOT evdev: an `eventN` path would not produce valid data. So the by-path link to use is the
+  `...-joystick` one (resolves to `jsN`), not the `...-event-joystick` one (resolves to `eventN`) the owner first named; `dev_ff` (force feedback, the only evdev use) is set to empty.
+  `joy_linux` also: `autorepeat_rate` code default 20 Hz vs README 0.0 (set explicitly), default `deadzone` 0.05, axis sign inverted so pushing a stick forward is positive,
+  triggers read 0.0 until first moved (so slow mode is on at start, which is what we want), then +1 released / -1 pressed.
+- `ben_description`'s `publish_state_launch.py` does not pass `namespace` to xacro (links stay `ben/...`), so the demo launch starts `robot_state_publisher` + `joint_state_publisher`
+  itself with `xacro ben_mesh.xacro namespace:=<boat>` (verified: yields `<boat>/base_link`, `/motion_sensor`, `/mbes_ram`, `/mbes`).
+- Frame-name hazards found beyond the review: `chart_datum` and `sea_surface_estimator` default `mhhw_frame` to the UNPREFIXED `chart_datum_mhhw` (four boats would publish one child frame
+  under four parents), `sea_surface_estimator` defaults `chart_datum_frame` unprefixed, and `cube_bathymetry` defaults `base_link_frame` to `base_link`. The demo launch sets all per boat;
+  the equivalent fix in `sim_robot_launch.py` (cube only) is PR two.
+- `asv_sim/config/cw4.yaml` sets `models.cw4.max_bucket_change_rate`, but the declared name is `bucket_change_rate` (`model.py`); the key is silently ignored (value equals the default). PR two.
+- `/marine/platforms` (`platform_sender`), `/tf`, `/tf_static`, `/rosout`, `/parameter_events` are legitimately shared topics; `earth` is a legitimately shared TF parent.
+
+## Boat naming: one roster file
+
+The boat names exist in exactly one place: `marine_simulation/config/demo_roster.yaml`, an ordered list of boats (`name`, `pad` colour label, platform `color` rgb, start pose).
+Everything else is derived from it by the launch: namespaces, frame prefixes (`<name>/...`, including `asv_sim` `platforms.<name>.mru_frame: <name>/motion_sensor`),
+the `asv_sim` platform parameters, the `platform_sender` name and colour. Joystick bindings are an ORDERED list of device paths in `demo_joysticks.yaml` that pairs with the
+roster by position (index i = pad i), so renaming a boat touches the roster only. Tests and README parametrise off the roster rather than quoting the names.
+The `boats` launch argument selects a subset by name (default: all); a boat keeps its roster position, so its pad binding does not move when the subset changes.
 
 ## TF / frame-naming decision
 
-**Per-boat frame prefix = platform name, reusing the `ben_description` xacro with `namespace:=<boat>` from the demo launch** (one `robot_state_publisher` + one
-`joint_state_publisher` per boat, in the boat's namespace). `xacro ben_mesh.xacro namespace:=boat1` was run and yields `boat1/base_link`, `boat1/motion_sensor`,
-`boat1/mbes_ram`, `boat1/mbes`, so no change to `ben_description` is needed. Every other frame is set explicitly per boat by the launch:
-`<b>/odom`, `<b>/map`, `<b>/map_tide`, `<b>/chart_datum`, `<b>/chart_datum_mhhw`, and `asv_sim` `platforms.<b>.mru_frame: <b>/motion_sensor` (`demo_boats.yaml`).
-Rejected: (a) fixing `ben_description/launch/publish_state_launch.py` to pass `namespace` (cross-repo; named as a follow-up, would also benefit any non-`ben` boat);
-(b) a minimal own URDF (cheaper: three links, one rsp, no jsp; but loses the real MBES lever arm the CUBE error model uses and adds a model to maintain). Fallback to (b)
-only if the CPU measurement (step 9) shows the 4x rsp+jsp cost matters. Acceptance for this decision: the graph check (step 7) shows each child frame has exactly one parent.
+**Per-boat frame prefix = boat name, reusing the `ben_description` xacro with `namespace:=<boat>`** (one `robot_state_publisher` + one `joint_state_publisher` per boat, in the boat's namespace).
+Every other frame is set explicitly per boat by the launch: `<b>/odom`, `<b>/map`, `<b>/map_tide`, `<b>/chart_datum`, `<b>/chart_datum_mhhw`, `<b>/base_link_north_up`.
+Rejected: (a) fixing `ben_description/launch/publish_state_launch.py` to pass `namespace` (cross-repo; follow-up); (b) a minimal own URDF (loses the real MBES lever arm the CUBE error model uses;
+fallback only if the CPU measurement in PR two says 4x rsp+jsp matters). Acceptance for this decision: the self-test's TF check shows each child frame has exactly one parent.
 
-## Approach
+## Wiring the demo launch copies from the originals (listed so nothing is silently dead)
 
-1. **Demo platform in asv_sim** — add `asv_sim/config/demo.yaml` (model `demo`, seeded from the cw4 numbers using the DECLARED parameter names; a comment says the arcade
-   values arrive with #87) and `asv_sim/config/demo_boats.yaml` (`platforms.boat1..boat4`: `model: demo`, `mru_frame: <b>/motion_sensor`, distinct `start_lat/lon/heading`).
-   Start poses: Ben's Portsmouth position offset on a small grid, each checked for water depth in `US5NH02M.tiff` with a throwaway script; the sampled depths go in the file comment.
-   Dynamics stay adjustable: model values are ordinary parameters (`ros2 param set /asv_sim models.demo.<x>`); confirm during step 2 that `Dynamics` sees live changes, else document that a relaunch is needed.
-2. **Multi-platform asv_sim test** — `asv_sim/test/test_multi_platform.py` (plain pytest + rclpy, runs under `colcon test`, unlike the launch_test tide file): load both new YAMLs with
-   `--params-file`, assert four platforms with distinct start poses and `mru_frame`s, per-platform `set_pose` moves only that boat, a throttle on boat 2 moves only boat 2, `sim_reset` returns
-   each to its own start, a platform name missing from the config fails loudly. Fix in the same commit set: the `cw4.yaml` key typo (value unchanged).
-3. **`sim_robot_launch.py` arguments** — `cell_size` (default 1.0), `ping_interval` (0.2), `beam_count` (120, equal to the `mbes_sim` declared default; the test reads `mbes_sim.py` so drift is caught),
-   replacing the hard-coded 1.0/0.2 and adding `beam_count`. Defaults produce the same resolved parameters as today. Separate commit, flagged for the owner (open question 3): also set `base_link_frame`
-   for `cube_bathymetry` to `<ns>/base_link`.
-4. **Demo launch config** — `marine_simulation/config/demo_boats.yaml` (prefix-independent values only, node-wildcard keys as the existing configs do): `/**/helm_manager` `output_type: helm`,
-   `initial_piloting_mode: manual`; `/**/asv_helm` PID block (values copied from `ben.yaml`, tunable later); `/**/mru_transform` sensor topics `sensors/nav/*`; `/**/platform_sender` nav sources plus footprint
-   (CAMP draws it) copied from the ben configs; `/**/joy_to_helm` axes/buttons. `marine_simulation/config/demo_joysticks.yaml`: `boat1: {device_id: 0} ... boat4: {device_id: 3}`, optional `device_name`, `deadzone`.
-5. **`marine_simulation/launch/demo_boats_launch.py`** — arguments: `boats` (CSV, default `boat1,boat2,boat3,boat4`), `joystick_config`, `enable_joysticks` (true), `enable_nav` (false), `use_sim_time` (false),
-   `tide_speed_factor` (10, as `sim_robot_launch.py`), `mbes_grid_file`, `cell_size`, `ping_interval`, `beam_count`. One `asv_sim` node (demo YAMLs, `platforms` resolved from `boats`, five remaps per boat, as the
-   existing OpaqueFunction does). Per boat, in a namespaced group: rsp + jsp (xacro `namespace:=`), `mru_transform_node`, `sea_surface_estimator`, `chart_datum`, `asv_helm`, `helm_manager`, `platform_sender`,
-   `mbes_sim`, `detections_to_pointcloud`, `cube_bathymetry` (all frame params set per boat, including the three hazards above), then `joy_node` + `joy_to_helm` (helm remapped to `piloting_mode/manual/helm`).
-   No `udp_bridge`, no `command_bridge`, no `s57_grids`. tide remap stays the absolute shared `/asv_sim/environment/tide_level`. Fail-fast checks before launching anything: every name in `boats` exists in the asv_sim
-   platform config, names are unique, and (joysticks on) every boat has a joystick entry with no `device_id` used twice — silent cross-wiring is the failure to prevent.
-   `enable_nav:=true` additionally includes, per boat, the already-separable `ben_project11/nav2_bringup_launch.py` (namespace args as `ben_core_launch.py` passes them), `mission_manager_launch.py` and `s57_grids_launch.py`,
-   with the frames set per boat. Best effort: acceptance is "argument exists, off by default, nodes come up without TF or name collisions"; any gap in `ben_project11` / `unh_marine_autonomy` becomes a named follow-up, not a change there.
-6. **Launch tests** — `marine_simulation/test/` (registered with `ament_add_pytest_test`, `ament_cmake_pytest` test_depend): a small helper flattens a launch description for given arguments (runs `OpaqueFunction`s against a
-   `LaunchContext`; includes recorded as package/file). `test_sim_robot_launch.py`: argument names/defaults snapshot of the current file, new args' defaults, resolved `cell_size`/`ping_interval`/`beam_count` equal today's literals, overrides propagate.
-   `test_demo_boats_launch.py`: loads with defaults; exactly one `asv_sim`; each boat has the expected node set under its namespace; no duplicate fully-qualified names; no `udp_bridge`; nav includes absent by default and present with `enable_nav:=true`;
-   per-boat frame params all start with the boat name; fail-fast cases (typo'd boat, missing/duplicate joystick id) raise a clear error; joystick entries become `joy_node` `device_id` per boat.
-7. **Graph check tool** — `marine_simulation/scripts/check_multi_boat_graph.py`: against a running launch, asserts no duplicate fully-qualified node names, each boat's expected topics exist, no topic published by two boats, and each TF child frame has exactly one parent
-   (samples `/tf` and `/tf_static`). The checking functions are pure and unit-tested. It is the repeatable form of the issue's `ros2 node list` / `ros2 topic list` verification and can be rerun on the event machine.
-8. **Docs and packaging** — new `marine_simulation/README.md` (multi-boat invocation, every launch argument with its default, joystick mapping and the replug caveat: unplug all, plug in order, `ros2 run joy joy_enumerate_devices`; the mode-change buttons do nothing because there is no `command_bridge`; how to start CAMP; frame naming; adding a fifth boat) and an `.agents/README.md` update (package/launch table, new configs, the `no_sim` split, the frame-prefix decision, pitfalls found). Every claim is re-checked against the launch source. `marine_simulation/package.xml`: `exec_depend` on `ben_description`, `helm_manager`, `joy`, `joy_to_helm`, `robot_state_publisher`, `joint_state_publisher`, `xacro`, `mission_manager` and `s57_grids` for `enable_nav`; no new rosdep keys expected (dependency policy untouched).
-9. **Run and measure** — on this host with `enable_joysticks:=false`, drive each boat by publishing to `/<boat>/piloting_mode/manual/helm`; run the graph check; confirm per-boat `coverage_catalog` / `coverage_tiles`; sample CPU and RSS (script output pasted into the PR, not typed): 1 boat, 4 boats default, 4 boats coarse (`cell_size`, `beam_count`). No gamepad exists on this host: joystick mapping is covered by the unit tests and a README checklist for event setup; the CAMP "all four visible" check is a manual operator step (CAMP tracks platforms by `platform.name`, one tab each).
-10. **`enable_nav` smoke** — launch once with `enable_nav:=true` for one boat, record what comes up and what does not; file/name follow-ups.
+Each boat is a `GroupAction` with `PushROSNamespace(<boat>)` that includes the EXISTING per-node launch files (which do the lifecycle configure/activate through `ros_namespace`), not hand-copied nodes, plus these remaps:
 
-## Files to Change
+| Node (launch file included) | Remaps / parameters set by the demo launch |
+|---|---|
+| `asv_sim` (one node, root ns) | per boat `<b>/position->`, `<b>/orientation->`, `<b>/velocity->` `<b>/sensors/nav/{position,orientation,velocity}`, `<b>/throttle->`/`<b>/rudder->` `<b>/control/{throttle,rudder}`; params `platforms` (list), `platforms.<b>.{model,start_lat,start_lon,start_heading,mru_frame}`, `environment.tide.speed_factor` |
+| `asv_helm` (`asv_helm_launch.py`) | `helm->marine/control/helm`, `cmd_vel->marine/control/cmd_vel`, `throttle->control/throttle`, `rudder->control/rudder`, `have_commands->/asv_sim/<b>/have_commands`; its own `marine/status/helm` heartbeat; PID block from `demo_params.yaml` |
+| `helm_manager` (`helm_manager_launch.py`) | `out/helm->marine/control/helm`, `out/cmd_vel->marine/control/cmd_vel`, `heartbeat->marine/heartbeat`, `status/helm->marine/status/helm`; `output_type: helm`, `initial_piloting_mode: manual`, `piloting_modes` (`robot.yaml` values) |
+| `platform_sender` (`platform_sender_launch.py`, `name:=<b>`) | `color.{red,green,blue}` from the roster; nav sources `sensors/nav/*` |
+| `mru_transform_node` | `base_frame/map_frame/odom_frame` = `<b>/base_link|map|odom`; sensor topics `sensors/nav/*` |
+| `sea_surface_estimator` (launch file) | `sea_surface_frame=<b>/map_tide`, `chart_datum_frame=<b>/chart_datum`, `mhhw_frame=<b>/chart_datum_mhhw` |
+| `chart_datum` (launch file) | `map_frame=<b>/map`, `chart_datum_frame`, `mhhw_frame`, `base_frame=<b>/base_link` |
+| `mbes_sim` (`mbes_sim_launch.py`) | `detections->/<b>/sensors/mbes/detections`, `soundings->/<b>/sensors/mbes/original_soundings`, `odom->/<b>/odom`, `tide_level->/asv_sim/environment/tide_level`; `sonar_frame_id=<b>/mbes`, `grid_file`, `ping_interval`, `beam_count` |
+| `detections_to_pointcloud` (ns `<b>/sensors/mbes`) | `odom->/<b>/odom`; `base_link_frame=<b>/base_link`, `level_frame=<b>/base_link_north_up`, `tide_frame=<b>/map_tide` |
+| `cube_bathymetry` (ns `<b>/sensors/mbes`) | `map_frame=<b>/map`, `base_link_frame=<b>/base_link`, `cell_size` |
+| `joy_linux_node` (named `joy_node`) | `dev=<by-path ...-joystick link for pad i>`, `dev_ff=''`, `deadzone`, `autorepeat_rate` from `demo_joysticks.yaml`; publishes `<b>/joy` |
+| `joy_to_helm` (`joy_to_helm_launch.py`) | `helm->piloting_mode/manual/helm`; axes/buttons explicit in `demo_params.yaml` |
+
+Not started: `udp_bridge`, `command_bridge`, `mission_manager`, nav2, `s57_grids`.
+
+## Approach (PR one)
+
+1. **Demo model in asv_sim** — `asv_sim/config/demo.yaml`: model `demo` seeded from the cw4 numbers with the DECLARED parameter names (`bucket_change_rate`, not `max_bucket_change_rate`); a comment says the arcade values arrive with #87.
+   Model values are ordinary parameters; confirm `Dynamics` sees live changes (`ros2 param set /asv_sim models.demo.<x>`), else document that a relaunch is needed. No platform instances in `asv_sim` config: the launch emits them from the roster.
+2. **Multi-platform asv_sim test** — `asv_sim/test/test_multi_platform.py`, IN-PROCESS (rclpy node with `parameter_overrides`, bounded `spin_once` loops; no subprocess), run by `colcon test` (plain pytest). Uses synthetic platform names, not the demo roster. Asserts: N platforms with distinct start poses and `mru_frame`s; `set_pose`
+   on one platform moves only that one; throttle on platform 2 moves only platform 2; `sim_reset` returns each to its own start; `demo.yaml` loads with every key matching a declared `Model` parameter (catches the cw4-style typo class). No "missing platform fails" test (not true of `asv_sim`).
+3. **Roster, parameters, joystick config** — `marine_simulation/config/demo_roster.yaml` (four boats in controller order; start poses = Ben's Portsmouth position offset on a small grid, each checked for water depth in `US5NH02M.tiff` with a throwaway script, depths in the file comment),
+   `demo_params.yaml` (prefix-independent node-wildcard values from the table), `demo_joysticks.yaml` (ordered by-path list, `deadzone` set explicitly low for young drivers, `autorepeat_rate`, the port labelling, and a note that the paths are per host).
+4. **`marine_simulation/launch/demo_boats_launch.py`** — arguments: `boats` (CSV subset; default all roster boats), `roster_file`, `joystick_config`, `enable_joysticks` (true), `enable_nav` (false; true raises "not wired yet"), `tide_speed_factor` (10), `mbes_grid_file`, `cell_size` (1.0), `ping_interval` (0.2), `beam_count` (120).
+   No `use_sim_time` argument. Pure module-level functions (roster loading, subset selection, joystick assignment, `enable_nav` refusal) hold the fail-fast checks; the launch description is assembled from them in an `OpaqueFunction`. Fail-fast before anything launches: unknown/duplicate names, malformed roster entry, a joystick list that does not match the roster length or repeats a path,
+   with joysticks on a configured device that does not exist (named boat/pad/path), and `enable_nav`. Silent cross-wiring is the failure to prevent.
+5. **Self-test and graph check** — `marine_simulation/scripts/check_multi_boat_graph.py` (pure functions + small rclpy CLI): no duplicate fully-qualified node names; each TF child frame has exactly one parent (samples `/tf` and `/tf_static`; `earth` may parent several); no topic owned by one boat (first namespace segment) published by another boat's nodes, nor a non-boat topic published by nodes of two boats outside the shared allow-list.
+   `marine_simulation/scripts/demo_boats_selftest.py`: runs against a running `demo_boats_launch.py enable_joysticks:=false` (or starts it with `--start-launch`), publishes Xbox-shaped fake `sensor_msgs/Joy` (8 axes, 11 buttons) to each `/<boat>/joy` with `joy_to_helm` running (only the joystick DRIVER is gated by `enable_joysticks`), checks the expected node set per boat, expected frames per boat, the graph check, that
+   driving one boat moves only that boat and that four boats driven with different rudders end up on different headings, and that every boat's `coverage_catalog` / `coverage_tiles` appear. Scripts are installed by `CMakeLists.txt` (`install(PROGRAMS ...)`).
+6. **Unit tests** — `marine_simulation/test/` (`ament_add_pytest_test`, `ament_cmake_pytest` test_depend; modules loaded by file path): `test_demo_boats_launch.py` (roster loading and validation, subset selection, joystick assignment incl. duplicate/length/missing-device, `enable_nav` refusal, roster names not hard-coded in the launch file) and `test_check_multi_boat_graph.py` (two or three tests per check on synthetic data). No launch-flattening helper.
+7. **Docs and packaging** — new `marine_simulation/README.md` (invocation, every launch argument with its default, the pad checklist below, port labelling, frame naming, how to rename a boat or add a fifth, what the mode-change buttons do) and `.agents/README.md` update (layout, key files, pitfalls found). Every claim re-checked against the launch source.
+   `marine_simulation/package.xml`: `exec_depend` on `ben_description`, `helm_manager`, `joy_linux` (rosdep key `joy_linux` -> `ros-jazzy-joy-linux`; needs `rosdep install`/`make build` on the dev host and the event machine), `joy_to_helm`, `robot_state_publisher`, `joint_state_publisher`, `xacro`; `test_depend` `ament_cmake_pytest`.
+   `mission_manager`/`s57_grids` are NOT added (`enable_nav` is not wired).
+8. **Run and report** — four boats on the dev host with fake Joy; report node list uniqueness, per-boat coverage topics, TF single-parent result, host (`nproc`, RAM).
+
+## Pad checklist (goes in the README; first real-pad test is at the dry run, so it is explicit)
+
+1. Pad in XInput mode (G7 SE: the mode switch/button combination in the GameSir manual) BEFORE plugging in; it must enumerate as an Xbox-class pad.
+2. Plug the blue pad into labelled port 1, orange 2, purple 3, white 4; the label-to-USB-port map is the by-path name, which differs per host (even per front/rear port); record it in `demo_joysticks.yaml` for the host.
+3. `ls -l /dev/input/by-path/ | grep -- '-joystick$'` shows one `...-joystick` link per pad (the `-event-joystick` links are the evdev nodes; not those); each must resolve to a `jsN`.
+4. `ros2 topic echo --once /<boat>/joy` after launching: `axes` has 8 entries and `buttons` has 11. A pad reporting fewer buttons makes `joy_to_helm` silently ignore it (it reads `buttons[9]` and `[10]`).
+5. Move each stick and trigger once: left stick up = `axes[1]` positive (throttle), right stick left/right = `axes[3]` (rudder), left trigger = `axes[2]` goes from 1.0 toward -1.0 (full speed; otherwise throttle is scaled to 0.35).
+6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug/replug one pad and confirm it still drives the same boat.
+7. Do not press A/B/X: `joy_to_helm` requests a mode change nobody handles and stalls until the next heartbeat.
+
+## PR two (separate PR; "Part of #88", closes it)
+
+- `sim_robot_launch.py` cube `base_link_frame` fix (own commit, host-approved: changes existing single-boat CA-window behaviour) and `asv_sim/config/cw4.yaml` `max_bucket_change_rate` -> `bucket_change_rate` key fix (value unchanged).
+- Multi-platform measurements (1 boat, 4 boats default, 4 boats coarse; CPU and RSS, script output pasted; host recorded) and the repeat on the event machine at the dry run.
+- Deferred: the `cell_size`/`ping_interval`/`beam_count` arguments on `sim_robot_launch.py` and a snapshot test; real nav includes (`nav2`, `mission_manager`, `s57_grids`) behind `enable_nav` and its smoke test; launch-flattening tests; follow-ups: `mru_transform` (prefix defaults), `ben_description` (namespace passthrough), `ben_project11` (`ben.yaml` hard-coded prefix, `ben_core_launch.py` nav gate), `unh_marine_autonomy` (manual-only `robot_core_launch.py` argument, if wanted).
+
+## Files to Change (PR one)
 
 | File | Change |
 |------|--------|
-| `asv_sim/config/demo.yaml`, `demo_boats.yaml` | new demo model + four platform instances |
-| `asv_sim/config/cw4.yaml` | fix ignored `max_bucket_change_rate` key (value unchanged) |
-| `asv_sim/test/test_multi_platform.py` | new multi-platform test |
-| `marine_simulation/launch/sim_robot_launch.py` | `cell_size`, `ping_interval`, `beam_count` args (defaults unchanged); optional cube `base_link_frame` fix |
+| `asv_sim/config/demo.yaml` | new demo model |
+| `asv_sim/test/test_multi_platform.py` | new in-process multi-platform test |
+| `marine_simulation/config/demo_roster.yaml`, `demo_params.yaml`, `demo_joysticks.yaml` | new roster, node parameters, joystick bindings |
 | `marine_simulation/launch/demo_boats_launch.py` | new demo launch |
-| `marine_simulation/config/demo_boats.yaml`, `demo_joysticks.yaml` | new demo configs |
-| `marine_simulation/scripts/check_multi_boat_graph.py` | new graph check |
-| `marine_simulation/test/*` , `CMakeLists.txt`, `package.xml` | launch tests, test registration, exec/test deps; install `scripts` |
+| `marine_simulation/scripts/check_multi_boat_graph.py`, `demo_boats_selftest.py` | graph check and self-test |
+| `marine_simulation/test/test_demo_boats_launch.py`, `test_check_multi_boat_graph.py` | unit tests |
+| `marine_simulation/CMakeLists.txt`, `package.xml` | install scripts, test registration, exec/test deps |
 | `marine_simulation/README.md` (new), `.agents/README.md` | docs |
 
 ## Real-boat-useful (full standard) versus demo-only (lighter review)
 
-- **Full standard** — `sim_robot_launch.py` argument change and its default-argument test; the cube `base_link_frame` fix; the `cw4.yaml` key fix; the multi-platform `asv_sim` test and any `asv_sim` change it forces;
-  `.agents/README.md` and the README sections describing shared behaviour; the graph check tool and its unit tests (reusable for any multi-boat bring-up); the follow-up issue texts.
-- **Demo-only (lighter review)** — `demo.yaml`, `demo_boats.yaml` (both), `demo_joysticks.yaml`, `demo_boats_launch.py` and its tests, the `enable_nav` stretch, start-pose choices, the measurements.
-  Lighter does not mean untested: the fail-fast validation and the frame-uniqueness check stay, because a mis-wired boat in front of an audience is the failure that matters.
+- **Full standard** — the multi-platform `asv_sim` test and any `asv_sim` change it forces; `.agents/README.md` and the README sections describing shared behaviour; the graph check and its unit tests (reusable for any multi-boat bring-up); PR two's `sim_robot_launch.py` and `cw4.yaml` fixes.
+- **Demo-only (lighter review)** — `demo.yaml`, roster, params, joystick config, `demo_boats_launch.py`, the self-test, start-pose choices. Lighter does not mean untested: the fail-fast validation and the frame-uniqueness check stay.
 
 ## Principles Self-Check
 
 | Principle | Consideration |
 |---|---|
-| A change includes its consequences | README, `.agents/README.md`, `package.xml`, test registration and the frame-hazard follow-ups are steps 3, 8 and the follow-up list |
-| Test what breaks | Cross-wiring is the failure mode: fail-fast validation, node-set/frame tests, TF single-parent check, per-platform `asv_sim` isolation test |
-| Improve incrementally | One PR of atomic commits, ordered so a working demo exists after steps 1, 4, 5; docs/tests follow; no edits in other repos |
-| Only what's needed | No arcade parameters, scoring, 3D windows; own URDF, shared bridge, platform-wide `boats` plumbing in other repos all rejected; the graph tool is justified by the issue's own verification item |
-| Workspace vs. project separation | All content is project-repo content; nothing proposed for the workspace repo |
-| Human control and transparency | Defaults unchanged; nav stack and bridge opt-in or absent; startup refuses ambiguous mappings with a named reason |
+| A change includes its consequences | README, `.agents/README.md`, `package.xml`, CMake install/test registration and the frame-hazard follow-ups are step 7 and the PR two list |
+| Test what breaks | Cross-wiring is the failure mode: fail-fast validation, the TF single-parent and cross-publisher checks, the per-platform `asv_sim` isolation test, and a self-test that drives boats through the real `joy_to_helm` |
+| Improve incrementally | Two PRs; PR one is a working demo platform; no edits in other repos; real-boat launch file untouched until PR two |
+| Only what's needed | No arcade parameters, scoring, 3D windows; no launch-flattening helper; no `use_sim_time`; nav not wired; own URDF, shared bridge rejected |
+| Workspace vs. project separation | All content is project-repo content |
+| Human control and transparency | Defaults of existing launches unchanged; nav stack and bridge absent; startup refuses ambiguous joystick mappings with a named reason |
 
 ## ADR Compliance
 
 | ADR | Triggered | How addressed |
 |---|---|---|
-| 0008 Follow ROS 2 conventions | Yes | Python launch, declared args with defaults and descriptions, namespaces over name mangling, lifecycle transitions as in existing launches, flake8/pep257/copyright via `ament_lint_auto` |
-| 0013 progress.md vocabulary | Yes | `## Plan Authored` entry |
+| 0008 Follow ROS 2 conventions | Yes | Python launch, declared args with defaults and descriptions, namespaces over name mangling, existing lifecycle launch files reused, flake8/pep257/copyright via `ament_lint_auto` |
+| 0013 progress.md vocabulary | Yes | `## Plan Authored` / `## Implementation` entries |
 | 0002 Worktree isolation | Yes | Work stays in `feature/issue-88`; `layers/main` untouched |
-| 0009 Python package management | No | No new Python packages; test deps are ROS packages |
+| 0009 Python package management | No | No new Python packages; `joy_linux` is a ROS apt package via rosdep |
 
 ## Consequences
 
 | If we change... | Also update... | Included in plan? |
 |---|---|---|
-| `sim_robot_launch.py` args | Launch args table in README; default-arg test | Yes (3, 6, 8) |
-| New configs / launch | `.agents/README.md` layout and key-files lists | Yes (8) |
-| `package.xml` exec deps | rosdep keys must resolve (ROS packages only) | Yes (8), checked in 9 |
+| New launch / configs | `.agents/README.md` layout and key-files lists, new README | Yes (7) |
+| `package.xml` exec deps (`joy_linux`) | rosdep must install it on the dev host and event machine; the self-test does not need it | Yes (7), reported in hand-back |
 | Unprefixed `mhhw_frame` / `chart_datum_frame` defaults in `mru_transform` | Per-boat override here; default fix upstream | Override yes; upstream follow-up |
 | `ben_description` ignores `namespace` | Bypassed by calling xacro directly | Follow-up (ben_description) |
-| `ben.yaml` hard-codes `ben/` frames for `chart_datum` / `s57_grids` | `ben_core_launch.py` not multi-instance-safe | Follow-up (ben_project11); demo sets frames in launch |
-| `robot_core_launch.py` always starts `mission_manager` | Not needed: demo does not include it | Follow-up only if a mainline manual-only arg is wanted later |
+| `sim_robot_launch.py` cube `base_link_frame` | Changes existing behaviour | PR two |
 
 ## Documentation & Instruction Impact
 
-- **Stale docs** (must land in this PR): `.agents/README.md` (layout, key files, pitfalls, launch table); new `marine_simulation/README.md`; the repo-root `README.md` gets a one-line pointer if it lists launches.
-- **Agent-instruction candidates** (proposals only): the "a launch frame default left unprefixed becomes a collision at the second vehicle" pattern; the `joy` 3.3.0 device-selection facts. Offered for `.agents/README.md` pitfalls/knowledge; the operator decides.
+- **Stale docs** (must land in PR one): `.agents/README.md` (layout, key files, pitfalls, launch table); new `marine_simulation/README.md`. The repo-root `README.md` is a two-line stub and gets no change.
+- **Agent-instruction candidates** (proposals only): the "a launch frame default left unprefixed becomes a collision at the second vehicle" pattern; `joy_linux` uses the js API (`...-joystick` by-path link, not `...-event-joystick`). Offered for `.agents/README.md` pitfalls/knowledge; the operator decides.
 
 ## Open Questions
 
-1. Venue and start poses: default is Ben's Portsmouth position on a small grid with depth checked against `US5NH02M.tiff`; is the demo expected anywhere else (a different bathymetry grid would change the poses)?
-2. Controller model(s): `joy_to_helm` defaults (throttle axis 1, rudder axis 3, slow-mode axis 2 scaling throttle by 0.35 when that axis is >= 0) assume a specific pad. Which pads will be used, so the axis map and slow-mode default can be set?
-3. Cube `base_link_frame` fix in `sim_robot_launch.py`: it changes existing single-boat behaviour (CA window becomes bounded) although no topic or default argument changes. Include as its own commit, or leave to a later issue?
-4. Boat names: `boat1..boat4` (proposed) or themed names? They become namespaces, frame prefixes and CAMP tab titles.
+None blocking. Carried forward for the owner: the by-path link is `...-joystick` (js), not `...-event-joystick` as first named (see Facts); the label-to-USB-port map is per host and must be recorded at the dry run.
 
 ## Estimated Scope
 
-Single PR in this repo with about 9 atomic commits; no changes in other repos. If time presses before the event, steps 1, 4, 5, 9 give a working demo and steps 2, 3, 6, 7, 8 follow in the same PR. Follow-ups to file: `mru_transform` (prefix defaults), `ben_description` (namespace passthrough), `ben_project11` (`ben.yaml` hard-coded prefix, `ben_core_launch.py` nav gate), `unh_marine_autonomy` (manual-only `robot_core_launch.py` argument, only if wanted), plus whatever step 10 finds.
+PR one: about 8 atomic commits in this repo, none in other repos, aiming to land by about 2026-10-12 so #87 items 2-6 can build on it. PR two follows after the dry run (2026-10-16).
