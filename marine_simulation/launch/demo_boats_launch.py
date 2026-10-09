@@ -179,6 +179,11 @@ def parse_float(text: str, what: str, low: float = None, high: float = None,
     return value
 
 
+def parse_tide_speed_factor(text: str) -> float:
+    """Parse ``tide_speed_factor``; 0 is allowed (asv_sim then holds the tide still)."""
+    return parse_float(text, 'tide_speed_factor', low=0.0)
+
+
 def parse_positive_int(text: str, what: str) -> int:
     """Parse an integer launch argument that must be at least 1."""
     try:
@@ -562,8 +567,7 @@ def launch_setup(context, *args, **kwargs):
         'deadzone': 0.1,
         'autorepeat_rate': 10.0,
     }
-    tide_speed_factor = parse_float(arg('tide_speed_factor'), 'tide_speed_factor',
-                                    positive=True)
+    tide_speed_factor = parse_tide_speed_factor(arg('tide_speed_factor'))
     current_speed = parse_float(arg('current_speed'), 'current_speed', low=0.0)
     check_datum_grids()
 
@@ -618,7 +622,7 @@ def generate_launch_description():
                 'Reserved for the navigation stack. Not wired yet: true is refused.'),
         declare('tide_speed_factor', TextSubstitution(text='10'),
                 'Tide speed multiplier (10 = ~75 min cycle, 3600 = ~12 sec cycle, '
-                '1 = real-time).'),
+                '1 = real-time, 0 = a frozen tide).'),
         declare('current_speed', TextSubstitution(text='0.0'),
                 'Water current in m/s. asv_sim itself defaults to 1.0 m/s toward 090, '
                 'which drifts every boat; the demo defaults to none.'),

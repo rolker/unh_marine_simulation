@@ -272,6 +272,14 @@ def test_parse_float_accepts_a_plain_number_and_checks_the_range():
         demo.parse_float('-0.5', 'current_speed', low=0.0)
 
 
+def test_tide_speed_factor_zero_is_a_frozen_tide_and_negative_is_refused():
+    assert demo.parse_tide_speed_factor('0') == 0.0
+    assert demo.parse_tide_speed_factor('10') == 10.0
+    for bad in ('-1', 'nan', 'inf', 'fast'):
+        with pytest.raises(ValueError, match='tide_speed_factor'):
+            demo.parse_tide_speed_factor(bad)
+
+
 @pytest.mark.parametrize('text', ['0', '-3', '1.5', 'many', ''])
 def test_parse_positive_int_refuses_bad_values(text):
     with pytest.raises(ValueError, match='beam_count'):

@@ -57,7 +57,7 @@ The venue is Portsmouth Harbour (the packaged `mbes_sim/data/US5NH02M.tiff` grid
 | `joystick_config` | `config/demo_joysticks.yaml` | Joystick device links; copy and edit per host. |
 | `enable_joysticks` | `true` | Start a `joy_linux` driver per boat. `joy_to_helm` runs either way, so `sensor_msgs/Joy` on `<boat>/joy` drives the boat. |
 | `enable_nav` | `false` | Reserved. `true` is refused ("not wired yet"). |
-| `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle). |
+| `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
 | `mbes_grid_file` | `mbes_sim/data/US5NH02M.tiff` | Ground-truth bathymetry the simulated multibeams sample. |
 | `cell_size` | `1.0` | CUBE cell size in metres. |
@@ -71,9 +71,10 @@ device), a configured pad is missing or its link resolves to something other tha
 a `jsN` node (the `-event-joystick` link), `joy_linux` is not installed,
 `deadzone` is outside [0, 1) or `autorepeat_rate` is 2 Hz or less, a boolean
 argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
-`mbes_grid_file` is not a file, `cell_size`, `beam_count`, `ping_interval` or
-`tide_speed_factor` is not positive (or not finite), `current_speed` is negative,
-the datum grids above are missing, or `enable_nav` is true.
+`mbes_grid_file` is not a file, `cell_size`, `beam_count` or `ping_interval` is
+not positive (or not finite), `tide_speed_factor` or `current_speed` is negative
+(or not finite; 0 is allowed for both), the datum grids above are missing, or
+`enable_nav` is true.
 
 ### The roster is the only place boat names live
 
