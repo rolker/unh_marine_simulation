@@ -159,17 +159,29 @@ class Platform:
         return 'platforms.' + self.name + '.' + key
 
     def reset_callback(self, data):
-        lat = self.start_params['lat'].value
-        lon = self.start_params['lon'].value
-        heading = self.start_params['heading'].value
-        self.dynamics.set(lat, lon, heading)
-
-    def set_pose(self, req):
+        # start_params holds the plain values stored by updateParameters().
         self.dynamics.set(
-            req.point.position.latitude,
-            req.point.position.longitude,
-            req.nav.orientation.heading)
-        return True
+            self.start_params['lat'],
+            self.start_params['lon'],
+            self.start_params['heading'])
+
+    def set_pose(self, req, res):
+        """Place the platform at a GeoPoseStamped, then idle it.
+
+        The orientation quaternion is an ENU yaw (counter-clockwise from
+        east), as in the IMU message this node publishes; the dynamics take
+        a compass heading in degrees.
+        """
+        pose = req.pose.pose
+        q = pose.orientation
+        yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
+                         1.0 - 2.0 * (q.y * q.y + q.z * q.z))
+        self.dynamics.set(
+            pose.position.latitude,
+            pose.position.longitude,
+            90.0 - math.degrees(yaw))
+        res.success = True
+        return res
 
     def throttle_callback(self, data):
         self.throttle = max(min(data.data, 1.0), -1.0)
