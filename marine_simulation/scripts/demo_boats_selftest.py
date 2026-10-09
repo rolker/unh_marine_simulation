@@ -39,6 +39,12 @@ Needs no gamepad and no joystick driver. Run it against a launch started with
 
     ros2 run marine_simulation demo_boats_selftest.py --start-launch
 
+With ``--start-launch`` the same ``--boats`` and ``--roster`` go to the launch, and
+``--joysticks`` makes it start the real ``joy_linux`` drivers (the pads must be
+plugged in) instead of ``enable_joysticks:=false``. The self-test stops the launch
+it started on any exit, including SIGINT and SIGTERM, and fails at once when the
+launch exits early.
+
 It publishes Xbox-shaped ``sensor_msgs/Joy`` messages (8 axes, 11 buttons) to each
 boat's ``joy`` topic, so ``joy_to_helm``, ``helm_manager``, ``asv_helm`` and
 ``asv_sim`` are all in the loop, and checks that
@@ -46,9 +52,15 @@ boat's ``joy`` topic, so ``joy_to_helm``, ``helm_manager``, ``asv_helm`` and
 - every boat has its full node set (one ``asv_sim`` for all),
 - every boat's TF frames exist and no frame has two parents, no duplicate node names,
   no topic is published by the wrong boat (check_multi_boat_graph.py),
+- ``/marine/platforms`` carries exactly one platform per boat with the roster's
+  colour (these are the CAMP tab names and colours),
 - driving one boat moves only that boat,
 - all four driven at once move, on different courses,
 - every boat's CUBE coverage topics deliver.
+
+A launch needs the geoid and VDatum grids under ``~/data/world/datum``: without
+them ``chart_datum`` never publishes and this test fails on the missing frames after
+the startup timeout (the launch itself refuses to start without them).
 
 Exit status 0 when every check passes, 1 otherwise. The boats are reset to their
 start poses at the end.
@@ -63,6 +75,7 @@ import sys
 import time
 
 import check_multi_boat_graph as graph
+import yaml
 
 # Node names (relative to the boat's namespace) every boat must have.
 BOAT_NODES = (
@@ -98,6 +111,50 @@ def fake_joy(throttle: float, rudder: float, full_speed: bool = True):
     return msg
 
 
+class LaunchExited(Exception):
+    """The launch this test started has stopped on its own."""
+
+
+def roster_colors(path: str) -> dict:
+    """Return ``{boat name: (red, green, blue)}`` from the roster file."""
+    with open(path) as f:
+        boats = yaml.safe_load(f)['boats']
+    return {b['name']: (b['color']['red'], b['color']['green'], b['color']['blue'])
+            for b in boats}
+
+
+def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> list:
+    """
+    Compare the platforms seen on ``/marine/platforms`` with the roster.
+
+    ``seen`` and ``expected`` map a platform name to ``(red, green, blue)``. The
+    names are what CAMP shows as tabs, so a missing, extra or renamed boat is a
+    problem, and so is a colour that is not the roster's.
+    """
+    problems = []
+    for name in sorted(set(expected) - set(seen)):
+        problems.append('platform %s never appeared' % name)
+    for name in sorted(set(seen) - set(expected)):
+        problems.append('unexpected platform %s' % name)
+    for name in sorted(set(seen) & set(expected)):
+        if any(abs(a - b) > tolerance for a, b in zip(seen[name], expected[name])):
+            problems.append('platform %s has colour %s, the roster says %s'
+                            % (name, tuple(round(c, 3) for c in seen[name]),
+                               tuple(expected[name])))
+    return problems
+
+
+def launch_command(boats, roster, joysticks, extra) -> list:
+    """Return the ``ros2 launch`` command line for ``--start-launch``."""
+    cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
+           'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
+    if boats:
+        cmd.append('boats:=%s' % ','.join(boats))
+    if roster:
+        cmd.append('roster_file:=%s' % roster)
+    return cmd + list(extra)
+
+
 def metres(a, b) -> float:
     """Approximate distance in metres between two (lat, lon) pairs."""
     dlat = (b[0] - a[0]) * 111320.0
@@ -120,20 +177,26 @@ def angle_difference(a: float, b: float) -> float:
 class SelfTest:
     """The live checks."""
 
-    def __init__(self, boats, joysticks):
+    def __init__(self, boats, joysticks, colors, launch=None):
         import rclpy
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
-        from marine_interfaces.msg import SonarVisualizationTile, TileCatalog
+        from marine_interfaces.msg import (
+            PlatformList, SonarVisualizationTile, TileCatalog)
         from sensor_msgs.msg import NavSatFix
         from std_msgs.msg import Bool
 
         self.rclpy = rclpy
         self.boats = list(boats)
         self.joysticks = joysticks
+        self.colors = colors
+        self.launch = launch
+        self.platforms = {}
         self.results = []
         self.node = rclpy.create_node('demo_boats_selftest')
         self.sampler = graph.GraphSampler(self.node)
 
+        self.node.create_subscription(
+            PlatformList, '/marine/platforms', self._on_platforms, 20)
         self.fix = {}
         self.joy_pub = {}
         self.reset_pub = {}
@@ -160,6 +223,16 @@ class SelfTest:
     def _on_fix(self, boat, fix):
         self.fix[boat] = fix
 
+    def _on_platforms(self, msg):
+        for p in msg.platforms:
+            self.platforms[p.name] = (p.color.r, p.color.g, p.color.b)
+
+    def check_launch(self):
+        """Raise LaunchExited if the launch started by --start-launch has stopped."""
+        if self.launch is not None and self.launch.poll() is not None:
+            raise LaunchExited('the launch exited early with status %s'
+                               % self.launch.returncode)
+
     @staticmethod
     def _joy_type():
         from sensor_msgs.msg import Joy
@@ -173,6 +246,7 @@ class SelfTest:
     def spin(self, seconds):
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
+            self.check_launch()
             self.rclpy.spin_once(self.node, timeout_sec=0.02)
 
     def drive(self, commands, seconds):
@@ -180,6 +254,7 @@ class SelfTest:
         deadline = time.monotonic() + seconds
         next_send = 0.0
         while time.monotonic() < deadline:
+            self.check_launch()
             if time.monotonic() >= next_send:
                 for b, (throttle, rudder) in commands.items():
                     self.joy_pub[b].publish(fake_joy(throttle, rudder))
@@ -228,6 +303,17 @@ class SelfTest:
                     'missing: %s' % ', '.join(missing) if missing else '')
         problems = graph.run_checks(self.sampler, self.boats, tf_seconds)
         self.record('graph: unique nodes, one TF parent per frame, no cross-boat topics',
+                    not problems, '; '.join(problems))
+
+    def check_platforms(self, timeout=15.0):
+        """The CAMP tab names and colours: one platform per boat, in the roster's colour."""
+        deadline = time.monotonic() + timeout
+        while not set(self.boats) <= set(self.platforms) and time.monotonic() < deadline:
+            self.spin(0.5)
+        self.spin(1.5)  # platform_sender repeats at 1 Hz; let an extra name show up
+        expected = {b: self.colors[b] for b in self.boats}
+        problems = platform_problems(self.platforms, expected)
+        self.record('/marine/platforms: one platform per boat, in the roster colour',
                     not problems, '; '.join(problems))
 
     def check_solo(self, seconds):
@@ -295,10 +381,8 @@ class SelfTest:
         self.node.destroy_node()
 
 
-def start_launch(extra):
+def start_launch(cmd):
     """Start the demo launch in its own process group."""
-    cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
-           'enable_joysticks:=false'] + extra
     return subprocess.Popen(cmd, start_new_session=True)
 
 
@@ -312,6 +396,11 @@ def stop_launch(proc):
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
             pass
+
+
+def _terminate(signum, frame):
+    """Turn SIGTERM into an exit that runs the ``finally`` blocks (stops the launch)."""
+    raise SystemExit(128 + signum)
 
 
 def main(argv=None):
@@ -328,22 +417,41 @@ def main(argv=None):
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
-    boats = (args.boats.split(',') if args.boats
-             else graph.boats_from_roster(args.roster or graph.default_roster_path()))
-    proc = start_launch(args.launch_args) if args.start_launch else None
+    roster = args.roster or graph.default_roster_path()
+    boats = ([b.strip() for b in args.boats.split(',') if b.strip()] if args.boats
+             else graph.boats_from_roster(roster))
+    colors = roster_colors(roster)
+    unknown = [b for b in boats if b not in colors]
+    if unknown:
+        parser.error('boat(s) not in the roster %s: %s' % (roster, ', '.join(unknown)))
+
+    signal.signal(signal.SIGTERM, _terminate)
     import rclpy
     rclpy.init()
-    test = SelfTest(boats, args.joysticks)
+    test = proc = None
     try:
-        test.wait_for_nodes(args.startup_timeout)
-        if all(ok for _, ok in test.results):
-            test.check_graph(args.tf_seconds)
-            test.check_solo(args.drive_seconds)
-            test.check_together(args.drive_seconds + 2.0)
-            test.check_coverage(30.0)
-        test.reset()
+        # Everything that can fail sits inside this try, and the launch (about 50
+        # processes) starts last, so a failed constructor cannot leak it.
+        test = SelfTest(boats, args.joysticks, colors)
+        if args.start_launch:
+            proc = start_launch(launch_command(
+                boats if args.boats else None, args.roster, args.joysticks,
+                args.launch_args))
+            test.launch = proc
+        try:
+            test.wait_for_nodes(args.startup_timeout)
+            if all(ok for _, ok in test.results):
+                test.check_graph(args.tf_seconds)
+                test.check_platforms()
+                test.check_solo(args.drive_seconds)
+                test.check_together(args.drive_seconds + 2.0)
+                test.check_coverage(30.0)
+            test.reset()
+        except LaunchExited as error:
+            test.record('the launch keeps running', False, str(error))
     finally:
-        test.close()
+        if test is not None:
+            test.close()
         rclpy.shutdown()
         if proc is not None:
             stop_launch(proc)

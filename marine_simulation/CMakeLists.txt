@@ -17,6 +17,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_demo_boats_launch test/test_demo_boats_launch.py)
   ament_add_pytest_test(test_check_multi_boat_graph test/test_check_multi_boat_graph.py)
+  ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
 endif()
 
 ament_package()
