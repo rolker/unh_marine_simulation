@@ -84,3 +84,32 @@ Revision after the Plan Review (changes-requested, 88c1ddf). All four must-fixes
 
 ### Open questions
 - [ ] `joy_linux` opens `dev` with the js API (`/dev/input/jsN`, per its upstream source), so the by-path link must be the `...-joystick` one, not the `...-event-joystick` one named in the owner decision; the plan uses `...-joystick` and sets `dev_ff` empty. Needs a real-pad check at the dry run.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-09 (PR one of the revised plan)
+**By**: Claude Sonnet
+
+**Plan**: `.agent/work-plans/issue-88/plan.md` (synced in place; rationale in its Implementation Notes)
+**Branch**: feature/issue-88
+
+### Commits
+- 491fce1 feat(asv_sim): add the demo model for the four-boat demo
+- 1c1dd4e fix(asv_sim): sim_reset and set_pose crash; add in-process multi-platform test
+- ffea729 feat(marine_simulation): demo launch for four simulated boats
+- 5c07eed feat(marine_simulation): multi-boat graph check
+- 717efdf feat(marine_simulation): self-test with fake joystick input; launch fail-fast tests
+- 232266b docs(marine_simulation): demo boats README with pad checklist; agent guide update
+
+### Results
+- `asv_sim`: 20 tests, 0 failures, 1 skipped (5 new in-process multi-platform tests).
+- `marine_simulation`: 34 new pytest tests pass (27 launch fail-fast/roster/joystick, 7 graph check). The package lint still shows the 8 failures that exist at baseline (copyright, flake8 I100, pep257 D213 in `bizzyboat_massabesic_launch.py`, `gazebo_*_launch.py`, `simulator_launch.py`); no failure in a file this issue added. Package total 88 tests (baseline 76), same 8 failures.
+- Four-boat self-test on the dev host (16 CPUs, 31 GB): 15 of 15 checks pass, run three times; 50 nodes, 0 duplicate names, one `asv_sim`, 12 nodes per boat; all nine frames per boat; every TF child frame has one parent; no cross-boat topic; driving one boat moved only that boat (15 m vs 0.0 to 0.1 m for the others); per-boat `cube_bathymetry/coverage_catalog` and `coverage_tiles` deliver.
+- `joy_linux` is not installed on the dev host (apt candidate 3.3.0); the launch and tests do not need it (`enable_joysticks:=false`). The joystick path is untested on hardware.
+
+### Deviations from the owner decisions / findings
+- [ ] `joy_linux` reads the js API: by-path link must end `-joystick`, not `-event-joystick`.
+- [ ] Two pre-existing `asv_sim` bugs fixed (`sim_reset` crashed, `set_pose` never matched `SetPose.srv`); `asv_sim` defaults to a 1 m/s current, the demo sets 0.
+- [ ] launch_ros `SetParameter`/`SetRemap` leak across `GroupAction`s once an outer scope holds a list; the demo uses scoped subclasses. Consider the same in the real launches before they gain a second vehicle.
+- [ ] ROS discovery with `ROS_LOCALHOST_ONLY=1` was incomplete for the ~50-process stack (observed twice).
+- [ ] PR two: cube `base_link_frame` in `sim_robot_launch.py`, `cw4.yaml` key, measurements (host recorded: 16 CPUs, 31 GB), deferred items.
