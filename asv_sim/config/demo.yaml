@@ -1,0 +1,32 @@
+# Model for the Ocean Discovery Day demo boats (issue #88, umbrella #87).
+#
+# Platform instances are NOT listed here. The demo launch
+# (marine_simulation/launch/demo_boats_launch.py) emits one
+# platforms.<name>.* block per boat from marine_simulation/config/demo_roster.yaml,
+# all with `model: demo`, so this file only holds the shared dynamics.
+#
+# The values are seeded from cw4.yaml (the C-Worker 4 model). The arcade-style
+# handling values arrive with #87; until then the demo boats handle like Ben.
+# Every key here is a declared Model parameter, so it can be changed live with
+#   ros2 param set /asv_sim models.demo.<name> <value>
+# (Dynamics reads the Model attributes on every update). asv_sim/test/
+# test_multi_platform.py checks that every key below matches a declared name:
+# asv_sim silently ignores an override it did not declare.
+
+asv_sim:
+  ros__parameters:
+    models.demo.max_rpm:                3200.0
+    models.demo.max_power:              21300.0
+    models.demo.idle_rpm:               750.0
+    models.demo.clutch_engagement_rpm:  800.0
+    models.demo.gearbox_ratio:          1.0
+    models.demo.propulsion_type:        jet
+    models.demo.bucket_efficiency:      0.2
+    models.demo.bucket_change_rate:     0.5
+    models.demo.max_rpm_change_rate:    1000.0
+    models.demo.max_speed:              2.75
+    models.demo.mass:                   2000.0
+    models.demo.max_rudder_angle:       33.0
+    models.demo.max_rudder_change_rate: 30.0
+    models.demo.max_turn_rate:          25.0
+    models.demo.rudder_distance:        2.0
