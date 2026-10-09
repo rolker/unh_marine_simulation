@@ -41,7 +41,9 @@ Needs no gamepad and no joystick driver. Run it against a launch started with
 
 With ``--start-launch`` the same ``--boats`` and ``--roster`` go to the launch, and
 ``--joysticks`` makes it start the real ``joy_linux`` drivers (the pads must be
-plugged in) instead of ``enable_joysticks:=false``. The self-test stops the launch
+plugged in) instead of ``enable_joysticks:=false``. Extra launch arguments may not
+set ``boats:=``, ``roster_file:=`` or ``enable_joysticks:=`` (they would override
+what the checks are derived from; the self-test refuses them). The self-test stops the launch
 it started on any exit, including SIGINT and SIGTERM, and fails at once when the
 launch exits early.
 
@@ -416,6 +418,17 @@ def _terminate(signum, frame):
     raise SystemExit(128 + signum)
 
 
+# Launch arguments the self-test sets itself and derives its expectations from;
+# a later copy on the command line would override them and make it check the
+# wrong node set.
+OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'boats:=', 'roster_file:=')
+
+
+def overridden_launch_args(extra) -> list:
+    """Return the extra launch arguments that would override the self-test's own."""
+    return [a for a in extra if a.startswith(OWN_LAUNCH_ARGS)]
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--roster', help='demo roster file (default: the installed one)')
@@ -437,6 +450,10 @@ def main(argv=None):
     unknown = [b for b in boats if b not in colors]
     if unknown:
         parser.error('boat(s) not in the roster %s: %s' % (roster, ', '.join(unknown)))
+    clashes = overridden_launch_args(args.launch_args) if args.start_launch else []
+    if clashes:
+        parser.error('%s would override what the self-test checks against; use '
+                     '--boats, --roster or --joysticks instead' % ', '.join(clashes))
 
     import rclpy
     from rclpy.signals import SignalHandlerOptions

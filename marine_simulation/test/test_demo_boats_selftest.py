@@ -132,3 +132,18 @@ def test_stop_launch_on_an_already_exited_launch_is_quiet():
     proc = subprocess.Popen(['true'], start_new_session=True)
     proc.wait()
     selftest.stop_launch(proc)
+
+
+def test_extra_launch_args_may_not_override_the_ones_the_self_test_derives():
+    assert selftest.overridden_launch_args(
+        ['tide_speed_factor:=1', 'boats:=a', 'enable_joysticks:=true',
+         'roster_file:=/x.yaml']) == ['boats:=a', 'enable_joysticks:=true',
+                                      'roster_file:=/x.yaml']
+    assert selftest.overridden_launch_args(['tide_speed_factor:=1', 'enable_nav:=true']) == []
+
+
+def test_main_refuses_overriding_launch_args_before_starting_anything(capsys):
+    with pytest.raises(SystemExit) as exit_info:
+        selftest.main(['--roster', str(ROSTER), '--start-launch', 'boats:=a'])
+    assert exit_info.value.code == 2
+    assert 'boats:=a' in capsys.readouterr().err
