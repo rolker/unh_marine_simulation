@@ -215,3 +215,24 @@ Self-test: `demo_boats_selftest.py --start-launch` on private ROS_DOMAIN_ID 55, 
 ### Round-1 verification
 - [x] All eight round-1 must-fix items and eleven of twelve suggestions hold in the committed code and tests (NaN roster, strict booleans, js<N> and realpath joystick checks, README/.agents corrections, heading test, datum preflight, graph check, package.xml, README items); the twelfth (joy_linux respawn) was a deliberate no-change, now documented.
 - [x] check_datum_grids paths match mru_transform's chart_datum_launch.py defaults exactly; mbes_grid_file default is absolute, consistent with mbes_sim; no false refusal of a valid run found other than tide_speed_factor 0 above.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-09 16:00 -04:00
+**By**: Claude Code Agent (Claude Sonnet)
+
+**Branch**: feature/issue-88 at `74b28c3`
+**Addressed**: Local Review (Pre-Push) round 2 of 2026-10-09 15:30 -04:00 at `d07d0ef` (2 must-fix, 4 suggestions; all six fixed)
+**Commits**: 6332704, d1c5497, 651e6f8, 0478fa9, 09f1a85, 74b28c3 (plan 'c078e90' and box-tick 'e583416' trail)
+
+### Actions
+- [x] Self-test leaked the launch on SIGINT/SIGTERM — reproduced before (both signals: launch survived, RCLError at rclpy.shutdown), fixed by SignalHandlerOptions.NO plus own handlers, launch stopped in its own inner finally first, rclpy.try_shutdown(), guarded close(); reproduced after: nothing left running for either signal — `demo_boats_selftest.py` (6332704)
+- [x] set_pose normalises the quaternion (scaled by the largest component), requires a finite heading before touching the dynamics; (0,0,1,1) gives heading 0; 1e308 refused (components beyond 1e6 are refused as not a rotation, since after normalisation 1e308 would otherwise be a plain direction); tests for non-unit, large, small, 1e308, 1e7 — `asv_sim/asv_sim/platform.py` (d1c5497)
+- [x] stop_launch always killpg(SIGKILL) after the wait, test with a child that ignores SIGINT — `demo_boats_selftest.py` (651e6f8)
+- [x] tide_speed_factor 0 allowed (negative/non-finite refused), README table and refusal list updated — `demo_boats_launch.py` (0478fa9)
+- [x] Extra launch args overriding boats:=, roster_file:=, enable_joysticks:= refused with a message — `demo_boats_selftest.py` (09f1a85)
+- [x] Canary test's assert message and comment say to delete the scoped subclasses when launch_ros fixes the leak — `test_demo_boats_launch.py` (74b28c3)
+
+### Results
+- asv_sim 39 tests, 0 failures, 1 skipped (copyright, pre-existing). marine_simulation 144 per colcon, 8 failures, all in files this branch does not touch (same 8 as before); pytest: 88 launch, 9 graph, 10 self-test helpers, all pass. Whole run: 183 tests, 8 failures.
+- Self-test `--start-launch`, private ROS_DOMAIN_ID 95, default discovery: first run 15 of 16 (clownfish CUBE coverage topics never delivered; its cube never published a grid; no mbes_sim exit in the log, same class as the known startup race), second run 16 of 16, nothing left running after either.
