@@ -9,8 +9,13 @@ described in the repository's `.agents/README.md`.
 ## Demo boats
 
 ```bash
-# four boats, a gamepad each (needs the joy_linux driver, see below)
-ros2 launch marine_simulation demo_boats_launch.py
+# keep the demo off other people's ROS graph (any free domain id, 0 to 101)
+export ROS_DOMAIN_ID=42
+
+# four boats, a gamepad each: needs the joy_linux driver and a joystick file
+# copied and edited for this host (see Gamepads below), because the shipped
+# config/demo_joysticks.yaml holds placeholder paths and the launch refuses them
+ros2 launch marine_simulation demo_boats_launch.py joystick_config:=$HOME/demo_joysticks.yaml
 
 # no gamepads: drive them with fake joystick messages, or not at all
 ros2 launch marine_simulation demo_boats_launch.py enable_joysticks:=false
@@ -18,6 +23,19 @@ ros2 launch marine_simulation demo_boats_launch.py enable_joysticks:=false
 # check the whole thing without hardware (starts and stops the launch itself)
 ros2 run marine_simulation demo_boats_selftest.py --start-launch
 ```
+
+The launch starts about 50 processes and other ROS machines on the network
+may share the default ROS domain, so run the demo, the self-test and any
+`ros2 topic` checks on a private `ROS_DOMAIN_ID` and leave discovery at its
+default (see the self-test notes below for why not `ROS_LOCALHOST_ONLY`).
+
+**Host requirement: datum grids.** Each boat's `chart_datum` node loads the
+geoid grid `~/data/world/datum/geoid/us_noaa_g2018u0.tif` and the VDatum grids
+`~/data/world/datum/vdatum/*_mllw.gtx`.
+Without them it only logs a warning and never publishes `<boat>/chart_datum` or
+`<boat>/chart_datum_mhhw`, so the rest of the launch would look healthy while
+every TF tree stays incomplete. The launch therefore refuses to start when the
+geoid grid or a `*_mllw.gtx` file is missing.
 
 One `asv_sim` node simulates every boat. Each boat also has its own namespace,
 TF frame prefix and these nodes (the lifecycle ones start from the same per-node
@@ -47,8 +65,15 @@ The venue is Portsmouth Harbour (the packaged `mbes_sim/data/US5NH02M.tiff` grid
 | `beam_count` | `120` | Beams per ping. |
 
 The launch refuses to start (with the reason) when a boat name is unknown or
-repeated, the joystick list does not match the roster, two boats share a pad,
-a configured pad is missing, or `enable_nav` is true.
+repeated, a roster value is not a finite number in range, the joystick list does
+not match the roster, two boats share a pad (also when two links resolve to one
+device), a configured pad is missing or its link resolves to something other than
+a `jsN` node (the `-event-joystick` link), `joy_linux` is not installed,
+`deadzone` is outside [0, 1) or `autorepeat_rate` is 2 Hz or less, a boolean
+argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
+`mbes_grid_file` is not a file, `cell_size`, `beam_count`, `ping_interval` or
+`tide_speed_factor` is not positive (or not finite), `current_speed` is negative,
+the datum grids above are missing, or `enable_nav` is true.
 
 ### The roster is the only place boat names live
 
@@ -101,8 +126,8 @@ left trigger (`axes[2]`) is pulled below zero, which gives full speed.
 3. `ls -l /dev/input/by-path/ | grep -- '-joystick$'` shows one link per pad, each pointing at a `jsN`. Copy those into your `joystick_config`, in boat order.
 4. Launch, then `ros2 topic echo --once /<boat>/joy`: `axes` must have 8 entries and `buttons` 11. `joy_to_helm` reads `buttons[9]` and `buttons[10]` on every message and silently ignores a message from a pad that has fewer, so a wrong-mode pad just does not drive.
 5. Move each stick and trigger once: throttle on `axes[1]`, rudder on `axes[3]`, the left trigger takes `axes[2]` from 1.0 toward -1.0 (the joy_linux driver reports 0.0 until a trigger is first moved). Confirm right stick right turns the boat to starboard.
-6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug and replug one pad and confirm it still drives the same boat.
-7. Avoid A, B and X (buttons 0 to 2): `joy_to_helm` asks for a piloting mode change that nothing handles (there is no `command_bridge`) and stops sending helm until the next heartbeat restores `manual`.
+6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug and replug one pad and confirm it still drives the same boat (unverified until the dry run: `joy_linux` is expected to re-open the device itself, and the launch does not respawn the node).
+7. Avoid B and X (buttons 1 and 2): `joy_to_helm` asks for a piloting mode change (standby, autonomous) that nothing handles (there is no `command_bridge`) and stops sending helm until the next heartbeat restores `manual`. A (button 0) asks for `manual`, which the boat is already in, so it does nothing.
 
 ### Resetting between rounds
 
@@ -112,6 +137,10 @@ Each boat returns to its start pose, at rest, on `std_msgs/Bool` to
 ```bash
 ros2 topic pub --once /asv_sim/sim_reset std_msgs/msg/Bool "{data: true}"
 ```
+
+`sim_reset` moves the boats only. It does not clear the CUBE grids; emptying them
+is a lifecycle cleanup and configure of each boat's `cube_bathymetry` node, a
+host procedure that is not part of this launch.
 
 `cube_bathymetry` keeps no state on disk for the demo: `draft_dir` and
 `prior_store_dir` are set empty for every boat in `config/demo_params.yaml`. A
@@ -127,8 +156,14 @@ or any other config that sets `draft_dir` or `prior_store_dir` onto the demo**.
 `asv_sim`, twelve nodes per boat, plus a `joy_node` each with `--joysticks`), every boat's TF frames, the graph
 check below, that driving one boat moves only that boat, that with all boats driven
 at once an idle boat stays put and only the boats given a rudder turn, and that
-every boat's `cube_bathymetry/coverage_catalog` and `coverage_tiles` deliver. It
-resets the boats at the end and exits non-zero if a check fails. Run it on a
+every boat's `cube_bathymetry/coverage_catalog` and `coverage_tiles` deliver, and
+that `/marine/platforms` carries one platform per boat with the roster's name
+and colour (the CAMP tab names and colours). With `--start-launch` it passes
+`--boats` and `--roster` on to the launch (`--joysticks` starts the real
+`joy_linux` drivers instead of `enable_joysticks:=false`), stops the launch on any
+exit including SIGINT and SIGTERM, and fails at once if the launch exits early.
+It resets the boats at the end and exits non-zero if a check fails. It needs the
+datum grids above: the launch refuses to start without them. Run it on a
 private `ROS_DOMAIN_ID` and leave discovery at its default: with
 `ROS_LOCALHOST_ONLY=1` (or `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) a second
 process on the machine saw only part of the roughly 50 processes of the four-boat
@@ -137,7 +172,12 @@ stack.
 `check_multi_boat_graph.py` is the graph part alone, for a launch that is already
 running: no duplicate node names, every TF frame has exactly one parent, and no
 boat publishes into another boat's namespace (nor a topic outside the boats'
-namespaces, other than `/marine/platforms`, `/tf` and `/tf_static`).
+namespaces, other than the shared ones: `/marine/platforms`, `/tf`, `/tf_static`,
+`/diagnostics`, `/rosout`, `/parameter_events`, `/clock`). It only looks at
+publishers, and it treats the root-namespace `asv_sim` as belonging to no boat, so
+a subscription to another boat's topic or a wrong topic published by `asv_sim`
+itself is not caught here (the self-test's presence checks cover `asv_sim`'s
+per-boat topics).
 
 ### Known limits
 
