@@ -37,10 +37,13 @@ node simulates all of them. See ``marine_simulation/README.md``.
 
 The checks that stop a mis-wired demo from starting are plain functions at
 module level (``load_roster``, ``select_boats``, ``assign_joysticks``,
-``refuse_enable_nav``) so they can be unit tested without a launch context.
+``refuse_enable_nav``, ``parse_bool``, ``check_datum_grids``, ...) so they can
+be unit tested without a launch context.
 """
 
 import dataclasses
+import glob
+import math
 import os
 import re
 from typing import Callable, Dict, List, Sequence, Tuple
@@ -70,13 +73,23 @@ import yaml
 RESERVED_NAMES = frozenset({
     'asv_sim', 'earth', 'marine', 'parameter_events', 'rosout', 'tf', 'tf_static',
 })
-_NAME_PATTERN = re.compile(r'^[a-z][a-z0-9_]*$')
+# Used with fullmatch: `$` would accept a trailing newline.
+_NAME_PATTERN = re.compile(r'[a-z][a-z0-9_]*')
 
-# Frames the boat's nodes share, as suffixes under the boat's prefix.
-FRAME_SUFFIXES = (
-    'base_link', 'base_link_north_up', 'odom', 'map', 'map_tide',
-    'chart_datum', 'chart_datum_mhhw', 'motion_sensor', 'mbes',
-)
+# The kernel joystick device a by-path link must resolve to (joy_linux reads the
+# js API; an -event-joystick link resolves to eventN and reads as garbage).
+_JS_DEVICE = re.compile(r'js[0-9]+')
+
+# Where chart_datum (mru_transform) looks for its geoid and VDatum grids when the
+# launch does not override them. Without them it only warns and never publishes
+# <boat>/chart_datum.
+DATUM_ROOT = '~/data/world/datum'
+GEOID_GRID = os.path.join('geoid', 'us_noaa_g2018u0.tif')
+VDATUM_DIR = 'vdatum'
+
+# asv_sim zeroes throttle and rudder after 0.5 s without a command, so a held
+# stick needs the joystick driver to repeat faster than that (2 Hz) with margin.
+MIN_AUTOREPEAT_HZ = 2.0
 
 
 class ScopedSetParameter(SetParameter):
@@ -126,8 +139,54 @@ def _number(value, what: str, low: float = None, high: float = None) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise ValueError('%s must be a number, got %r' % (what, value))
     value = float(value)
+    if not math.isfinite(value):
+        raise ValueError('%s must be a finite number, got %r' % (what, value))
     if (low is not None and value < low) or (high is not None and value > high):
         raise ValueError('%s = %s is outside [%s, %s]' % (what, value, low, high))
+    return value
+
+
+_TRUE_WORDS = ('true', '1', 'yes', 'on')
+_FALSE_WORDS = ('false', '0', 'no', 'off')
+
+
+def parse_bool(value: str, what: str) -> bool:
+    """
+    Parse a boolean launch argument strictly.
+
+    Anything outside true/1/yes/on and false/0/no/off raises: ``enable_joysticks:=ture``
+    must not quietly start four boats with no pads.
+    """
+    word = value.strip().lower()
+    if word in _TRUE_WORDS:
+        return True
+    if word in _FALSE_WORDS:
+        return False
+    raise ValueError('%s must be one of %s, got %r'
+                     % (what, ', '.join(_TRUE_WORDS + _FALSE_WORDS), value))
+
+
+def parse_float(text: str, what: str, low: float = None, high: float = None,
+                positive: bool = False) -> float:
+    """Parse a numeric launch argument; it must be finite (and positive if asked)."""
+    try:
+        value = float(text)
+    except ValueError:
+        raise ValueError('%s must be a number, got %r' % (what, text)) from None
+    value = _number(value, what, low, high)
+    if positive and value <= 0.0:
+        raise ValueError('%s must be greater than zero, got %s' % (what, text))
+    return value
+
+
+def parse_positive_int(text: str, what: str) -> int:
+    """Parse an integer launch argument that must be at least 1."""
+    try:
+        value = int(text)
+    except ValueError:
+        raise ValueError('%s must be a whole number, got %r' % (what, text)) from None
+    if value < 1:
+        raise ValueError('%s must be at least 1, got %s' % (what, text))
     return value
 
 
@@ -147,7 +206,7 @@ def load_roster(path: str) -> List[Boat]:
             raise ValueError("%s: each boat needs a string 'name'" % where)
         name = entry['name']
         where = '%s: boat %r' % (path, name)
-        if not _NAME_PATTERN.match(name):
+        if not _NAME_PATTERN.fullmatch(name):
             raise ValueError('%s: the name must match %s (it becomes a ROS namespace '
                              'and a TF frame prefix)' % (where, _NAME_PATTERN.pattern))
         if name in RESERVED_NAMES:
@@ -206,16 +265,20 @@ def load_joystick_config(path: str) -> dict:
 
 def assign_joysticks(
         roster: Sequence[Boat], boats: Sequence[Boat], config: dict,
-        exists: Callable[[str], bool] = os.path.exists) -> Dict[str, str]:
+        exists: Callable[[str], bool] = os.path.exists,
+        resolve: Callable[[str], str] = os.path.realpath) -> Dict[str, str]:
     """
     Map each selected boat to its joystick device path, or raise.
 
     ``config['devices']`` pairs with the roster by position. Refusing to start
     is the point: two boats on one pad, or a boat on the wrong pad, only shows
-    up as the wrong boat moving.
+    up as the wrong boat moving. A device must exist, must resolve to a kernel
+    ``js<N>`` node (the ``-event-joystick`` link resolves to ``event<N>``, which
+    ``joy_linux`` reads as garbage), and no two selected boats may resolve to the
+    same node (two different links can name one pad).
     """
     devices = config.get('devices')
-    if not all(isinstance(d, str) and d for d in devices):
+    if not isinstance(devices, list) or not all(isinstance(d, str) and d for d in devices):
         raise ValueError('every joystick device must be a non-empty path string')
     if len(devices) != len(roster):
         raise ValueError('the roster has %d boats but the joystick config lists %d devices; '
@@ -232,12 +295,74 @@ def assign_joysticks(
             'joystick device(s) not found; plug the pads into the labelled ports, check '
             "'ls -l /dev/input/by-path/ | grep -- -joystick$', or launch with "
             'enable_joysticks:=false:\n  ' + '\n  '.join(missing))
+
+    targets = {b.name: resolve(assignment[b.name]) for b in boats}
+    wrong_kind = ['%s (%s pad): %s resolves to %s' % (
+        b.name, b.pad or 'no pad label', assignment[b.name], targets[b.name])
+        for b in boats if not _JS_DEVICE.fullmatch(os.path.basename(targets[b.name]))]
+    if wrong_kind:
+        raise ValueError(
+            'joystick device(s) are not kernel joystick (js<N>) nodes; joy_linux needs '
+            "the by-path link ending in '-joystick', not '-event-joystick':\n  "
+            + '\n  '.join(wrong_kind))
+    by_target = {}
+    for b in boats:
+        by_target.setdefault(targets[b.name], []).append(b.name)
+    shared = ['%s -> %s' % (', '.join(names), target)
+              for target, names in sorted(by_target.items()) if len(names) > 1]
+    if shared:
+        raise ValueError('different joystick links resolve to the same device, so two boats '
+                         'would share one pad: ' + '; '.join(shared))
     return assignment
+
+
+def check_joystick_settings(deadzone: float, autorepeat_rate: float) -> None:
+    """Raise if the joystick driver settings would make the boats unusable."""
+    if not 0.0 <= deadzone < 1.0:
+        raise ValueError('joystick deadzone = %s must be in [0, 1)' % deadzone)
+    if autorepeat_rate <= MIN_AUTOREPEAT_HZ:
+        raise ValueError(
+            'joystick autorepeat_rate = %s Hz is too low: asv_sim zeroes throttle and rudder '
+            'after 0.5 s without a command, so a held stick needs more than %s Hz'
+            % (autorepeat_rate, MIN_AUTOREPEAT_HZ))
+
+
+def require_package(package: str, hint: str, find: Callable[[str], str] = None) -> None:
+    """Raise a plain message when an installed ROS package is missing."""
+    if find is None:
+        from ament_index_python.packages import get_package_prefix as find
+    try:
+        find(package)
+    except Exception:  # PackageNotFoundError, or an unreadable index
+        raise RuntimeError('the %s package is not installed (%s)' % (package, hint)) from None
+
+
+def check_datum_grids(root: str = DATUM_ROOT) -> None:
+    """
+    Raise if the geoid or VDatum grids ``chart_datum`` loads are not on disk.
+
+    ``chart_datum`` only warns about missing grids, and then never publishes
+    ``<boat>/chart_datum`` or ``<boat>/chart_datum_mhhw``, so the launch would look
+    healthy while every boat's TF tree stays incomplete.
+    """
+    root = os.path.expanduser(root)
+    geoid = os.path.join(root, GEOID_GRID)
+    vdatum = os.path.join(root, VDATUM_DIR)
+    problems = []
+    if not os.path.isfile(geoid):
+        problems.append('geoid grid missing: %s' % geoid)
+    if not glob.glob(os.path.join(vdatum, '*_mllw.gtx')):
+        problems.append('no VDatum *_mllw.gtx grid in %s' % vdatum)
+    if problems:
+        raise RuntimeError(
+            'chart_datum needs the datum grids under %s, which are not provisioned on this '
+            'host (%s). Without them <boat>/chart_datum never appears.'
+            % (root, '; '.join(problems)))
 
 
 def refuse_enable_nav(enable_nav: str) -> None:
     """Raise if the navigation stack was requested; it is not wired yet."""
-    if enable_nav.strip().lower() in ('true', '1', 'yes', 'on'):
+    if parse_bool(enable_nav, 'enable_nav'):
         raise RuntimeError(
             'enable_nav:=true is not wired yet: the navigation stack (nav2, mission_manager, '
             's57_grids) cannot run per boat in this launch. Leave enable_nav at false.')
@@ -421,25 +546,39 @@ def launch_setup(context, *args, **kwargs):
         return LaunchConfiguration(name).perform(context)
 
     refuse_enable_nav(arg('enable_nav'))
+    enable_joysticks = parse_bool(arg('enable_joysticks'), 'enable_joysticks')
 
     roster = load_roster(arg('roster_file'))
     boats = select_boats(roster, arg('boats'))
 
-    joysticks = {}
+    mbes_grid_file = arg('mbes_grid_file')
+    if not os.path.isfile(mbes_grid_file):
+        raise ValueError('mbes_grid_file %r is not a file' % mbes_grid_file)
     settings = {
-        'ping_interval': float(arg('ping_interval')),
-        'beam_count': int(arg('beam_count')),
-        'cell_size': float(arg('cell_size')),
-        'mbes_grid_file': arg('mbes_grid_file'),
+        'ping_interval': parse_float(arg('ping_interval'), 'ping_interval', positive=True),
+        'beam_count': parse_positive_int(arg('beam_count'), 'beam_count'),
+        'cell_size': parse_float(arg('cell_size'), 'cell_size', positive=True),
+        'mbes_grid_file': mbes_grid_file,
         'deadzone': 0.1,
         'autorepeat_rate': 10.0,
     }
-    if arg('enable_joysticks').strip().lower() in ('true', '1', 'yes', 'on'):
+    tide_speed_factor = parse_float(arg('tide_speed_factor'), 'tide_speed_factor',
+                                    positive=True)
+    current_speed = parse_float(arg('current_speed'), 'current_speed', low=0.0)
+    check_datum_grids()
+
+    joysticks = {}
+    if enable_joysticks:
+        require_package('joy_linux', 'install ros-jazzy-joy-linux, or launch with '
+                                     'enable_joysticks:=false')
         config = load_joystick_config(arg('joystick_config'))
         joysticks = assign_joysticks(roster, boats, config)
-        settings['deadzone'] = float(config.get('deadzone', settings['deadzone']))
-        settings['autorepeat_rate'] = float(
-            config.get('autorepeat_rate', settings['autorepeat_rate']))
+        settings['deadzone'] = _number(
+            config.get('deadzone', settings['deadzone']), 'joystick deadzone')
+        settings['autorepeat_rate'] = _number(
+            config.get('autorepeat_rate', settings['autorepeat_rate']),
+            'joystick autorepeat_rate')
+        check_joystick_settings(settings['deadzone'], settings['autorepeat_rate'])
 
     actions = [
         SetParametersFromFile(PathJoinSubstitution([
@@ -448,8 +587,7 @@ def launch_setup(context, *args, **kwargs):
             package='asv_sim', executable='asv_sim', name='asv_sim', emulate_tty=True,
             parameters=[
                 PathJoinSubstitution([FindPackageShare('asv_sim'), 'config', 'demo.yaml']),
-                asv_sim_parameters(boats, float(arg('tide_speed_factor')),
-                                   float(arg('current_speed'))),
+                asv_sim_parameters(boats, tide_speed_factor, current_speed),
             ],
             remappings=asv_sim_remappings(boats)),
     ]
