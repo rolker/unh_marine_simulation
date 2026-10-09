@@ -306,7 +306,7 @@ class SelfTest:
                     not problems, '; '.join(problems))
 
     def check_platforms(self, timeout=15.0):
-        """The CAMP tab names and colours: one platform per boat, in the roster's colour."""
+        """Check the CAMP tab names and colours: one platform per boat, in the roster colour."""
         deadline = time.monotonic() + timeout
         while not set(self.boats) <= set(self.platforms) and time.monotonic() < deadline:
             self.spin(0.5)
