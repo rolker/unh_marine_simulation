@@ -25,8 +25,17 @@
   <exec_depend>ben_project11</exec_depend>
   <exec_depend>camp</exec_depend>
   <exec_depend>lifecycle_msgs</exec_depend>
+  <exec_depend>ben_description</exec_depend>
+  <exec_depend>helm_manager</exec_depend>
+  <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>joy_linux</exec_depend>
+  <exec_depend>joy_to_helm</exec_depend>
+  <exec_depend>robot_state_publisher</exec_depend>
+  <exec_depend>xacro</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
   <exec_depend>rosbag2_transport</exec_depend>
 
+  <test_depend>ament_cmake_pytest</test_depend>
   <test_depend>ament_lint_auto</test_depend>
 
   <!-- this recursively depends on a set of common linters -->

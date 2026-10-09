@@ -1,0 +1,44 @@
+# The boats of the Ocean Discovery Day demo (issue #88, umbrella #87).
+#
+# This is the ONLY place the boat names appear. demo_boats_launch.py derives
+# everything else from it: the ROS namespace, the TF frame prefix
+# (<name>/base_link, <name>/map, ...), the asv_sim platform, the platform_sender
+# name (the CAMP tab title) and its colour. Rename a boat here and nothing else
+# changes.
+#
+# ORDER MATTERS. The i-th boat is driven by the i-th entry of `devices` in
+# demo_joysticks.yaml, so list the boats in controller order. The `pad` label is
+# documentation only (it names the colour of the GameSir G7 SE that drives the
+# boat); `color` is the platform colour CAMP draws, chosen to match the pad.
+#
+# Start poses: Portsmouth Harbour, 100 m north of Ben's usual start (the cod rock
+# position in asv_sim/dynamics.py), 40 m apart on an east-west line, all heading
+# 60 degrees like Ben. Depth from the packaged mbes_sim/data/US5NH02M.tiff
+# (metres, positive down), sampled with mbes_sim.bathy_grid at each start and as
+# the shallowest of a 3 x 3 grid at +-30 m around it:
+#   bluefin   16.6 m here, >= 16.1 m within 30 m
+#   clownfish 17.1 m here, >= 15.4 m within 30 m
+#   urchin    16.9 m here, >= 14.2 m within 30 m
+#   beluga    16.6 m here, >= 15.6 m within 30 m
+# Ben's own start is on a 5.1 m patch of the grid, so it is not used.
+
+boats:
+  - name: bluefin
+    pad: blue
+    color: {red: 0.1, green: 0.35, blue: 1.0}
+    start: {lat: 43.074296, lon: -70.71128, heading: 60.0}
+
+  - name: clownfish
+    pad: orange
+    color: {red: 1.0, green: 0.5, blue: 0.0}
+    start: {lat: 43.074296, lon: -70.710788, heading: 60.0}
+
+  - name: urchin
+    pad: purple
+    color: {red: 0.6, green: 0.2, blue: 0.8}
+    start: {lat: 43.074296, lon: -70.710296, heading: 60.0}
+
+  - name: beluga
+    pad: white
+    color: {red: 1.0, green: 1.0, blue: 1.0}
+    start: {lat: 43.074296, lon: -70.709804, heading: 60.0}
