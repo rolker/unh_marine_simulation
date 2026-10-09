@@ -159,6 +159,9 @@ class Platform:
         return 'platforms.' + self.name + '.' + key
 
     def reset_callback(self, data):
+        """Return to the start pose when the message says ``true``."""
+        if not data.data:
+            return
         # start_params holds the plain values stored by updateParameters().
         self.dynamics.set(
             self.start_params['lat'],
@@ -166,20 +169,41 @@ class Platform:
             self.start_params['heading'])
 
     def set_pose(self, req, res):
-        """Place the platform at a GeoPoseStamped, then idle it.
+        """
+        Place the platform at a GeoPoseStamped, then idle it.
 
         The orientation quaternion is an ENU yaw (counter-clockwise from
         east), as in the IMU message this node publishes; the dynamics take
         a compass heading in degrees.
+
+        A request that cannot be a place on Earth (NaN or infinite values,
+        latitude outside [-90, 90], longitude outside [-180, 180], or a
+        quaternion with no direction) is refused with ``success = False`` and
+        leaves the platform where it is. A NaN position would otherwise hang
+        the geodesic solver inside the one node that simulates every boat.
         """
         pose = req.pose.pose
         q = pose.orientation
+        lat = pose.position.latitude
+        lon = pose.position.longitude
+        quaternion = (q.x, q.y, q.z, q.w)
+        problem = None
+        if not all(math.isfinite(v) for v in (lat, lon) + quaternion):
+            problem = 'a value is not finite'
+        elif not -90.0 <= lat <= 90.0:
+            problem = 'latitude %s is outside [-90, 90]' % lat
+        elif not -180.0 <= lon <= 180.0:
+            problem = 'longitude %s is outside [-180, 180]' % lon
+        elif math.sqrt(sum(v * v for v in quaternion)) < 1e-6:
+            problem = 'the orientation quaternion has zero length'
+        if problem is not None:
+            self.node.get_logger().error(
+                'set_pose for %s refused: %s' % (self.name, problem))
+            res.success = False
+            return res
         yaw = math.atan2(2.0 * (q.w * q.z + q.x * q.y),
                          1.0 - 2.0 * (q.y * q.y + q.z * q.z))
-        self.dynamics.set(
-            pose.position.latitude,
-            pose.position.longitude,
-            90.0 - math.degrees(yaw))
+        self.dynamics.set(lat, lon, (90.0 - math.degrees(yaw)) % 360.0)
         res.success = True
         return res
 

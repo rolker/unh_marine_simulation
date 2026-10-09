@@ -4,8 +4,10 @@ Builds one ``AsvSim`` node with several platforms (synthetic names, not the
 demo roster) from parameter files, and drives it from a second node in the
 same process with bounded ``spin_once`` loops. Checks that
 
-- every platform keeps its own start pose, ``mru_frame`` and model,
+- every platform keeps its own start pose, ``mru_frame`` and model (one
+  platform uses a second model so a mix-up shows),
 - ``set_pose``, throttle and ``sim_reset`` act on one platform only,
+- ``set_pose`` refuses a pose that is not on Earth instead of freezing the node,
 - every key in ``config/demo.yaml`` is a declared ``Model`` parameter
   (``asv_sim`` silently ignores an override it did not declare).
 
@@ -36,12 +38,22 @@ PLATFORMS = {
 }
 
 
+# Platform -> model. The demo model is the shipped one; the second is a copy
+# with a different top speed, so a platform bound to the wrong model fails.
+MODELS = {'alpha': 'demo', 'bravo': 'demo', 'charlie': 'demo_fast'}
+FAST_MAX_SPEED = 4.0
+
+
 def _write_platform_file(path):
     # asv_sim defaults to a 1 m/s current; drift would swamp the isolation
     # checks, so switch it off.
     params = {'platforms': list(PLATFORMS), 'environment.current.speed': 0.0}
+    demo = yaml.safe_load(DEMO_CONFIG.read_text())['asv_sim']['ros__parameters']
+    for key, value in demo.items():
+        params[key.replace('models.demo.', 'models.demo_fast.', 1)] = value
+    params['models.demo_fast.max_speed'] = FAST_MAX_SPEED
     for name, (lat, lon, heading) in PLATFORMS.items():
-        params['platforms.%s.model' % name] = 'demo'
+        params['platforms.%s.model' % name] = MODELS[name]
         params['platforms.%s.start_lat' % name] = lat
         params['platforms.%s.start_lon' % name] = lon
         params['platforms.%s.start_heading' % name] = heading
@@ -67,6 +79,15 @@ class Rig:
             '--params-file', str(DEMO_CONFIG),
             '--params-file', str(platform_file),
         ])
+        try:
+            self._build()
+        except BaseException:
+            # A failed constructor must not leave rclpy initialised for the
+            # next test.
+            rclpy.shutdown()
+            raise
+
+    def _build(self):
         self.sim = AsvSim()
         self.driver = rclpy.create_node('test_multi_platform_driver')
         self.executor = SingleThreadedExecutor()
@@ -116,7 +137,8 @@ class Rig:
             self.throttle_pubs[name].publish(Float32(data=throttle))
             self.executor.spin_once(timeout_sec=0.05)
 
-    def set_pose(self, name, lat, lon, heading):
+    def call_set_pose(self, name, lat, lon, heading=0.0, quaternion=None):
+        """Call set_pose and return the response (success or refusal)."""
         client = self.pose_clients[name]
         deadline = time.monotonic() + 5.0
         while not client.service_is_ready():
@@ -125,14 +147,19 @@ class Rig:
         request = SetPose.Request()
         request.pose.pose.position.latitude = lat
         request.pose.pose.position.longitude = lon
-        yaw = math.radians(90.0 - heading)
-        request.pose.pose.orientation.z = math.sin(yaw / 2.0)
-        request.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        if quaternion is None:
+            yaw = math.radians(90.0 - heading)
+            quaternion = (0.0, 0.0, math.sin(yaw / 2.0), math.cos(yaw / 2.0))
+        (request.pose.pose.orientation.x, request.pose.pose.orientation.y,
+         request.pose.pose.orientation.z, request.pose.pose.orientation.w) = quaternion
         future = client.call_async(request)
         while not future.done():
             assert time.monotonic() < deadline, 'set_pose timed out'
             self.executor.spin_once(timeout_sec=0.05)
-        assert future.result().success
+        return future.result()
+
+    def set_pose(self, name, lat, lon, heading):
+        assert self.call_set_pose(name, lat, lon, heading).success
         self.spin(0.5)
 
     def close(self):
@@ -144,12 +171,14 @@ class Rig:
 
 @pytest.fixture
 def rig(tmp_path):
-    r = Rig(tmp_path)
+    r = None
     try:
+        r = Rig(tmp_path)
         r.wait_for_fixes()
         yield r
     finally:
-        r.close()
+        if r is not None:
+            r.close()
 
 
 def test_each_platform_has_its_own_start_pose_and_frame(rig):
@@ -157,9 +186,19 @@ def test_each_platform_has_its_own_start_pose_and_frame(rig):
     for platform in rig.sim.platforms:
         lat, lon, _ = PLATFORMS[platform.name]
         assert platform.mru_frame == '%s/motion_sensor' % platform.name
-        assert platform.model is rig.sim.models['demo']
+        assert platform.model is rig.sim.models[MODELS[platform.name]]
         fix = rig.fresh_fix(platform.name)
         assert _metres((lat, lon), fix) < 1.0, platform.name
+
+
+def test_platforms_use_their_own_model(rig):
+    assert rig.sim.models['demo'] is not rig.sim.models['demo_fast']
+    assert rig.sim.models['demo'].max_speed != FAST_MAX_SPEED
+    assert rig.sim.models['demo_fast'].max_speed == FAST_MAX_SPEED
+    speeds = {p.name: p.model.max_speed for p in rig.sim.platforms}
+    assert speeds == {'alpha': rig.sim.models['demo'].max_speed,
+                      'bravo': rig.sim.models['demo'].max_speed,
+                      'charlie': FAST_MAX_SPEED}
 
 
 def test_set_pose_moves_only_that_platform(rig):
@@ -172,14 +211,54 @@ def test_set_pose_moves_only_that_platform(rig):
 
 
 def test_set_pose_heading_is_a_compass_heading(rig):
+    # Heading 0 is north. A yaw sign error (heading 180) or a missing 90 degree
+    # offset (heading 90, due east) both fail one of the two bounds; the
+    # simulator's own noise stays far inside them.
     start = (43.0800, -70.7000)
-    rig.set_pose('charlie', start[0], start[1], 90.0)
+    rig.set_pose('charlie', start[0], start[1], 0.0)
     rig.drive('charlie', 1.0, 5.0)
     end = rig.fresh_fix('charlie')
     east = (end[1] - start[1]) * 111320.0 * math.cos(math.radians(start[0]))
     north = (end[0] - start[0]) * 111320.0
-    assert east > 2.0
-    assert abs(north) < east / 3.0
+    assert north > 2.0
+    assert abs(east) < north / 2.0
+
+
+def test_set_pose_stores_a_heading_in_zero_to_360(rig):
+    platform = next(p for p in rig.sim.platforms if p.name == 'charlie')
+    for heading in (200.0, 359.0, 10.0):
+        request = SetPose.Request()
+        yaw = math.radians(90.0 - heading)
+        request.pose.pose.orientation.z = math.sin(yaw / 2.0)
+        request.pose.pose.orientation.w = math.cos(yaw / 2.0)
+        assert platform.set_pose(request, SetPose.Response()).success
+        assert math.degrees(platform.dynamics.heading) == pytest.approx(heading)
+
+
+NAN, INF = float('nan'), float('inf')
+
+
+@pytest.mark.parametrize('lat, lon, quaternion', [
+    (NAN, -70.7, None),
+    (43.0, NAN, None),
+    (INF, -70.7, None),
+    (43.0, -INF, None),
+    (91.0, -70.7, None),
+    (-90.5, -70.7, None),
+    (43.0, 180.5, None),
+    (43.0, -70.7, (0.0, 0.0, 0.0, 0.0)),
+    (43.0, -70.7, (0.0, 0.0, NAN, 1.0)),
+    (43.0, -70.7, (INF, 0.0, 0.0, 1.0)),
+], ids=['nan-lat', 'nan-lon', 'inf-lat', 'inf-lon', 'lat-high', 'lat-low',
+        'lon-high', 'zero-quaternion', 'nan-quaternion', 'inf-quaternion'])
+def test_set_pose_refuses_a_pose_that_is_not_on_earth(rig, lat, lon, quaternion):
+    before = {n: rig.fresh_fix(n) for n in PLATFORMS}
+    assert not rig.call_set_pose('bravo', lat, lon, quaternion=quaternion).success
+    rig.spin(1.0)
+    # The refusal changed nothing, and the node still runs (a NaN position
+    # would hang its update timer, so no fix would arrive).
+    for name in PLATFORMS:
+        assert _metres(before[name], rig.fresh_fix(name)) < 1.0, name
 
 
 def test_throttle_moves_only_that_platform(rig):
@@ -193,11 +272,23 @@ def test_throttle_moves_only_that_platform(rig):
 def test_sim_reset_returns_each_platform_to_its_own_start(rig):
     rig.drive('alpha', 1.0, 3.0)
     rig.drive('charlie', 1.0, 3.0)
+    for name in ('alpha', 'charlie'):
+        lat, lon, _ = PLATFORMS[name]
+        assert _metres((lat, lon), rig.fresh_fix(name)) > 1.0, (
+            '%s never left its start, so the reset proves nothing' % name)
     for name in PLATFORMS:
         rig.reset_pubs[name].publish(Bool(data=True))
     rig.spin(1.0)
     for name, (lat, lon, _) in PLATFORMS.items():
         assert _metres((lat, lon), rig.fresh_fix(name)) < 1.0, name
+
+
+def test_sim_reset_with_false_does_nothing(rig):
+    rig.drive('alpha', 1.0, 3.0)
+    rig.reset_pubs['alpha'].publish(Bool(data=False))
+    rig.spin(1.0)
+    lat, lon, _ = PLATFORMS['alpha']
+    assert _metres((lat, lon), rig.fresh_fix('alpha')) > 1.0
 
 
 def test_demo_config_keys_are_declared_model_parameters(rig):
