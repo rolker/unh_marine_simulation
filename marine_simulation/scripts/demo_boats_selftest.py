@@ -387,14 +387,27 @@ def start_launch(cmd):
 
 
 def stop_launch(proc):
-    """Interrupt the launch's process group and wait for it to finish."""
+    """
+    Stop the launch's whole process group.
+
+    SIGINT first, so the launch shuts its nodes down; then SIGKILL on the group
+    whatever happened, because the launch exiting does not mean its children have
+    (and a second Ctrl-C during the wait must not skip the kill either).
+    """
     try:
-        os.killpg(proc.pid, signal.SIGINT)
-        proc.wait(timeout=30)
-    except (ProcessLookupError, subprocess.TimeoutExpired):
+        try:
+            os.killpg(proc.pid, signal.SIGINT)
+            proc.wait(timeout=30)
+        except (ProcessLookupError, subprocess.TimeoutExpired):
+            pass
+    finally:
         try:
             os.killpg(proc.pid, signal.SIGKILL)
         except ProcessLookupError:
+            pass
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
             pass
 
 

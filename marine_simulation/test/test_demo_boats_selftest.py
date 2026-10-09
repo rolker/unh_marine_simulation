@@ -30,8 +30,11 @@
 """Unit tests for the pure helpers in scripts/demo_boats_selftest.py."""
 
 import importlib.util
+import os
 import pathlib
+import subprocess
 import sys
+import time
 
 import pytest
 
@@ -94,3 +97,38 @@ def test_check_launch_raises_once_the_launch_has_exited():
     test.launch.returncode = 3
     with pytest.raises(selftest.LaunchExited, match='status 3'):
         test.check_launch()
+
+
+def _alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    with open('/proc/%d/stat' % pid) as f:
+        return f.read().rsplit(')', 1)[1].split()[0] != 'Z'  # a zombie is dead
+
+
+def test_stop_launch_kills_children_that_outlive_the_leader():
+    # The leader exits on SIGINT; its child ignores SIGINT and would be left behind.
+    proc = subprocess.Popen(
+        ['sh', '-c', 'sleep 60 & echo $!; trap "exit 0" INT; wait'],
+        stdout=subprocess.PIPE, text=True, start_new_session=True)
+    child = int(proc.stdout.readline())
+    try:
+        assert _alive(child)
+        selftest.stop_launch(proc)
+        deadline = time.monotonic() + 5.0
+        while _alive(child) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not _alive(child), 'a child of the launch survived stop_launch'
+        assert proc.poll() is not None
+    finally:
+        if _alive(child):
+            os.kill(child, 9)
+        proc.stdout.close()
+
+
+def test_stop_launch_on_an_already_exited_launch_is_quiet():
+    proc = subprocess.Popen(['true'], start_new_session=True)
+    proc.wait()
+    selftest.stop_launch(proc)
