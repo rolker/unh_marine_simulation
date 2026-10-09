@@ -70,3 +70,17 @@ Independent fresh-context review (dispatch header present). Dimensions: Scope = 
 - [ ] (suggestion) Consequence gaps: `CMakeLists.txt` needs `install(PROGRAMS scripts/...)` and, only if launch tests stay, `ament_cmake_pytest` test_depend; `mission_manager`/`s57_grids` exec_depends only if `enable_nav` is really wired; the repo-root `README.md` is a two-line stub, so drop the "pointer if it lists launches" item — `plan.md:70,129`
 - [ ] (suggestion) Record the measurement host in step 9 (CPU count, RAM): the dev host is only a proxy for the event machine, so repeat the 4-boat run on the event machine at the dry run — `plan.md:71`
 - [ ] (suggestion) Real-boat split: the `cw4.yaml` key fix, `base_link_frame` fix and multi-platform asv_sim test are the only items useful off the demo; the graph check is reusable but small; everything else is correctly marked demo-only — `plan.md:88-93`
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-09 (revision after the Plan Review at 88c1ddf)
+**By**: Claude Sonnet
+
+**Plan**: `.agent/work-plans/issue-88/plan.md` at `1e3a7c0`
+**Branch**: feature/issue-88 at `1e3a7c0`
+**Phases**: two PRs (PR one = demo platform + launch + self-test + README; PR two = cube/cw4 fixes, measurements, deferred items)
+
+Revision after the Plan Review (changes-requested, 88c1ddf). All four must-fixes applied: one roster file holds the boat names and the launch derives namespaces, frame prefixes, `mru_frame` and platform colour from it; the self-test publishes Xbox-shaped fake `Joy` (8 axes, 11 buttons) to each boat's `joy` with `joy_to_helm` running and only the joystick driver gated by `enable_joysticks`; an explicit pad checklist (silent `IndexError`, XInput axis order, G7 SE XInput mode, `ros2 topic echo --once`); per-boat groups include the existing per-node launch files in a namespace push, with every remap listed in a table. Reviewer cuts applied (new `sim_robot_launch.py` args and snapshot test, launch-flattening helper, real nav includes, `use_sim_time` all deferred or cut; `enable_nav` ships declared, off, refusing with "not wired yet"; graph check slimmed). Owner decisions of 2026-10-09 applied: names bluefin/clownfish/urchin/beluga in pad order blue/orange/purple/white, platform colours match, `joy_linux` bound to a physical USB port.
+
+### Open questions
+- [ ] `joy_linux` opens `dev` with the js API (`/dev/input/jsN`, per its upstream source), so the by-path link must be the `...-joystick` one, not the `...-event-joystick` one named in the owner decision; the plan uses `...-joystick` and sets `dev_ff` empty. Needs a real-pad check at the dry run.
