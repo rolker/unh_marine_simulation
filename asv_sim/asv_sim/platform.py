@@ -170,6 +170,7 @@ class Platform:
             self.start_params['lat'],
             self.start_params['lon'],
             self.start_params['heading'])
+        self.drop_command()
 
     def set_pose(self, req, res):
         """
@@ -221,8 +222,21 @@ class Platform:
             res.success = False
             return res
         self.dynamics.set(lat, lon, heading)
+        self.drop_command()
         res.success = True
         return res
+
+    def drop_command(self):
+        """
+        Forget the last throttle and rudder command.
+
+        Without this, a command that arrived less than 0.5 s before a reset
+        or a set_pose would be applied again on the next update, and the
+        platform would not start at rest.
+        """
+        self.throttle = 0.0
+        self.rudder = 0.0
+        self.last_command_timestamp = None
 
     def throttle_callback(self, data):
         self.throttle = max(min(data.data, 1.0), -1.0)

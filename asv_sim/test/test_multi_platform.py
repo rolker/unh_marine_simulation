@@ -309,6 +309,27 @@ def test_sim_reset_with_false_does_nothing(rig):
     assert _metres((lat, lon), rig.fresh_fix('alpha')) > 1.0
 
 
+@pytest.mark.parametrize('how', ['sim_reset', 'set_pose'])
+def test_reset_and_set_pose_drop_the_last_command(rig, how):
+    # Called directly: within 0.5 s of a command, update() would apply it
+    # again unless the reset forgot it.
+    platform = next(p for p in rig.sim.platforms if p.name == 'alpha')
+    platform.throttle_callback(Float32(data=1.0))
+    platform.rudder_callback(Float32(data=0.5))
+    if how == 'sim_reset':
+        platform.reset_callback(Bool(data=True))
+    else:
+        request = SetPose.Request()
+        request.pose.pose.position.latitude = PLATFORMS['alpha'][0]
+        request.pose.pose.position.longitude = PLATFORMS['alpha'][1]
+        request.pose.pose.orientation.w = 1.0
+        assert platform.set_pose(request, SetPose.Response()).success
+    assert platform.last_command_timestamp is None
+    platform.update()
+    assert platform.throttle == 0.0
+    assert platform.rudder == 0.0
+
+
 def test_demo_config_keys_are_declared_model_parameters(rig):
     config = yaml.safe_load(DEMO_CONFIG.read_text())
     keys = list(config['asv_sim']['ros__parameters'])
