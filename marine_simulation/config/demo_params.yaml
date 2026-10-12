@@ -1,0 +1,76 @@
+# Node parameters shared by every demo boat (demo_boats_launch.py loads this once).
+#
+# Only prefix-independent values live here, so the keys use the node-wildcard form
+# the other configs use. Everything that depends on the boat name (frame names,
+# platform colour, joystick device) is set per boat by the launch from
+# demo_roster.yaml and demo_joysticks.yaml.
+
+# helm_manager: pass the manual (joystick) helm through to asv_helm, and start in
+# manual so the first stick movement drives the boat. Nothing else can change the
+# mode: there is no command_bridge in the demo.
+/**/helm_manager:
+  ros__parameters:
+    output_type: helm
+    initial_piloting_mode: manual
+    max_yaw_speed: 0.5
+    max_speed: 2.75
+
+# joy_to_helm: stated explicitly rather than relying on the node defaults. These are
+# the xpad (Xbox layout, "XInput mode") axes as reported by joy_linux:
+#   axes:    0 left X, 1 left Y, 2 left trigger, 3 right X, 4 right Y,
+#            5 right trigger, 6 d-pad X, 7 d-pad Y   (8 axes)
+#   buttons: 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 back, 7 start, 8 guide,
+#            9 left stick click, 10 right stick click   (11 buttons)
+# joy_to_helm reads buttons[9] and buttons[10] on every message and ignores the
+# whole message if the pad reports fewer than 11 buttons.
+# Throttle = left stick up, rudder = right stick; throttle is scaled to 35 % unless
+# the left trigger (axis 2) is pulled below zero, which gives full speed.
+/**/joy_to_helm:
+  ros__parameters:
+    throttle_axis: 1
+    slow_mode_axis: 2
+    rudder_axis: 3
+    manual_button: 0
+    standby_button: 1
+    autonomous_button: 2
+
+# mru_transform: the single simulated nav source asv_sim publishes under sensors/nav.
+/**/mru_transform:
+  ros__parameters:
+    sensors:
+      nav:
+        topics:
+          orientation: "sensors/nav/orientation"
+          position: "sensors/nav/position"
+          velocity: "sensors/nav/velocity"
+    sensor_names:
+      - nav
+
+# platform_sender: what CAMP draws for each boat. Size and reference point are the
+# ben_project11 values (Ben's footprint); the colour is set per boat by the launch.
+/**/platform_sender:
+  ros__parameters:
+    width: 1.7
+    length: 4.25
+    reference_x: 0.525
+    nav:
+      source_names:
+        - nav
+      sources:
+        nav:
+          topics:
+            orientation: "sensors/nav/orientation"
+            position: "sensors/nav/position"
+            velocity: "sensors/nav/velocity"
+
+# cube_bathymetry: no draft_dir and no prior_store_dir, for every boat. The CUBE grid
+# is persisted to and reloaded from disk only when these are set. The between-rounds
+# reset is a lifecycle cleanup/configure cycle (it empties the grid) and starts from
+# nothing only if nothing is reloaded. Both default to empty; they are stated here so a
+# reader sees the requirement. Do NOT layer bizzyboat.yaml or any other config that
+# sets them. (An empty string cannot be passed as a -p command line override, so this
+# is a parameter file rather than a SetParameter.)
+/**/cube_bathymetry:
+  ros__parameters:
+    draft_dir: ""
+    prior_store_dir: ""

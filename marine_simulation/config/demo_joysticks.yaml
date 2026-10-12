@@ -1,0 +1,39 @@
+# Joystick bindings for the demo boats (read by demo_boats_launch.py when
+# enable_joysticks is true).
+#
+# The driver is joy_linux (ros-jazzy-joy-linux), not joy. joy picks a pad by an SDL
+# plug-order index and four identical pads share one name, so neither is stable
+# across reboots. joy_linux opens a device PATH, and a /dev/input/by-path/ link
+# names a physical USB port, so each boat stays bound to the port its pad is
+# plugged into no matter what order the system enumerates them.
+#
+# joy_linux reads the kernel joystick (js) interface, so use the by-path link that
+# ends in "-joystick", NOT the one ending in "-event-joystick" (that is the evdev
+# node, which joy_linux cannot read). List them with:
+#   ls -l /dev/input/by-path/ | grep -- '-joystick$'
+#
+# `devices` is ORDERED like the boats in demo_roster.yaml: entry 1 drives the first
+# boat, and so on. Port labelling for the event (stick a label on each USB port):
+#   port 1 = blue pad   -> first boat   (bluefin)
+#   port 2 = orange pad -> second boat  (clownfish)
+#   port 3 = purple pad -> third boat   (urchin)
+#   port 4 = white pad  -> fourth boat  (beluga)
+#
+# The paths below are PLACEHOLDERS: by-path names contain the PCI address of the
+# USB controller, so they differ from host to host (and between front and rear
+# ports). Copy this file for each machine, fill in the real links, and pass
+# joystick_config:=<copy>. The launch refuses to start joysticks that do not exist.
+
+devices:
+  - /dev/input/by-path/PLACEHOLDER-port1-blue-joystick
+  - /dev/input/by-path/PLACEHOLDER-port2-orange-joystick
+  - /dev/input/by-path/PLACEHOLDER-port3-purple-joystick
+  - /dev/input/by-path/PLACEHOLDER-port4-white-joystick
+
+# Stick dead band as a fraction of travel. The joy package ships 0.5, which makes half
+# the stick dead; 0.1 absorbs drift and still feels direct for young drivers.
+deadzone: 0.1
+
+# Re-publish the last pad state at this rate (Hz) while nothing changes. asv_sim drops
+# throttle and rudder to zero after 0.5 s without commands, so a held stick needs it.
+autorepeat_rate: 10.0
