@@ -236,3 +236,27 @@ Self-test: `demo_boats_selftest.py --start-launch` on private ROS_DOMAIN_ID 55, 
 ### Results
 - asv_sim 39 tests, 0 failures, 1 skipped (copyright, pre-existing). marine_simulation 144 per colcon, 8 failures, all in files this branch does not touch (same 8 as before); pytest: 88 launch, 9 graph, 10 self-test helpers, all pass. Whole run: 183 tests, 8 failures.
 - Self-test `--start-launch`, private ROS_DOMAIN_ID 95, default discovery: first run 15 of 16 (clownfish CUBE coverage topics never delivered; its cube never published a grid; no mbes_sim exit in the log, same class as the known startup race), second run 16 of 16, nothing left running after either.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-13 08:48 -04:00
+**By**: Claude Code Agent (Claude Opus 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-88 at `010098a`
+**Mode**: pre-push
+**Depth**: Standard (reason: 93 changed lines across 5 files, touches `.agents/README.md`)
+**Must-fix**: 0 | **Suggestions**: 7 (all addressed in 51b35f6 unless noted)
+**Round**: 1 | **Ship**: recommended — no must-fix; suggestions applied
+
+Scope: G7 SE joystick numbering for the demo (joy_to_helm axes/buttons, self-test fake Joy, README pad checklist, plan correction). Specialists: static (ament_flake8, ament_pep257, yamllint clean), governance/plan drift (inline), Claude Lens A + Lens B (Sonnet sub-agents), Gemini + Codex (codex: no issues). Four-boat self-test on the new config, private domain 87: all driving and steering checks pass, 14/16 overall; the 2 failures were the known startup race (CUBE change_state reply lost under load), unrelated. joy_linux run on a real G7 SE: 15 buttons steady state (11 in the first message), both triggers 0.0 until first moved.
+
+### Findings
+- [x] (suggestion) Plan still said G7 SE must be in XInput mode — `.agent/work-plans/issue-88/plan.md:15,31,111` (fixed 010098a)
+- [x] (suggestion) Comment should note a held right trigger repeats a "drive_mode helm" log line, and that the numbers are demo-only (real-boat differential axes 1/4 = left Y + right trigger) — `marine_simulation/config/demo_params.yaml:27`
+- [x] (suggestion) Set `allow_differential_drive: false` explicitly, since the comment relies on it — `marine_simulation/config/demo_params.yaml:37`
+- [x] (suggestion) Say what an 11-button Xbox-mode pad actually does (rudder on left trigger, full speed on right trigger) — `marine_simulation/README.md:128`
+- [x] (suggestion) "0.0 until a trigger is first moved" was unverified for hid-generic — checked on a real G7 SE with joy_linux — `marine_simulation/README.md:129`
+- [x] (suggestion) Pin joy_to_helm's hard-coded buttons 9/10 against the fake Joy size — `marine_simulation/test/test_demo_boats_selftest.py:86`
+- [x] (suggestion) Step 7: A restores helm at once after a stray B/X — `marine_simulation/README.md:131`
+- [ ] (suggestion, not taken) Runtime rejection of an 11-button pad (launch-time button-count check) — would also lock out non-G7 pads for testing; offered to the owner instead
