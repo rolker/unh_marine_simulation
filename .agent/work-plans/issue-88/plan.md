@@ -12,7 +12,7 @@ in `progress.md`, then again after the `## Plan Review`): (1) the boats are a NE
 (declared, default off, refuses with "not wired yet" if set); (3) bridge off, joystick mapping by config; (4) the absolute tide
 topic is the intended shared topic; (5) tests plus a `marine_simulation` README and `.agents/README.md`, verified against the
 launch source; (6) venue is Portsmouth Harbour (the packaged `US5NH02M.tiff` grid), start poses near Ben's position and depth-checked;
-(7) controllers are Xbox-layout pads (GameSir G7 SE, wired, XInput mode); (8) boat names are tied to the controller colours, in this order:
+(7) controllers are GameSir G7 SE pads (wired; on Linux they come up under `hid-generic`, not as Xbox/xpad pads, so they need their own axis and button numbers: corrected 2026-10-13, see the pad checklist); (8) boat names are tied to the controller colours, in this order:
 `bluefin` (blue), `clownfish` (orange), `urchin` (purple), `beluga` (white); each boat's `platform_sender` `color` matches its pad so CAMP tabs match;
 names stay config-only; (9) controller assignment must survive reboots: use the `joy_linux` driver bound to a physical USB port by a
 `/dev/input/by-path/` link, not `joy`'s plug-order `device_id`.
@@ -29,7 +29,9 @@ Facts the design rests on (read from source, not assumed):
   and `helm_manager` are both needed even with no nav stack. `initial_piloting_mode` is read-only and must be set from YAML/launch; `helm_manager` adds its standby/manual/autonomous modes itself (the `piloting_modes` lists in `marine_autonomy/config/robot.yaml` are not read by the node), so only `output_type` and `initial_piloting_mode` are set.
 - `joy_to_helm` reads `buttons[0..2]` and `buttons[9]`/`[10]` on every message and swallows `IndexError` silently (`joy_to_helm.py`, `except IndexError: pass`), so a pad that
   reports fewer than 11 buttons just does not drive. Defaults (throttle axis 1, rudder axis 3, slow-mode axis 2: throttle is scaled by 0.35 unless axis 2 < 0) match the
-  `js`-API (xpad) ordering of 8 axes and 11 buttons. Pressing buttons 0/1/2 makes `joy_to_helm` request a mode change on `marine/send_command` (nobody listens: no `command_bridge`)
+  `js`-API (xpad) ordering of 8 axes and 11 buttons. (2026-10-13: the real G7 SE does not report that layout. It comes up under `hid-generic`
+  with 8 axes and 15 buttons in a different order, so the demo config sets throttle 1, rudder 2, slow-mode 5 and autonomous button 3; see the pad checklist.)
+  Pressing buttons 0/1/2 makes `joy_to_helm` request a mode change on `marine/send_command` (nobody listens: no `command_bridge`)
   and set its own state until the next heartbeat re-asserts `manual`, so those buttons cause a brief stall, not a mode change.
 - `joy` 3.3.0 (the only joystick driver installed on the dev host) selects by SDL `device_id`/`device_name`: a plug-order index and a shared name for identical pads, so it cannot
   pin four identical pads. `joy_linux` 3.3.0 (apt candidate `ros-jazzy-joy-linux`, not installed on the dev host) has a `dev` parameter. Per its source (fetched, not run here)
@@ -108,13 +110,17 @@ Not started: `udp_bridge`, `command_bridge`, `mission_manager`, nav2, `s57_grids
 
 ## Pad checklist (goes in the README; first real-pad test is at the dry run, so it is explicit)
 
-1. Pad in XInput mode (G7 SE: the mode switch/button combination in the GameSir manual) BEFORE plugging in; it must enumerate as an Xbox-class pad.
+Revised 2026-10-13 after the first real G7 SE pad was checked control by control. It does not come up as an Xbox-class (xpad) pad; it comes up under
+`hid-generic` (USB 3537:1082) with axes 0 left X, 1 left Y, 2 right X, 3 right Y, 4 right trigger, 5 left trigger, 6/7 d-pad and buttons 0 A, 1 B, 2 (none), 3 X,
+4 Y, 5 (none), 6 LB, 7 RB, 8/9 left/right trigger pulled, 10 View, 11 Menu, 12 Xbox, 13/14 stick clicks. The demo config and the self-test's fake `Joy` use that numbering.
+
+1. Use G7 SE pads; each shows up as `GameSir-G7 SE Controller for Xbox` under `hid-generic`.
 2. Plug the blue pad into labelled port 1, orange 2, purple 3, white 4; the label-to-USB-port map is the by-path name, which differs per host (even per front/rear port); record it in `demo_joysticks.yaml` for the host.
 3. `ls -l /dev/input/by-path/ | grep -- '-joystick$'` shows one `...-joystick` link per pad (the `-event-joystick` links are the evdev nodes; not those); each must resolve to a `jsN`.
-4. `ros2 topic echo --once /<boat>/joy` after launching: `axes` has 8 entries and `buttons` has 11. A pad reporting fewer buttons makes `joy_to_helm` silently ignore it (it reads `buttons[9]` and `[10]`).
-5. Move each stick and trigger once: left stick up = `axes[1]` positive (throttle), right stick left/right = `axes[3]` (rudder), left trigger = `axes[2]` goes from 1.0 toward -1.0 (full speed; otherwise throttle is scaled to 0.35).
+4. `ros2 topic echo --once /<boat>/joy` after launching: `axes` has 8 entries and `buttons` has 15. A pad reporting 11 is being driven as an Xbox pad and steers with the wrong control; one reporting fewer than 11 makes `joy_to_helm` silently ignore it (it reads `buttons[9]` and `[10]`).
+5. Move each stick and trigger once: left stick up = `axes[1]` positive (throttle), right stick left/right = `axes[2]` (rudder), left trigger = `axes[5]` goes from 1.0 toward -1.0 (full speed; otherwise throttle is scaled to 0.35).
 6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug/replug one pad and confirm it still drives the same boat.
-7. Do not press B or X: `joy_to_helm` requests a mode change nobody handles and stalls until the next heartbeat. A asks for `manual`, which the boat is already in, so it does nothing.
+7. Do not press B or X (buttons 1 and 3): `joy_to_helm` requests a mode change nobody handles and stalls until the next heartbeat. A asks for `manual`, which the boat is already in, so it does nothing.
 
 ## PR two (separate PR; "Part of #88", closes it)
 
