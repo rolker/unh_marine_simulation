@@ -47,7 +47,8 @@ what the checks are derived from; the self-test refuses them). The self-test sto
 it started on any exit, including SIGINT and SIGTERM, and fails at once when the
 launch exits early.
 
-It publishes Xbox-shaped ``sensor_msgs/Joy`` messages (8 axes, 11 buttons) to each
+It publishes ``sensor_msgs/Joy`` messages shaped like the demo's GameSir G7 SE pads
+(8 axes, 15 buttons, see config/demo_params.yaml) to each
 boat's ``joy`` topic, so ``joy_to_helm``, ``helm_manager``, ``asv_helm`` and
 ``asv_sim`` are all in the loop, and checks that
 
@@ -91,16 +92,17 @@ BOAT_FRAMES = (
     'base_link', 'base_link_north_up', 'odom', 'map', 'map_tide', 'chart_datum',
     'chart_datum_mhhw', 'motion_sensor', 'mbes',
 )
-# An Xbox-layout pad as the kernel joystick interface reports it.
-AXES, BUTTONS = 8, 11
-THROTTLE_AXIS, SLOW_MODE_AXIS, RUDDER_AXIS = 1, 2, 3
+# A GameSir G7 SE as the kernel joystick interface reports it (hid-generic, not
+# xpad); the axis numbers must match joy_to_helm's in config/demo_params.yaml.
+AXES, BUTTONS = 8, 15
+THROTTLE_AXIS, SLOW_MODE_AXIS, RUDDER_AXIS = 1, 5, 2
 
 
 def fake_joy(throttle: float, rudder: float, full_speed: bool = True):
     """
-    Return a Joy message as an Xbox pad would send it.
+    Return a Joy message as a demo pad would send it.
 
-    ``joy_to_helm`` publishes helm.rudder = -axes[3]; a negative slow-mode axis
+    ``joy_to_helm`` publishes helm.rudder = -axes[2]; a negative slow-mode axis
     (left trigger pulled) lifts its 35 % throttle limit.
     """
     from sensor_msgs.msg import Joy

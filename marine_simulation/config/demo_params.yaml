@@ -15,24 +15,31 @@
     max_yaw_speed: 0.5
     max_speed: 2.75
 
-# joy_to_helm: stated explicitly rather than relying on the node defaults. These are
-# the xpad (Xbox layout, "XInput mode") axes as reported by joy_linux:
-#   axes:    0 left X, 1 left Y, 2 left trigger, 3 right X, 4 right Y,
-#            5 right trigger, 6 d-pad X, 7 d-pad Y   (8 axes)
-#   buttons: 0 A, 1 B, 2 X, 3 Y, 4 LB, 5 RB, 6 back, 7 start, 8 guide,
-#            9 left stick click, 10 right stick click   (11 buttons)
-# joy_to_helm reads buttons[9] and buttons[10] on every message and ignores the
-# whole message if the pad reports fewer than 11 buttons.
-# Throttle = left stick up, rudder = right stick; throttle is scaled to 35 % unless
-# the left trigger (axis 2) is pulled below zero, which gives full speed.
+# joy_to_helm: stated explicitly rather than relying on the node defaults, which are
+# for an Xbox-layout pad (the xpad driver). The demo pads are GameSir G7 SE, which
+# Linux drives as a generic HID gamepad (hid-generic, USB 3537:1082), not through
+# xpad, so its numbering differs. As reported by joy_linux (checked 2026-10-13 by
+# pressing each control on a real pad):
+#   axes:    0 left X, 1 left Y, 2 right X, 3 right Y, 4 right trigger,
+#            5 left trigger, 6 d-pad X, 7 d-pad Y   (8 axes)
+#   buttons: 0 A, 1 B, 2 (none), 3 X, 4 Y, 5 (none), 6 LB, 7 RB,
+#            8 left trigger pulled, 9 right trigger pulled, 10 view, 11 menu,
+#            12 Xbox, 13 left stick click, 14 right stick click   (15 buttons)
+# joy_to_helm also reads buttons[9] and buttons[10] on every message, numbers it
+# has no parameter for: 9 switches to helm drive (the demo already is) and 10 to
+# differential drive (refused: allow_differential_drive is false). On this pad they
+# are the right trigger and the view button, so both are harmless here. It ignores
+# the whole message if the pad reports fewer than 11 buttons.
+# Throttle = left stick up, rudder = right stick sideways; throttle is scaled to
+# 35 % unless the left trigger (axis 5) is pulled below zero, which gives full speed.
 /**/joy_to_helm:
   ros__parameters:
     throttle_axis: 1
-    slow_mode_axis: 2
-    rudder_axis: 3
+    slow_mode_axis: 5
+    rudder_axis: 2
     manual_button: 0
     standby_button: 1
-    autonomous_button: 2
+    autonomous_button: 3
 
 # mru_transform: the single simulated nav source asv_sim publishes under sensors/nav.
 /**/mru_transform:

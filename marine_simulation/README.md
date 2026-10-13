@@ -117,18 +117,22 @@ copy per machine, fill in its real links and launch with `joystick_config:=<copy
 
 Controls (`joy_to_helm`, configured explicitly in `config/demo_params.yaml`): left
 stick up/down is throttle (`axes[1]`), the right stick sideways is rudder
-(`axes[3]`, sent as `rudder = -axes[3]`). Throttle is scaled to 35 % unless the
-left trigger (`axes[2]`) is pulled below zero, which gives full speed.
+(`axes[2]`, sent as `rudder = -axes[2]`). Throttle is scaled to 35 % unless the
+left trigger (`axes[5]`) is pulled below zero, which gives full speed. These
+numbers are for the GameSir G7 SE, which Linux drives as a generic HID gamepad,
+not as an Xbox pad (`xpad`); an Xbox-layout pad numbers its axes and buttons
+differently and would steer with the wrong control. The full G7 SE numbering is in
+the comment above the `joy_to_helm` block of `config/demo_params.yaml`.
 
 #### Pad checklist (first real-pad test is at the dry run)
 
-1. Put the pad in XInput mode (GameSir G7 SE: see its manual for the mode switch) before plugging it in.
+1. Use GameSir G7 SE pads. Plugged in, each shows up as `GameSir-G7 SE Controller for Xbox` under the `hid-generic` driver (`ls -l /dev/input/by-id/ | grep GameSir`).
 2. Plug blue into port 1, orange into 2, purple into 3, white into 4.
 3. `ls -l /dev/input/by-path/ | grep -- '-joystick$'` shows one link per pad, each pointing at a `jsN`. Copy those into your `joystick_config`, in boat order.
-4. Launch, then `ros2 topic echo --once /<boat>/joy`: `axes` must have 8 entries and `buttons` 11. `joy_to_helm` reads `buttons[9]` and `buttons[10]` on every message and silently ignores a message from a pad that has fewer, so a wrong-mode pad just does not drive.
-5. Move each stick and trigger once: throttle on `axes[1]`, rudder on `axes[3]`, the left trigger takes `axes[2]` from 1.0 toward -1.0 (the joy_linux driver reports 0.0 until a trigger is first moved). Confirm right stick right turns the boat to starboard.
+4. Launch, then `ros2 topic echo --once /<boat>/joy`: `axes` must have 8 entries and `buttons` 15. A pad that reports 11 buttons is being driven as an Xbox pad, numbers its controls differently and will steer with the wrong control. `joy_to_helm` reads `buttons[9]` and `buttons[10]` on every message and silently ignores a message from a pad that has fewer.
+5. Move each stick and trigger once: throttle on `axes[1]`, rudder on `axes[2]`, the left trigger takes `axes[5]` from 1.0 toward -1.0 (the joy_linux driver reports 0.0 until a trigger is first moved). Confirm right stick right turns the boat to starboard.
 6. Drive each boat in turn and confirm it is the boat with the matching colour in CAMP; unplug and replug one pad and confirm it still drives the same boat (unverified until the dry run: `joy_linux` is expected to re-open the device itself, and the launch does not respawn the node).
-7. Avoid B and X (buttons 1 and 2): `joy_to_helm` asks for a piloting mode change (standby, autonomous) that nothing handles (there is no `command_bridge`) and stops sending helm until the next heartbeat restores `manual`. A (button 0) asks for `manual`, which the boat is already in, so it does nothing.
+7. Avoid B and X (buttons 1 and 3): `joy_to_helm` asks for a piloting mode change (standby, autonomous) that nothing handles (there is no `command_bridge`) and stops sending helm until the next heartbeat restores `manual`. A (button 0) asks for `manual`, which the boat is already in, so it does nothing.
 
 ### Resetting between rounds
 
@@ -151,8 +155,8 @@ or any other config that sets `draft_dir` or `prior_store_dir` onto the demo**.
 
 ### Self-test and graph check
 
-`demo_boats_selftest.py` needs no gamepad. It publishes Xbox-shaped
-`sensor_msgs/Joy` (8 axes, 11 buttons) to each `<boat>/joy`, with `joy_to_helm`,
+`demo_boats_selftest.py` needs no gamepad. It publishes `sensor_msgs/Joy` shaped
+like a G7 SE (8 axes, 15 buttons) to each `<boat>/joy`, with `joy_to_helm`,
 `helm_manager`, `asv_helm` and `asv_sim` in the loop, and checks the node set (one
 `asv_sim`, twelve nodes per boat, plus a `joy_node` each with `--joysticks`), every boat's TF frames, the graph
 check below, that driving one boat moves only that boat, that with all boats driven
