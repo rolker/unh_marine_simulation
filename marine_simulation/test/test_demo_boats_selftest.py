@@ -40,6 +40,7 @@ import pytest
 
 SCRIPTS = pathlib.Path(__file__).resolve().parents[1] / 'scripts'
 ROSTER = pathlib.Path(__file__).resolve().parents[1] / 'config' / 'demo_roster.yaml'
+PARAMS = pathlib.Path(__file__).resolve().parents[1] / 'config' / 'demo_params.yaml'
 sys.path.insert(0, str(SCRIPTS))  # the self-test imports check_multi_boat_graph
 _spec = importlib.util.spec_from_file_location(
     'demo_boats_selftest', SCRIPTS / 'demo_boats_selftest.py')
@@ -71,6 +72,29 @@ def test_roster_colors_cover_every_shipped_boat():
     colors = selftest.roster_colors(str(ROSTER))
     assert len(colors) >= 1
     assert all(len(c) == 3 and all(0.0 <= v <= 1.0 for v in c) for c in colors.values())
+
+
+def test_fake_joy_axes_match_the_joy_to_helm_config():
+    # The self-test drives joy_to_helm with fake pad messages, so its axis numbers
+    # must be the ones demo_params.yaml configures, or it drives the wrong control.
+    import yaml
+    params = yaml.safe_load(PARAMS.read_text())['/**/joy_to_helm']['ros__parameters']
+    assert (selftest.THROTTLE_AXIS, selftest.SLOW_MODE_AXIS, selftest.RUDDER_AXIS) == (
+        params['throttle_axis'], params['slow_mode_axis'], params['rudder_axis'])
+    for button in ('manual_button', 'standby_button', 'autonomous_button'):
+        assert params[button] < selftest.BUTTONS
+
+
+def test_fake_joy_is_shaped_so_joy_to_helm_reads_it():
+    # joy_to_helm reads buttons[9] and buttons[10] on every message and drops a
+    # message with fewer buttons.
+    msg = selftest.fake_joy(0.5, -0.25, full_speed=True)
+    assert len(msg.axes) == selftest.AXES and len(msg.buttons) == selftest.BUTTONS
+    assert selftest.BUTTONS >= 11
+    assert msg.axes[selftest.THROTTLE_AXIS] == 0.5
+    assert msg.axes[selftest.RUDDER_AXIS] == -0.25
+    assert msg.axes[selftest.SLOW_MODE_AXIS] < 0
+    assert selftest.fake_joy(0.5, 0.0, full_speed=False).axes[selftest.SLOW_MODE_AXIS] > 0
 
 
 def test_launch_command_forwards_boats_roster_and_joysticks():
