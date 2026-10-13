@@ -83,6 +83,8 @@ def test_fake_joy_axes_match_the_joy_to_helm_config():
         params['throttle_axis'], params['slow_mode_axis'], params['rudder_axis'])
     for button in ('manual_button', 'standby_button', 'autonomous_button'):
         assert params[button] < selftest.BUTTONS
+    # joy_to_helm also reads buttons 9 and 10 with no parameter for them.
+    assert selftest.BUTTONS > 10
 
 
 def test_fake_joy_is_shaped_so_joy_to_helm_reads_it():
@@ -90,7 +92,6 @@ def test_fake_joy_is_shaped_so_joy_to_helm_reads_it():
     # message with fewer buttons.
     msg = selftest.fake_joy(0.5, -0.25, full_speed=True)
     assert len(msg.axes) == selftest.AXES and len(msg.buttons) == selftest.BUTTONS
-    assert selftest.BUTTONS >= 11
     assert msg.axes[selftest.THROTTLE_AXIS] == 0.5
     assert msg.axes[selftest.RUDDER_AXIS] == -0.25
     assert msg.axes[selftest.SLOW_MODE_AXIS] < 0
