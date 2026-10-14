@@ -19,3 +19,18 @@ issue: 93
 - [ ] Scorer-side frame/topic check (`bluefin/map`, `<boat>/sensors/mbes/grid`) against the running graph: file any mismatch against cube#164, do not patch here.
 - [ ] Decide node form (plain Python script installed to lib/, like the existing demo scripts, vs a new package). Recommendation: script in marine_simulation, parse logic in an importable module so tests need no ROS graph for the refusals.
 - [ ] Update `.agents/README.md` (package inventory/layout, new dependency) and `marine_simulation/README.md`; add `marine_interfaces` already present as exec_depend (verify).
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-14 10:02 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-93/plan.md` at `1f872be`
+**Branch**: feature/issue-93 at `1f872be`
+**Phases**: single
+
+### Open questions
+- [ ] Demo SurveyStandard values (S-44 Order 1a proposed, or looser arcade standard)
+- [ ] Publisher runs in the root namespace so the topic is /survey_area
+- [ ] Area id with several areas in the file: CAMP label vs explicit id
+- [ ] Keep spinning after publishing (plan) vs exit
