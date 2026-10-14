@@ -215,6 +215,11 @@ answer the new processes), and `OnShutdown` handlers are exempt from that, becau
 `launch_ros` registers the handler that stops its adapter thread from whichever group needs
 it first.
 
+Groups are injected through a subclass of `LaunchSession` that leaves out the output and
+process collectors `ros2launch_session` normally installs around every injection: they keep
+every line of every process forever, which a test that lives minutes can afford and a manager
+that lives days cannot. A group's holder thread ends when the group has stopped.
+
 This belongs in `ros2launch_session` as a scoped-shutdown call (the design's option 2): the
 attribution tag, the per-pid shutdown and the handler cleanup are launch mechanics, not
 manager logic. It is not changed in this package's PR.
