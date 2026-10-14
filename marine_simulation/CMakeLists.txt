@@ -20,6 +20,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_check_multi_boat_graph test/test_check_multi_boat_graph.py)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_place_windows test/test_place_windows.py)
+  ament_add_pytest_test(test_demo_launch test/test_demo_launch.py)
 endif()
 
 ament_package()

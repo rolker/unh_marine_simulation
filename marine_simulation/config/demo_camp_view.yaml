@@ -1,0 +1,13 @@
+# Where CAMP's map starts in the demo, and how far in.
+#
+# scale is CAMP's own number: screen pixels per map unit, where a map unit is one
+# Web Mercator metre (about 0.73 ground metres at Portsmouth). 1.0 puts roughly
+# 2.6 km of harbour across a 3840 pixel wide window. Tune it at the rehearsal: run
+# CAMP, zoom to taste, and read MainWindow/mapScale from CAMP's settings file.
+#
+# The centre is the middle of the boats' start positions in the roster. Give lat and
+# lon (both) only to look somewhere else.
+camp_view:
+  scale: 1.0
+  # lat: 43.0743
+  # lon: -70.7105
