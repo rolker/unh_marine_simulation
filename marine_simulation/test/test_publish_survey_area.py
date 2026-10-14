@@ -193,6 +193,20 @@ def test_too_many_vertices_is_refused():
         psa.parse_survey_areas(_project(_area(vertices=ring)))
 
 
+def test_huge_integer_coordinate_is_a_refusal():
+    area = _area()
+    area['children'][0] = _wp(10 ** 400, 0.0)
+    with pytest.raises(psa.SurveyAreaFileError, match='too many digits'):
+        psa.parse_survey_areas(_project(area))
+
+
+@pytest.mark.parametrize('label', [[], {}, 5, None])
+def test_non_string_labels_do_not_crash(label):
+    area = _area()
+    area['label'] = label
+    assert psa.parse_survey_areas(_project(area))[0][0] == 'area0000'
+
+
 def test_generated_label_does_not_collide_with_a_user_label():
     unnamed = _area()
     del unnamed['label']

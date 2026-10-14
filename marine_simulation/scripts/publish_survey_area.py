@@ -39,7 +39,8 @@ publishes them latched (reliable, transient_local, depth 100), which is what
 
     ros2 run marine_simulation publish_survey_area.py --ros-args -p file:=/path/to/file.json
 
-The node keeps spinning after publishing so the latched samples outlive it for a scorer
+The node keeps spinning after publishing: the latched samples live in the publisher, so
+they stay available to a scorer
 that starts later. To pick up an edited file, restart the node: the scorer replaces an
 area when the same id arrives again with a newer stamp.
 
@@ -106,7 +107,11 @@ def _coordinate(value: Any, low: float, high: float, what: str, where: str) -> f
     # bool is an int in Python; a JSON true is not a coordinate.
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SurveyAreaFileError('%s: %s is %r, not a number' % (where, what, value))
-    value = float(value)
+    try:
+        value = float(value)
+    except OverflowError:
+        raise SurveyAreaFileError('%s: %s has too many digits to be a coordinate' % (
+            where, what))
     if not math.isfinite(value) or not low <= value <= high:
         raise SurveyAreaFileError(
             '%s: %s %r is outside [%g, %g]' % (where, what, value, low, high))
@@ -126,7 +131,8 @@ def parse_survey_areas(project: Any) -> List[Area]:
     """
     areas: List[Area] = []
     seen = set()
-    labels = {i.get('label') for i in _items(project) if i.get('type') == 'SurveyArea'}
+    labels = {i.get('label') for i in _items(project)
+              if i.get('type') == 'SurveyArea' and isinstance(i.get('label'), str)}
     for index, item in enumerate(i for i in _items(project) if i.get('type') == 'SurveyArea'):
         label = item.get('label')
         if not isinstance(label, str) or not label:
@@ -196,7 +202,10 @@ def load_survey_areas(path: str) -> List[Area]:
 def _number(value: Any, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise SurveyAreaFileError('%s must be a number, got %r' % (name, value))
-    return float(value)
+    try:
+        return float(value)
+    except OverflowError:
+        raise SurveyAreaFileError('%s=%r is too large' % (name, value))
 
 
 def validate_standard(a: float, b: float) -> None:
@@ -334,7 +343,9 @@ def main(args: Optional[Sequence[str]] = None) -> int:
     try:
         node = make_node(args)
     except SurveyAreaFileError as error:
-        print('publish_survey_area: refused: %s' % error, file=sys.stderr)
+        message = 'publish_survey_area: refused: %s' % error
+        print(message, file=sys.stderr)
+        rclpy.logging.get_logger('survey_area_publisher').error(message)
         if rclpy.ok():
             rclpy.shutdown()
         return 1
