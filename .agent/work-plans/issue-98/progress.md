@@ -80,3 +80,40 @@ Independence uncertain: the same session authored the plan and no dispatch heade
 - [ ] (suggestion) Beams over dry cells give zero or negative ranges; skip them — `mbes_sim/mbes_sim/mbes_sim.py:191`
 - [ ] (suggestion) Tests do not pin absolute georeferencing (half-pixel shift would pass) — `mbes_sim/test/test_demo_bathy.py`
 - [ ] (suggestion) Copyright header absent on new mbes_sim files (matches the package's existing files; deferred) — `mbes_sim/mbes_sim/demo_bathy.py`
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 13:38 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-98 at `b83bd26`
+**Addressed**: Local Review (Pre-Push) round 1 (3 must-fix, 9 suggestions); deferred: copyright headers on new mbes_sim files (the package's existing files carry none)
+**Commits**: 26b6fe7, 9564f6b, 574a42f, 80a1244, 28fb3b4, 6d5e114, c0127b9, 84d492a, c17b531, 1092d76, b83bd26
+
+### Actions
+- [x] Temp work dir removed on every exit path — `mbes_sim/mbes_sim/demo_bathy.py` (test: failed and successful runs)
+- [x] Retry IncompleteRead, SSL and OSError reads; pixelSizeY read inside the try — `demo_bathy.py`
+- [x] check_tile reads the band end to end and requires Float32; a poisoned cached tile is fetched again — `demo_bathy.py`
+- [x] Service step, extent and non-finite values validated; body, tile and cell caps (50 M cells) — `demo_bathy.py`
+- [x] Unique 0644 partials, grid renamed before provenance — `demo_bathy.py`
+- [x] Launch refuses an unreadable or unprojected grid, warns per boat without water, prints on stderr — `marine_simulation/launch/demo_boats_launch.py`
+- [x] nodata compared as float32, non-finite position gives None; getWaterDepth skips dry beams — `bathy_grid.py`, `mbes_sim.py`
+- [x] Georeferencing ramp test — `mbes_sim/test/test_demo_bathy.py`
+- [ ] Copyright headers on the new files — deferred, the package carries none today
+
+### Results
+- Build: `Finished <<< mbes_sim [4.66s]`, `Finished <<< marine_simulation [0.11s]`, `Summary: 2 packages finished [5.04s]`
+- Tests: `Summary: 238 tests, 0 errors, 8 failures, 0 skipped`. mbes_sim pytest: 83 passed (54 demo_bathy incl. one network test, 14 bathy_grid). marine_simulation: 150 tests. The 8 failures are the baseline lint failures in files this issue does not touch (copyright `bizzyboat_massabesic_launch.py`, flake8 I100 `simulator_launch.py`, pep257 D213 `bizzyboat_massabesic_launch.py`, `gazebo_ben_launch.py`, `gazebo_simulator_launch.py`).
+- Real build (2026-10-14, box W -70.7405 S 43.0537 E -70.6695 N 43.0937, 2936 x 2281 cells at 2 m), output `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif`, sha256 `6168c0317d43a4e3cef901b3e1d80a71a66781dc8ab6f9a5cbdb992426600c73` (a rebuild with --force reproduced it):
+```
+2m_compilation: 4 tile(s) of up to 2048 px
+4m_compilation: 1 tile(s) of up to 2048 px
+coverage (6697016 cells):
+  2m_compilation      2645002   39.50 %
+  4m_compilation        15821    0.24 %
+  chart_grid          4036193   60.27 %
+  nodata                    0    0.00 %
+depth range: -3.30 .. 24.74 m (positive down)
+negative-depth (land or drying) cells: 4064815
+compilation minus chart where both exist (2660823 cells): median 0.89 m, 5th -0.23 m, 95th 3.41 m, mean 1.16 m
+```
