@@ -20,28 +20,31 @@ so the demo default must be a set standard.
 
 ## Approach
 
-1. **Parsing module, no ROS** — `marine_simulation/survey_area_file.py`-style pure
-   functions in a script-adjacent module: `load_survey_areas(path)` returns a list of
-   `(label, [(lat, lon), ...])`. Walks `children` recursively (a `SurveyArea` may sit
-   in nested `Group`s), takes `Waypoint` children of each `SurveyArea` in order, and
-   raises one `SurveyAreaFileError` with a plain message for: missing/unreadable file,
-   invalid JSON, no `SurveyArea` item, fewer than 3 vertices, a vertex missing
-   `latitude`/`longitude`, non-numeric or non-finite or out-of-range lat/lon. Also
-   refuses duplicate area ids. Pure data in, pure data out, so every refusal is a
-   plain pytest.
+1. **Pure parsing functions inside the script, no ROS import at module level** -- in
+   `scripts/publish_survey_area.py` (the repo's pattern: `check_multi_boat_graph.py`
+   keeps its pure checks in the script and the tests load it by path with
+   `importlib`; the ament_cmake package has no Python module install, so a separate
+   importable module would need `ament_python_install_package`, which is not worth it).
+   `load_survey_areas(path)` returns a list of `(label, [(lat, lon), ...])`. Walks
+   `children` recursively (a `SurveyArea` may sit in nested `Group`s), takes `Waypoint`
+   children of each `SurveyArea` in order, and raises one `SurveyAreaFileError` with a
+   plain message for: missing/unreadable file, invalid JSON, no `SurveyArea` item,
+   fewer than 3 vertices, a vertex missing `latitude`/`longitude`, non-numeric,
+   non-finite or out-of-range lat/lon, and duplicate area ids. `rclpy` and message
+   imports happen inside the node class/`main`, so the parser tests need no ROS.
 2. **Publisher node** — `scripts/publish_survey_area.py` (installed to
    `lib/marine_simulation`, like the existing demo scripts; the package is
    ament_cmake, so no new package). A plain `rclpy` node, name `survey_area_publisher`.
    Parameters: `file` (default: the installed `config/demo_target_polygon_camp.json`
    resolved through `ament_index`), `topic` (default `survey_area`, relative so it
-   resolves in the node's namespace), `area_id` (default: the CAMP item's label, e.g.
-   `area0000`; with several areas in the file an explicit id is refused and labels are
-   used; a prefix parameter is not added), `priority` (int, 0), `standard_name`
+   resolves in the node's namespace), `area_id` (default empty = use each CAMP item's label, e.g. `area0000`; a
+   non-empty `area_id` is valid only when the file holds exactly one area, else refused), `priority` (int, 0), `standard_name`
    (`demo`), `standard_a`, `standard_b` (demo default: IHO S-44 Order 1a, a = 0.5,
    b = 0.013, so the scoreboard is meaningful; values to be confirmed, see Open
    Questions). Standard params validated: finite and >= 0 and not both zero (refuse
    rather than silently publishing "not set", the scorer would score 0% meeting).
-   Publishes one `SurveyArea` per area once, `stamp` = node clock now, QoS
+   Publishes one `SurveyArea` per area once, `stamp` = node clock now (simulation time
+   when `use_sim_time` is set; the scorer only compares stamps of the same id), QoS
    `RELIABLE + TRANSIENT_LOCAL + KEEP_LAST depth 100` (the scorer's). On a refusal it
    logs a clear ERROR and exits non-zero (fail fast, a demo operator sees it).
    Stays spinning so the latched samples survive for late-joining scorers.
@@ -51,7 +54,7 @@ so the demo default must be a set standard.
 4. **Demo polygon** — copy `.agent/scratchpad/outreach_web_camp/demo_target_polygon_camp.json`
    to `marine_simulation/config/demo_target_polygon_camp.json` unchanged (CAMP opens
    the same file, plan item 7), installed by the existing `install(DIRECTORY config)`.
-5. **Tests** (`test/test_survey_area_file.py`, `test/test_publish_survey_area.py`):
+5. **Tests** (`test/test_publish_survey_area.py`):
    - parser: the shipped demo file gives 10 vertices, inside lat/lon bounds, and the
      ring is not repeated; a nested-group fixture; every refusal in step 1.
    - node: build the message from a fixture (pure function, `build_survey_areas`),
@@ -82,12 +85,11 @@ so the demo default must be a set standard.
 
 | File | Change |
 |------|--------|
-| `marine_simulation/marine_simulation/survey_area_file.py` (or `scripts/` module) | Pure parser + refusals + message-data builder |
-| `marine_simulation/scripts/publish_survey_area.py` | rclpy node with parameters and latched publisher |
+| `marine_simulation/scripts/publish_survey_area.py` | Pure parser + refusals + message builder, and the rclpy node with parameters and latched publisher |
 | `marine_simulation/config/demo_target_polygon_camp.json` | The demo polygon (from scratchpad) |
 | `marine_simulation/CMakeLists.txt` | Install the script (and python module), register new pytest tests |
 | `marine_simulation/package.xml` | Add `geographic_msgs`, `builtin_interfaces` exec_depend if used directly (`marine_interfaces`, `rclpy` already present) |
-| `marine_simulation/test/test_survey_area_file.py`, `test_publish_survey_area.py` | New tests |
+| `marine_simulation/test/test_publish_survey_area.py` | New tests |
 | `marine_simulation/README.md` | Target survey area section |
 | `.agents/README.md` | Layout/inventory line, pitfall |
 
@@ -126,7 +128,7 @@ so the demo default must be a set standard.
 
 - Demo `SurveyStandard` values: proposal is S-44 Order 1a (a = 0.5, b = 0.013) named `demo`; is a looser "arcade" standard wanted so kids see "meets standard" go up?
 - Node namespace in the demo: should the publisher run in the root namespace so `survey_area` resolves to `/survey_area` like the scorer's example yaml (assumed yes)?
-- Area id when the file has several areas: use the CAMP label (`area0000`), or require an explicit `area_id`?
+- Area id: plan is label by default, explicit `area_id` only for a single-area file; OK?
 - Should the node also exit after publishing, or keep spinning to hold the latched samples (plan: keep spinning)?
 
 ## Estimated Scope
