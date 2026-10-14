@@ -44,7 +44,9 @@ def machine(tmp_path):
     """Return a fake home with fake ros2, pgrep and place_windows on PATH / in reach."""
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
-    _script(bin_dir / 'ros2', '#!/bin/sh\nprintf "%s\\n" "$ROS_DOMAIN_ID" "$@" > "$RECORD"\n')
+    _script(bin_dir / 'ros2',
+            '#!/bin/sh\nif [ "$1" = pkg ]; then echo "$FAKE_PREFIX"; exit 0; fi\n'
+            'printf "%s\\n" "$ROS_DOMAIN_ID" "$@" > "$RECORD"\n')
     _script(bin_dir / 'pgrep', '#!/bin/sh\nexit "${FAKE_PGREP_STATUS:-1}"\n')
     _script(tmp_path / 'place_windows.py',
             '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD.check"\n'
@@ -179,3 +181,42 @@ def test_no_home_is_refused(machine):
 
 def test_the_script_is_executable():
     assert os.access(SCRIPT, os.X_OK)
+
+
+def test_a_copy_of_the_script_finds_the_checker_in_the_installed_package(machine, tmp_path):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    lib = machine / 'prefix' / 'lib' / 'marine_simulation'
+    lib.mkdir(parents=True)
+    _script(lib / 'place_windows.py', (machine / 'place_windows.py').read_text())
+    copy = machine / 'home_bin' / 'run_demo.sh'
+    copy.parent.mkdir()
+    copy.write_text(SCRIPT.read_text())
+    env = {'PATH': str(machine / 'bin') + ':/usr/bin:/bin', 'HOME': str(machine),
+           'RECORD': str(machine / 'record'), 'DEMO_CONFIG_DIR': str(machine / 'config'),
+           'FAKE_PREFIX': str(machine / 'prefix')}
+    result = subprocess.run(['bash', str(copy)], env=env, capture_output=True, text=True,
+                            timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert (machine / 'record.check').read_text().split()[0] == '--check'
+
+
+def test_a_layout_or_joystick_file_given_on_the_command_line_replaces_the_default(machine):
+    other = machine / 'other.yaml'
+    other.write_text('x: 1\n')
+    result = _run(machine, 'layout_config:=%s' % other, 'joystick_config:=%s' % other)
+    assert result.returncode == 0, result.stderr  # no default files exist at all
+    assert (machine / 'record.check').read_text().split() == ['--check', '--layout', str(other)]
+    args = _record(machine)
+    assert [a for a in args if a.startswith(('layout_config', 'joystick_config'))] == [
+        'layout_config:=%s' % other, 'joystick_config:=%s' % other]
+
+
+def test_a_layout_file_given_on_the_command_line_must_exist(machine):
+    result = _run(machine, 'layout_config:=%s/nope.yaml' % machine, 'enable_joysticks:=false')
+    assert result.returncode == 1 and 'nope.yaml' in result.stderr
+
+
+def test_switches_are_read_in_any_letter_case_like_the_launch_does(machine):
+    result = _run(machine, 'enable_joysticks:=False', 'enable_window_layout:=NO',
+                  'enable_camp:=Off', FAKE_PGREP_STATUS='0')
+    assert result.returncode == 0, result.stderr

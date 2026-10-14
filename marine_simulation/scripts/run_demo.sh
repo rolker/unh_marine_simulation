@@ -38,30 +38,61 @@ command -v ros2 > /dev/null 2>&1 ||
 # exported ROS_DOMAIN_ID is deliberately not used: lab computers often share one.
 export ROS_DOMAIN_ID=${DEMO_ROS_DOMAIN_ID:-42}
 
-switched_off() { # switched_off <switch> <args...>
+switched_off() { # switched_off <switch> <args...>; the launch reads any letter case
     local switch=$1 arg
     shift
     for arg in "$@"; do
-        case "$arg" in
+        case "${arg,,}" in
             "$switch:=false" | "$switch:=0" | "$switch:=no" | "$switch:=off") return 0 ;;
         esac
     done
     return 1
 }
 
+given() { # given <name> <args...>: print the last <name>:=value, ~ expanded; fail if absent
+    local name=$1 arg found=1 value=
+    shift
+    for arg in "$@"; do
+        if [[ "$arg" == "$name:="* ]]; then
+            value=${arg#"$name:="}
+            found=0
+        fi
+    done
+    [ "$found" -eq 0 ] || return 1
+    printf '%s\n' "${value/#\~/$HOME}"
+}
+
+place_windows_tool() { # where the checker is: beside this script, else in the installed package
+    if [ -n "${DEMO_PLACE_WINDOWS:-}" ]; then
+        printf '%s\n' "$DEMO_PLACE_WINDOWS"
+    elif [ -x "$SCRIPT_DIR/place_windows.py" ]; then
+        printf '%s\n' "$SCRIPT_DIR/place_windows.py"
+    else
+        local prefix
+        prefix=$(ros2 pkg prefix marine_simulation 2> /dev/null) ||
+            die "the marine_simulation package is not found; is the workspace sourced in $CONFIG_DIR/env.bash?"
+        printf '%s\n' "$prefix/lib/marine_simulation/place_windows.py"
+    fi
+}
+
 args=()
-if ! switched_off enable_joysticks "$@"; then
+if ! switched_off enable_joysticks "$@" && ! given joystick_config "$@" > /dev/null; then
     [ -f "$CONFIG_DIR/joysticks.yaml" ] ||
         die "$CONFIG_DIR/joysticks.yaml is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
     args+=("joystick_config:=$CONFIG_DIR/joysticks.yaml")
 fi
 if ! switched_off enable_window_layout "$@"; then
-    [ -f "$CONFIG_DIR/layout.yaml" ] ||
-        die "$CONFIG_DIR/layout.yaml is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
-    checker=${DEMO_PLACE_WINDOWS:-$SCRIPT_DIR/place_windows.py}
-    problem=$("$checker" --check --layout "$CONFIG_DIR/layout.yaml" 2>&1) ||
+    if layout=$(given layout_config "$@"); then
+        [ -f "$layout" ] || die "the layout file $layout is missing."
+    else
+        layout=$CONFIG_DIR/layout.yaml
+        [ -f "$layout" ] ||
+            die "$layout is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
+        args+=("layout_config:=$layout")
+    fi
+    checker=$(place_windows_tool) || exit 1
+    problem=$("$checker" --check --layout "$layout" 2>&1) ||
         die "the windows cannot be laid out: ${problem#place_windows: }"
-    args+=("layout_config:=$CONFIG_DIR/layout.yaml")
 fi
 if ! switched_off enable_camp "$@" && command -v pgrep > /dev/null 2>&1 &&
     pgrep -x CCOMAutonomousM > /dev/null 2>&1; then
