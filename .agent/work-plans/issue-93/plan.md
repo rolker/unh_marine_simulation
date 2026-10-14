@@ -29,7 +29,7 @@ so the demo default must be a set standard.
    `children` recursively (a `SurveyArea` may sit in nested `Group`s), takes `Waypoint`
    children of each `SurveyArea` in order, and raises one `SurveyAreaFileError` with a
    plain message for: missing/unreadable file, invalid JSON, no `SurveyArea` item,
-   fewer than 3 vertices, a vertex missing `latitude`/`longitude`, non-numeric,
+   fewer than 3 distinct vertices, a vertex missing `latitude`/`longitude`, non-numeric,
    non-finite or out-of-range lat/lon, and duplicate area ids. `rclpy` and message
    imports happen inside the node class/`main`, so the parser tests need no ROS.
 2. **Publisher node** — `scripts/publish_survey_area.py` (installed to
@@ -143,3 +143,4 @@ Single PR, about 400 lines including tests and docs.
 - Step 8 live smoke ran against the node alone on a private domain (`ros2 topic echo` with transient_local showed the area; refusals exit 1); no scorer was started, so "scorer accepts the area" is not verified here.
 - Step 7 was done by reading source (cube `grid` publisher, demo frames); no live-graph check.
 - `make_node` is the testable core and `main` only handles the exit status; `priority` outside int16 is also refused.
+- Review round 1 additions (all in the code): `stamp` is wall-clock time, not the node clock (the node clock is 0 under `use_sim_time` until `/clock` arrives); at most 100 areas and 10000 vertices per area, 16 MB file cap; the tree walk is iterative; `standard_a`/`standard_b` accept integers; wrong-type parameters are refusals; the script is executable. The test file is `test/test_publish_survey_area.py` only; its ROS tests are skipped, not the parser tests, when rclpy is missing.
