@@ -1,0 +1,97 @@
+{
+    "children": [
+        {
+            "children": [
+                {
+                    "label": "waypoint0",
+                    "latitude": 43.07424814642706,
+                    "longitude": -70.71585913160757,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint1",
+                    "latitude": 43.07241664311856,
+                    "longitude": -70.70738134842428,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint2",
+                    "latitude": 43.06742255385886,
+                    "longitude": -70.709690191504,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint3",
+                    "latitude": 43.067857411576846,
+                    "longitude": -70.69558460331392,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint4",
+                    "latitude": 43.073958271851524,
+                    "longitude": -70.6974064248065,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint5",
+                    "latitude": 43.07732969191874,
+                    "longitude": -70.69413003217372,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint6",
+                    "latitude": 43.08007169967159,
+                    "longitude": -70.69553048980424,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint7",
+                    "latitude": 43.079847727088506,
+                    "longitude": -70.71048385631263,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint0001",
+                    "latitude": 43.07863878799798,
+                    "longitude": -70.71275229463846,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                },
+                {
+                    "label": "waypoint0002",
+                    "latitude": 43.07818345340347,
+                    "longitude": -70.71595004230385,
+                    "priority": 0,
+                    "throttle": 0.4,
+                    "type": "Waypoint"
+                }
+            ],
+            "label": "area0000",
+            "priority": 0,
+            "throttle": 0.4,
+            "type": "SurveyArea"
+        }
+    ],
+    "label": "root",
+    "name": "project",
+    "priority": 0,
+    "throttle": 0.4,
+    "type": "Group"
+}
