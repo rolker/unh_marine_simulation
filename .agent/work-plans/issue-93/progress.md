@@ -80,3 +80,22 @@ Independence uncertain: same context that authored the plan; no fresh dispatch.
 - [x] (suggestion) relative topic under a launch namespace; document (Lens B) — `marine_simulation/README.md`
 - [x] (suggestion) README claim that CAMP opens the same file is not checked against CAMP source (Lens A) — `marine_simulation/README.md`
 - [x] (false positive, dropped) GeoPolygon import source: SurveyArea.msg uses marine_interfaces/GeoPolygon (gemini) (deferred: SurveyArea.msg field type is marine_interfaces/GeoPolygon; the tests import and publish it) — `marine_simulation/scripts/publish_survey_area.py:204`
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 10:36 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-93 at `31e164d`
+**Addressed**: Local Review (Pre-Push) round 1 at `a509343`
+**Commits**: 1736ba1, 782cd3c, 5fa80bd, ee6acc2, 31e164d
+
+### Actions
+- [x] stamp is wall-clock time under use_sim_time; script made executable — `marine_simulation/scripts/publish_survey_area.py`
+- [x] more than 100 areas and 10000 vertices refused — `marine_simulation/scripts/publish_survey_area.py`
+- [x] ROS-free parser tests no longer skipped without rclpy — `marine_simulation/test/test_publish_survey_area.py`
+- [x] iterative tree walk, RecursionError and file size refusals — `marine_simulation/scripts/publish_survey_area.py`
+- [x] wrong-type and integer parameters, ExternalShutdownException, distinct vertices, non-list children, ~ expansion, label collision — `marine_simulation/scripts/publish_survey_area.py`
+- [x] test hardening: graph QoS assert, per-process domain, sim-time stamp, vacuous install test replaced — `marine_simulation/test/test_publish_survey_area.py`
+- [x] README: namespace caveat, stamp, limits; CAMP File > Open verified in camp mainwindow.cpp — `marine_simulation/README.md`
+- [x] GeoPolygon import source (gemini) — `marine_simulation/scripts/publish_survey_area.py:204` (deferred: false positive, SurveyArea.msg uses marine_interfaces/GeoPolygon)
