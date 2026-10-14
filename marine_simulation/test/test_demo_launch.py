@@ -765,6 +765,7 @@ def test_without_camp_nothing_shuts_the_demo_down(monkeypatch, tmp_path):
 
 def test_a_failed_placement_is_announced_and_a_good_one_is_quiet():
     class Event:
+
         def __init__(self, returncode):
             self.returncode = returncode
 
