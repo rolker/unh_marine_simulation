@@ -6,6 +6,160 @@ simulated boats at once, each driven by its own gamepad, with no navigation stac
 The older launch files (`sim_robot_launch.py`, `simulator_launch.py`, ...) are
 described in the repository's `.agents/README.md`.
 
+## Whole demo display
+
+One command starts everything on the demo computer: the boats, the coverage
+scorer, CAMP on a known view with the planned layers, and the windows on the
+right screens. `scripts/run_demo.sh` (installed as
+`lib/marine_simulation/run_demo.sh`) wraps `demo_launch.py` for the helper.
+
+### Helper card
+
+Keep this on paper next to the computer.
+
+```
+TO START THE DEMO
+  1. Plug in the four game controllers (the lights on them come on).
+  2. Open a terminal. Press the UP ARROW key once, then ENTER.
+  3. Wait about two minutes. Do not touch the mouse.
+     Expect: the big screen shows the map with the harbour and the survey
+     box; the four boats appear near the middle; the second screen stays
+     as it was.
+  4. A controller that does not steer its boat: unplug it, plug it back
+     in, wait five seconds. If it still does not work, call the number below.
+  5. Anything else strange (a message starting THE DEMO DID NOT START, a
+     window in the wrong place, a frozen map): close the terminal window,
+     open a new one, UP ARROW, ENTER once more. Still wrong: call.
+
+TO STOP: click the terminal and press CTRL and C together; wait until
+the prompt comes back.
+
+WHO TO CALL:  <NAME - OWNER TO FILL IN>   <PHONE - OWNER TO FILL IN>
+```
+
+The up-arrow command is the one typed last, so type it once yourself first:
+`~/bin/run_demo.sh` (any copy of `scripts/run_demo.sh`).
+
+### Setting up a computer (once)
+
+1. `sudo apt install wmctrl` (it is `<exec_depend>wmctrl</exec_depend>`, so
+   `rosdep install` also gets it). Window placement needs an X11 session: at
+   the login screen choose "GNOME on Xorg"; on Wayland the launch refuses to
+   start and says so.
+2. Create `~/.config/marine_simulation_demo/` holding:
+   - `env.bash`: the line(s) that source the workspace `setup.bash`.
+   - `joysticks.yaml`: a copy of `config/demo_joysticks.yaml` with this
+     computer's by-path device links (see Gamepads below).
+   - `layout.yaml`: a copy of `config/demo_layout.yaml` with the monitor names
+     from `xrandr --listmonitors`.
+   - `target.json`: optional, the saved CAMP file holding the target survey area
+     (see "Target area" below).
+3. Rehearse from a cold boot: start the computer, open a terminal, run
+   `run_demo.sh`, and check the card above against what appears. This is a
+   human check; the tests below cannot do it.
+
+### What the one launch does
+
+```bash
+export ROS_DOMAIN_ID=42   # run_demo.sh sets this itself unless it is already set
+ros2 launch marine_simulation demo_launch.py \
+    joystick_config:=$HOME/.config/marine_simulation_demo/joysticks.yaml \
+    layout_config:=$HOME/.config/marine_simulation_demo/layout.yaml
+```
+
+Every argument of `demo_boats_launch.py` (for example `tide_speed_factor:=1`)
+also works here: arguments given on the command line reach the included launch.
+
+| Argument | Default | Meaning |
+|---|---|---|
+| `boats`, `roster_file`, `joystick_config`, `enable_joysticks` | as in the boats launch | Passed to `demo_boats_launch.py`. |
+| `layout_config` | `config/demo_layout.yaml` | Window layout of this computer. |
+| `camp_profile` | `config/demo_camp_profile.conf` | Fixed part of the CAMP settings. |
+| `camp_view_config` | `config/demo_camp_view.yaml` | CAMP's starting scale (and optional centre). |
+| `target_area_file` | empty | Saved CAMP `.json`; CAMP opens it and (later) the target-area publisher sends it to the scorer. |
+| `enable_boats`, `enable_camp`, `enable_scorer`, `enable_window_layout` | `true` | Switch a part off (testing, or an emergency subset). |
+| `enable_target_area` | `false` | Start the target-area publisher of issue #93. Refused with the reason until `publish_survey_area.py` is installed with this package. |
+
+The launch refuses to start, before anything else runs, when: a boolean argument
+is not a clear yes or no; the layout file is malformed; a monitor it names is not
+connected; the session is not X11; `wmctrl` is missing; `target_area_file` is not
+a file. Boats and scorer start in parallel. The scorer is configured as soon as it
+is up and activated once, by the scorer package's own launch file; its parameters
+are generated from the roster (so `boats:=a,b` scores exactly those boats) into
+`~/.local/state/marine_simulation_demo/run/coverage_assessment.yaml`.
+
+### CAMP starts in a known state
+
+CAMP keeps its view, layer lists and layer settings in a Qt settings file.
+`demo_launch.py` gives CAMP its own settings directory
+(`XDG_CONFIG_HOME=~/.local/state/marine_simulation_demo/xdg_config`) and writes
+that file fresh on every start, so the operator's own CAMP settings are never read
+or changed, and a previous demo session cannot leave anything behind. The file is
+`config/demo_camp_profile.conf` (OpenStreetMap as the only background map) plus,
+generated at launch:
+
+- the map view: `MainWindow/mapCenter`, `MainWindow/mapScale` and the matching
+  `MapView/mapView/*` keys. The centre is the middle of the boats' start
+  positions (or `lat`/`lon` in `config/demo_camp_view.yaml`), converted with
+  CAMP's own Web Mercator formula; the scale is `scale` in that file. CAMP stores
+  the centre in map units, so the value is exact and the same on every start.
+- one live coverage layer per roster boat, switched on (`live_enabled` and
+  `visible`), keyed by `/<boat>/sensors/mbes/cube_bathymetry`.
+
+Everything else CAMP would restore (chart, raster and vector lists, window size
+and position, panel arrangement) is left out on purpose, so exactly these layers
+show and nothing else. Window size and position come from the window layout
+below; the panels use CAMP's default arrangement. The ROS-driven layers (boat
+platforms, which come from `/marine/platforms`) need no settings. Colormap and
+range of the live layers are CAMP's defaults.
+
+Known limits of this approach:
+
+- OpenStreetMap tiles need internet. Without it the background is blank.
+- The first scale in `config/demo_camp_view.yaml` is a starting value; tune it at
+  the rehearsal (see the file).
+- The live layer key pattern was read from a real CAMP settings file; the
+  rehearsal confirms it matches this graph.
+- The file is only the first source of truth for the layers: an operator who
+  changes them in CAMP during the demo changes only that run.
+- `camp_launch.py` takes no arguments, so the demo launch starts the CAMP
+  executable itself (rolker/camp#240 asks for launch arguments).
+
+### Window layout
+
+`config/demo_layout.yaml` is the example. Each entry names a window (by WM_CLASS
+and/or title), a monitor (as `xrandr --listmonitors` names it) and either
+`fullscreen: true` or a `rect` in pixels from that monitor's top left corner. The
+example puts CAMP full screen on the big display and leaves the second display
+for the scoreboard (not built yet); it also shows the one-display variant.
+`scripts/place_windows.py` waits for each window (60 s by default), clears its
+maximised state, moves it with `wmctrl`, checks the geometry and moves it once
+more if the application resized itself, and exits non-zero naming any window it
+could not place.
+
+### Target area
+
+The target polygon is drawn in CAMP and saved as a `.json` project file. Pass it
+as `target_area_file:=` (or put it at `~/.config/marine_simulation_demo/target.json`
+for `run_demo.sh`): CAMP opens it, which shows the outline. The scorer reads its
+target from the `survey_area` topic; the node that publishes it from the same file
+is issue #93's `publish_survey_area.py`. Until that is installed,
+`enable_target_area:=true` is refused and the scorer starts with no area.
+
+### Checks
+
+```bash
+./simulation_ws/test.sh marine_simulation          # unit tests and lint
+# the whole display without CAMP and windows (needs the datum grids and no gamepads):
+ros2 run marine_simulation demo_boats_selftest.py --start-launch --demo --boats bluefin,clownfish
+```
+
+`--demo` starts `demo_launch.py` with `enable_camp:=false
+enable_window_layout:=false`, then checks the boats as usual and that
+`coverage_assessment` becomes active and assesses a target area the self-test
+publishes itself. Not covered by any test: CAMP's real window class, the
+`wmctrl` calls on a live desktop, and the cold-boot rehearsal.
+
 ## Demo boats
 
 ```bash
