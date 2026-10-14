@@ -58,3 +58,35 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [ ] (suggestion) 12 files is at the edge of one PR; split placement/profile from the launch if it grows — folded into Estimated Scope
 - [ ] (suggestion) PR body should say "Part of #94", not a closing keyword, until the cold-boot rehearsal is done — folded into Estimated Scope
 - [ ] (suggestion) The live coverage layer key `live:<ns>` for four boats may be several layers; capture before writing the profile (open question already listed)
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 10:45 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-94 at `ccd8654`
+**Mode**: pre-push
+**Depth**: Deep (reason: 2400+ added lines, new launch, process control and deletion code)
+**Must-fix**: 6 | **Suggestions**: 12
+**Round**: 1 | **Ship**: continue — real defects found, two independent sources agree on three; Gemini arm timed out (7 min), Codex and two Claude lenses ran
+
+### Findings
+- [ ] (must-fix) `wmctrl -b` takes two properties; the four-property clear leaves maximized_horz set (Claude A, Codex) — `marine_simulation/scripts/place_windows.py:243`
+- [ ] (must-fix) `target_area_file` is only validated when enable_target_area is true; a typo reaches CAMP unrefused and the README claim is false (Claude A, Codex) — `marine_simulation/launch/demo_launch.py:467`
+- [ ] (must-fix) A CAMP already running is found first by the window match and placed instead of the demo's; refuse to start when one runs and prefer the newest matching window (Claude B, Claude A, Codex) — `marine_simulation/scripts/place_windows.py:226`
+- [ ] (must-fix) Fail-fast refusals (Wayland, no wmctrl, monitor unplugged) reach the helper as a Python traceback; run_demo.sh must check them first in plain words (Claude B) — `marine_simulation/scripts/run_demo.sh:42`
+- [ ] (must-fix) The live tile cache is kept outside the reset settings directory, so a previous session's tiles can be warm-loaded; the README claim is false (Claude A) — `marine_simulation/launch/demo_launch.py:254`
+- [ ] (must-fix) CAMP restores its centre at its first window size and placement then resizes it, so the view may shift; cannot verify without running CAMP (Claude A) — `marine_simulation/launch/demo_launch.py:480`
+- [ ] (suggestion) No lock: a second launch deletes the first one's settings directory (Claude B, Claude A) — `marine_simulation/launch/demo_launch.py:254`
+- [ ] (suggestion) Placement failure is a stderr line only; add a banner on non-zero exit, longer default wait, final pass after the deadline (Claude B, Claude A) — `marine_simulation/scripts/place_windows.py:284`
+- [ ] (suggestion) parse_monitors drops a monitor with several output names (Claude A) — `marine_simulation/scripts/place_windows.py:68`
+- [ ] (suggestion) load_view does not check types or ranges (Claude A) — `marine_simulation/launch/demo_launch.py:227`
+- [ ] (suggestion) check_session refuses an X11 session whose XDG_SESSION_TYPE is unset (Claude A) — `marine_simulation/scripts/place_windows.py:338`
+- [ ] (suggestion) Pause between clearing window state and moving it (Claude A) — `marine_simulation/scripts/place_windows.py:243`
+- [ ] (suggestion) Tests: realistic wmctrl lines (title with spaces, desktop -1, negative offsets), exact poll count for the single deadline (Claude A) — `marine_simulation/test/test_place_windows.py:1`
+- [ ] (suggestion) run_demo.sh requires joysticks.yaml and layout.yaml even when the matching feature is switched off (Claude A) — `marine_simulation/scripts/run_demo.sh:35`
+- [ ] (suggestion) run_demo.sh keeps an already exported ROS_DOMAIN_ID, so the domain is not private; also check HOME (Claude B) — `marine_simulation/scripts/run_demo.sh:29`
+- [ ] (suggestion) Pass the target file to CAMP as an absolute path (Claude B) — `marine_simulation/launch/demo_launch.py:480`
+- [ ] (suggestion) README: XDG_CONFIG_HOME change also hides other CAMP config; placement is one-shot; state directory persists (Claude B, Claude A) — `marine_simulation/README.md:1`
+- [ ] (suggestion) Harden reset_settings_root (symlinked parents, temp-file write for scorer params, scorer exit banner) (Claude B) — `marine_simulation/launch/demo_launch.py:254`
