@@ -785,3 +785,11 @@ def test_the_handler_really_stops_a_running_launch_when_camp_exits():
     started = time.monotonic()
     assert service.run() == 0
     assert time.monotonic() - started < 30
+
+
+def test_the_state_directory_is_private_and_an_empty_fleet_is_refused(tmp_path):
+    state = tmp_path / 'state'
+    demo.acquire_demo_lock(str(state))
+    assert (state.stat().st_mode & 0o777) == 0o700
+    with pytest.raises(ValueError):
+        demo.view_center([])

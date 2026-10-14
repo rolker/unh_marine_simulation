@@ -239,6 +239,8 @@ def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: flo
 
 def view_center(boats: Sequence) -> Tuple[float, float]:
     """Return the mean start position of the boats (latitude, longitude)."""
+    if not boats:
+        raise ValueError('there are no boats to centre the map on')
     return (sum(b.lat for b in boats) / len(boats), sum(b.lon for b in boats) / len(boats))
 
 
@@ -349,7 +351,7 @@ def acquire_demo_lock(directory: str) -> None:
     Held until this process exits. A second launch would otherwise delete the first
     one's CAMP settings from under it and overwrite its scorer parameters.
     """
-    os.makedirs(directory, exist_ok=True)
+    os.makedirs(directory, mode=0o700, exist_ok=True)
     path = os.path.join(directory, 'lock')
     handle = open(path, 'w')
     try:
@@ -423,7 +425,7 @@ def write_scorer_parameters(template_path: str, boats: Sequence, out_dir: str) -
     """Write the generated scorer parameter file into ``out_dir``; return its path."""
     with open(template_path) as f:
         template = yaml.safe_load(f)
-    os.makedirs(out_dir, exist_ok=True)
+    os.makedirs(out_dir, mode=0o700, exist_ok=True)
     path = os.path.join(out_dir, 'coverage_assessment.yaml')
     with open(path, 'w') as f:
         yaml.safe_dump(scorer_parameters(template, boats), f)
