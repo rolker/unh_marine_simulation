@@ -103,7 +103,7 @@ Independence uncertain: the same session authored the plan and no dispatch heade
 
 ### Results
 - Build: `Finished <<< mbes_sim [4.66s]`, `Finished <<< marine_simulation [0.11s]`, `Summary: 2 packages finished [5.04s]`
-- Tests: `Summary: 238 tests, 0 errors, 8 failures, 0 skipped`. mbes_sim pytest: 83 passed (54 demo_bathy incl. one network test, 14 bathy_grid). marine_simulation: 150 tests. The 8 failures are the baseline lint failures in files this issue does not touch (copyright `bizzyboat_massabesic_launch.py`, flake8 I100 `simulator_launch.py`, pep257 D213 `bizzyboat_massabesic_launch.py`, `gazebo_ben_launch.py`, `gazebo_simulator_launch.py`).
+- Tests: `Summary: 238 tests, 0 errors, 8 failures, 0 skipped`. mbes_sim pytest: 84 passed (72 demo_bathy incl. one network test, 12 bathy_grid). marine_simulation pytest: 118 tests, all passed. The 8 failures are the baseline lint failures in files this issue does not touch (copyright `bizzyboat_massabesic_launch.py`, flake8 I100 `simulator_launch.py`, pep257 D213 `bizzyboat_massabesic_launch.py`, `gazebo_ben_launch.py`, `gazebo_simulator_launch.py`).
 - Real build (2026-10-14, box W -70.7405 S 43.0537 E -70.6695 N 43.0937, 2936 x 2281 cells at 2 m), output `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif`, sha256 `6168c0317d43a4e3cef901b3e1d80a71a66781dc8ab6f9a5cbdb992426600c73` (a rebuild with --force reproduced it):
 ```
 2m_compilation: 4 tile(s) of up to 2048 px

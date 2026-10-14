@@ -37,6 +37,7 @@ Verified 2026-10-14 against the CCOM GIS (the only network used):
 - The exported tiles carry no nodata tag (checked against the live service), so the plan's "declared nodata" network assertion became "returned geotransform and size match the request".
 - The tiling snaps the UTM output box, projected to Web Mercator, to the service grid (instead of snapping the lat/lon box), which is the same window with fewer special cases.
 - `bathy_grid.py` was rewritten to pass the repo's flake8 config (no behaviour change besides the planned nodata and edge handling); `setup.py` got the same lint fix.
+- Review round 1 added, beyond the plan: `BathyGrid.getWaterDepth` (beams over dry cells are skipped, and the ping gate now also needs depth plus tide above zero), `check_mbes_grid` in the launch (unreadable or unprojected grid refused, warning per boat that starts without water), a position-ramp georeferencing test, and hardening of the fetch (end-to-end tile check, retry of short reads, caps on body, tiles and cells, unique 0644 partial files, grid renamed before provenance, temp work dir removed on failure). The cell cap is 50 M, not the 400 M first coded.
 - Hooks are not installed in this worktree's git dir, so lint was run with `pre-commit run --files` before each commit.
 
 ## Files to Change
