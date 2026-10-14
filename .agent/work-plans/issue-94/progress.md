@@ -139,3 +139,20 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [x] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29` (deferred: a private domain per user needs a design decision on the shared lab host; the override variable exists and the README names it)
 - [x] (suggestion) tilde paths in layout_config/camp_profile/camp_view_config are not expanded (Gemini) — `marine_simulation/launch/demo_launch.py:529` (deferred: run_demo.sh now expands ~ for the files it checks; the launch gets absolute paths from it, direct ros2 launch users type full paths)
 - [x] (suggestion) view_center divides by len(boats) without an empty check (Gemini) — `marine_simulation/launch/demo_launch.py:243` (fixed, see the commit "private state directories")
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 11:35 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-94 at `3c069e7`
+**Addressed**: Local Review (Pre-Push), round 2
+**Commits**: 5852025, 8a939c4, 154a72e
+
+### Actions
+- [x] run_demo.sh finds place_windows.py from a copy in ~/bin — `marine_simulation/scripts/run_demo.sh:61`
+- [x] timeout_seconds must be finite — `marine_simulation/scripts/place_windows.py:166`
+- [x] layout/joystick files given on the command line replace the defaults — `marine_simulation/scripts/run_demo.sh:41`
+- [x] a window that closes mid-placement is a named problem, not an abort — `marine_simulation/scripts/place_windows.py:356`
+- [x] switches read in any letter case; one look after the deadline; private state directories; empty-fleet guard
+- [x] fixed ROS domain 42 on shared hosts, tilde paths in direct launches — `marine_simulation/scripts/run_demo.sh:29` (deferred: needs an owner decision / low risk, see the review entry)
