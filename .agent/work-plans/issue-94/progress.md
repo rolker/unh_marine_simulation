@@ -115,3 +115,27 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - demo runs 2, 4, 5 (clean): 13/14 (clownfish CUBE coverage 0 messages), 13/14 (bluefin chart_datum frames missing), 11/14 (platform, motion); each failing log shows a launch_ros lifecycle "Abandoning wait for ... change_state service response" at shutdown. Run 3 was contaminated by two runs sharing the domain and is not counted.
 - The unmodified boats self-test (no --demo) fails the same way: 4 of 6 runs passed all 12 checks (demo_launch without the scorer: 2 of 3) (failures: missing chart_datum frames; platforms never appeared). So the flake is pre-existing in the boats launch (lifecycle service responses lost), not caused by this branch. Not fixed here; needs its own issue.
 - Placement live checks (wmctrl not installed, no CAMP started): not run.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 11:33 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-94 at `b833a03`
+**Mode**: pre-push
+**Depth**: Deep (reason: 2400+ added lines, launch and process control code)
+**Must-fix**: 4 | **Suggestions**: 6
+**Round**: 2 | **Ship**: recommended after the fixes — all four must-fix items are small and mechanical; two Claude lenses found no must-fix, Codex and Gemini found these (one Gemini must-fix, package.xml camp, is false: exec_depend camp is at package.xml:27)
+
+### Findings
+- [ ] (must-fix) run_demo.sh copied to ~/bin (as the README says) cannot find place_windows.py; resolve it from the installed package when not beside the script (Codex, Gemini) — `marine_simulation/scripts/run_demo.sh:61`
+- [ ] (must-fix) timeout_seconds accepts .nan and .inf, so placement can wait forever; require a finite number (Codex) — `marine_simulation/scripts/place_windows.py:166`
+- [ ] (must-fix) run_demo.sh demands and checks the default layout.yaml/joysticks.yaml even when joystick_config:= or layout_config:= is given on the command line (Codex, Claude A) — `marine_simulation/scripts/run_demo.sh:41`
+- [ ] (must-fix) settle(): a window that vanishes between listing and the wmctrl call raises LayoutError out of place_all and aborts the remaining windows (Gemini) — `marine_simulation/scripts/place_windows.py:356`
+- [ ] (suggestion) switched_off matches only lowercase values; the launch accepts any case (Gemini, Claude A) — `marine_simulation/scripts/run_demo.sh:46`
+- [ ] (suggestion) place_all promises one more look after the deadline but breaks without listing again (Claude A) — `marine_simulation/scripts/place_windows.py:323`
+- [ ] (suggestion) state and run directories use the umask default, not 0o700 (Claude B) — `marine_simulation/launch/demo_launch.py:acquire_demo_lock`
+- [ ] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29`
+- [ ] (suggestion) tilde paths in layout_config/camp_profile/camp_view_config are not expanded (Gemini) — `marine_simulation/launch/demo_launch.py:529`
+- [ ] (suggestion) view_center divides by len(boats) without an empty check (Gemini) — `marine_simulation/launch/demo_launch.py:243`
