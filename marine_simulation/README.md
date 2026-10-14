@@ -197,11 +197,12 @@ ros2 run marine_simulation publish_survey_area.py --ros-args -p file:=$HOME/my_t
 ```
 
 To draw a new target: in CAMP add a survey area (its outline is the polygon), then
-File > Save. Point `file` at that project file. CAMP opens the same file to show the
+File > Save. Point `file` at that project file. CAMP's File > Open reads the same file to show the
 outline, so one file serves both. The node reads the file once at startup and keeps
 running so the latched sample outlives it for a scorer that starts later; to pick up
-an edit, restart the node (the scorer replaces an area when the same id arrives again
-with a newer stamp, no scorer reset needed).
+an edit, restart the node. The stamp is wall-clock time (not the simulation clock, which
+reads 0 until `/clock` arrives), and the scorer replaces an area when the same id arrives
+again with a newer stamp, so no scorer reset is needed.
 
 Run it in the **root namespace** (as above): the topic is then `/survey_area`, which
 is what the scorer's example `coverage_assessment.yaml` subscribes to.
@@ -209,7 +210,7 @@ is what the scorer's example `coverage_assessment.yaml` subscribes to.
 | Parameter | Default | Meaning |
 |---|---|---|
 | `file` | installed `config/demo_target_polygon_camp.json` | CAMP project file; every `SurveyArea` item in it (nested groups included) is published, its `Waypoint` children are the vertices |
-| `topic` | `survey_area` | Relative, so it follows the node's namespace |
+| `topic` | `survey_area` | Relative, so it follows the node's namespace: under a launch namespace it becomes `/<ns>/survey_area`, which the scorer would not hear |
 | `area_id` | empty | Empty uses each CAMP item's label (`area0000`, ...); non-empty is accepted only for a file with exactly one area |
 | `priority` | `0` | `SurveyArea.priority` (int16, lower is more urgent) |
 | `standard_name` | `demo` | `SurveyStandard.name` |
@@ -217,9 +218,11 @@ is what the scorer's example `coverage_assessment.yaml` subscribes to.
 
 The node exits with status 1 and a message on stderr when it is given: a missing,
 unreadable or non-JSON file, a file with no `SurveyArea`, an area with fewer than 3
-vertices or a vertex without a finite latitude in [-90, 90] and longitude in
+distinct vertices (a repeated closing point counts once), more than 10000 vertices, more
+than 100 areas (the latched history is 100 deep, so a late scorer would lose the rest), a
+file over 16 MB or nested too deeply, or a vertex without a finite latitude in [-90, 90] and longitude in
 [-180, 180], two areas with one label, an `area_id` for a multi-area file, a priority
-outside int16, or a standard the scorer would read as "not set" (`a` and `b` both 0, or
+outside int16, a parameter of the wrong type, or a standard the scorer would read as "not set" (`a` and `b` both 0, or
 either negative or not finite): that would leave the scoreboard at 0 % with no
 explanation.
 
