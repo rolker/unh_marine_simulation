@@ -39,3 +39,22 @@ issue: 94
 - [ ] OK to start CAMP directly and file a camp issue for launch arguments
 - [ ] Live coverage colormap and range
 - [ ] Name of the target-area launch/node from #93
+
+## Plan Review
+**Status**: complete
+**When**: 2026-10-14 10:03 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5) (in-context — author self-review)
+
+**Plan**: `.agent/work-plans/issue-94/plan.md` at `a9bf24f`
+**PR**: PR-less
+Independence uncertain: this context wrote the plan and no fresh dispatch intervened; same model string as the plan author.
+**Verdict**: changes-requested (must-fix items folded into the plan in the next commit)
+
+### Findings
+- [x] (must-fix) The runtime settings directory is deleted and re-created on every launch; guard the delete (exact path under home, not a symlink, expected contents) and test it — plan.md step 5
+- [x] (must-fix) CAMP persists the view in two places (`MainWindow/mapScale`+`mapCenter` and `MapView/mapView/scale`+`center`); the profile must set both and the first implementation task must establish which wins — plan.md step 6
+- [x] (must-fix) The selftest scorer check depended on a survey area that #93 does not provide yet; the selftest publishes its own `SurveyArea` — plan.md step 10(c)
+- [ ] (suggestion) Placement process must not shut the launch down when it exits normally — folded into step 12 text
+- [ ] (suggestion) 12 files is at the edge of one PR; split placement/profile from the launch if it grows — folded into Estimated Scope
+- [ ] (suggestion) PR body should say "Part of #94", not a closing keyword, until the cold-boot rehearsal is done — folded into Estimated Scope
+- [ ] (suggestion) The live coverage layer key `live:<ns>` for four boats may be several layers; capture before writing the profile (open question already listed)
