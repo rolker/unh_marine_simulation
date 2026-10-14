@@ -46,13 +46,15 @@ import json
 import os
 import threading
 import time
-from typing import Callable, Deque, List, Optional, Tuple
+from typing import Callable, Deque, Dict, List, Optional, Set, Tuple
 
 from ament_index_python.packages import get_package_share_directory
 import launch
 from launch.actions import (GroupAction, IncludeLaunchDescription, RegisterEventHandler,
                             SetEnvironmentVariable)
 from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.events.process import ShutdownProcess
+from launch.events.process.process_matchers import matches_pid
 from launch.launch_description_sources import AnyLaunchDescriptionSource
 from launch_manager_proto import manager_core as mc
 from launch_manager_proto.config import GroupSpec, launch_argument_text, ManagerSpec
@@ -101,18 +103,26 @@ class LaunchRunner(mc.Runner):
         self.events: Deque[Tuple[str, str, int, str, Optional[int]]] = deque()
         self._release = threading.Event()
         self._threads: List[threading.Thread] = []
-        self.supports_scoped_stop = False
+        self._lock = threading.Lock()
+        self._pids: Dict[str, Set[int]] = {}
+        self._targeted: Set[int] = set()
+        self.supports_scoped_stop = True
 
     def base_description(self) -> launch.LaunchDescription:
         """Return the handlers that watch every process of every group."""
         def started(event, context):
             group = (event.env or {}).get(GROUP_ENV)
             if group:
+                with self._lock:
+                    self._pids.setdefault(group, set()).add(event.pid)
                 self.events.append(('started', group, event.pid, event.process_name, None))
 
         def exited(event, context):
             group = (event.env or {}).get(GROUP_ENV)
             if group:
+                with self._lock:
+                    self._pids.get(group, set()).discard(event.pid)
+                    self._targeted.discard(event.pid)
                 self.events.append(
                     ('exited', group, event.pid, event.process_name, event.returncode))
 
@@ -133,7 +143,18 @@ class LaunchRunner(mc.Runner):
         self._threads.append(thread)
 
     def stop(self, name: str, timeout: float) -> None:
-        raise NotImplementedError('scoped stop is not supported')
+        """
+        Stop only this group: one ``ShutdownProcess`` per attributed pid, once each.
+
+        ``launch`` escalates SIGINT, SIGTERM, SIGKILL per process by itself. The core calls
+        this every tick while the group is stopping, so a process that was still starting up
+        when the stop was first requested is caught on a later call.
+        """
+        with self._lock:
+            pids = [p for p in sorted(self._pids.get(name, ())) if p not in self._targeted]
+            self._targeted.update(pids)
+        for pid in pids:
+            self._service.emit_event(ShutdownProcess(process_matcher=matches_pid(pid)))
 
     def stop_all(self) -> None:
         self._service.shutdown()

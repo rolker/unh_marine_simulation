@@ -123,7 +123,6 @@ class _Group:
         self.converger: Optional[core.LifecycleConverger] = None
         self.last_discovery = 0.0
         self.left_by_exit = False
-        self.stop_issued = False
         self.notes: List[str] = []
 
 
@@ -325,6 +324,8 @@ class ManagerCore:
         if g.state == STOPPING:
             if not g.alive:
                 self._set(g, STOPPED, '', now)
+            elif self._runner.supports_scoped_stop:
+                self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
             return
         if g.state in (STOPPED, BLOCKED):
             self._step_idle(g, now)
@@ -335,12 +336,11 @@ class ManagerCore:
         if g.alive:
             if g.state != STOPPING:
                 self._begin_stop(g, now)
-            elif not g.stop_issued:
-                self._begin_stop(g, now)
+            elif self._runner.supports_scoped_stop:
+                self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
         elif g.state != STOPPED:
             self._suspend(g)
             self._set(g, STOPPED, '', now)
-            g.stop_issued = False
             if all(x.desired == DESIRED_STOPPED and not x.alive for x in self._groups.values()):
                 self._stop_all_issued = False
 
@@ -348,7 +348,6 @@ class ManagerCore:
         self._suspend(g)
         if self._runner.supports_scoped_stop:
             self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
-            g.stop_issued = True
         else:
             everything_stopped = all(x.desired == DESIRED_STOPPED for x in self._groups.values())
             if not everything_stopped:
@@ -357,7 +356,6 @@ class ManagerCore:
             if not self._stop_all_issued:
                 self._stop_all_issued = True
                 self._runner.stop_all()
-            g.stop_issued = True
         self._set(g, STOPPING, 'stopping', now)
 
     def _step_idle(self, g: _Group, now: float) -> None:
@@ -373,7 +371,6 @@ class ManagerCore:
         g.ever_ready = False
         g.alive.clear()
         g.left_by_exit = False
-        g.stop_issued = False
         g.notes = []
         if g.spec.lifecycle is not None:
             g.converger = self._services.make_converger(g.spec.lifecycle.target)

@@ -164,6 +164,19 @@ class Watcher:
                 return True
         return False
 
+    def send(self, request_id, kind, timeout=20, **fields):
+        """Publish a command until its ack shows up in a snapshot; return the ack."""
+        message = String(data=json.dumps({'request_id': request_id, 'type': kind, **fields}))
+        end = time.monotonic() + timeout
+        while time.monotonic() < end:
+            acks = [a for a in (self.latest or {}).get('acks', [])
+                    if a['request_id'] == request_id]
+            if acks:
+                return acks[0]
+            self.command.publish(message)
+            self.wait(lambda s: False, 0.4)
+        raise AssertionError('no ack for %s' % request_id)
+
     def group(self, name):
         return [g for g in self.latest['groups'] if g['name'] == name][0]
 
@@ -210,7 +223,41 @@ def test_set_profile_command_is_acknowledged_in_status(tmp_path):
             watcher.wait(lambda s: False, 0.5)
         ack = [a for a in watcher.latest['acks'] if a['request_id'] == 'rq1'][0]
         assert ack['result'] == 'REJECTED' and 'unknown profile' in ack['detail']
-        # per-group stop is not supported by this runner: REJECTED with the reason
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
+def test_scoped_stop_and_restart_of_one_group(tmp_path):
+    """Stop one group without touching the other, then bring it back (the spike's proof)."""
+    harness = Harness(tmp_path, 'a5', closer_seconds=600)
+    watcher = Watcher('lmp_a5')
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            harness.text()
+        assert len(harness.leftovers()) == 3
+        # stop only the closer: the profile 'fakes' runs just the fakes
+        assert watcher.send('s1', 'SET_PROFILE', profile='fakes')['result'] == 'ACCEPTED'
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'STOPPED', 40), \
+            harness.text()
+        assert watcher.group('fakes')['state'] == 'READY' and len(harness.leftovers()) == 3
+        assert watcher.latest['profile_actual'] == 'fakes'
+        assert harness.proc.poll() is None            # the manager did not exit
+        # bring it back
+        assert watcher.send('s2', 'START', groups=['closer'])['result'] == 'ACCEPTED'
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 40)
+        # stop the fakes: their processes go, the closer notices it is no longer supported
+        assert watcher.send('s3', 'STOP', groups=['fakes'])['result'] == 'ACCEPTED'
+        assert watcher.wait(lambda s: watcher.group('fakes')['state'] == 'STOPPED', 40)
+        assert harness.leftovers() == []
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'DEGRADED', 20)
+        # and start them again: a fresh set of processes converges despite the lost replies
+        assert watcher.send('s4', 'START', groups=['fakes'])['result'] == 'ACCEPTED'
+        assert watcher.wait(lambda s: watcher.group('fakes')['state'] == 'READY', 60), \
+            harness.text()
+        assert len(harness.leftovers()) == 3
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 20)
     finally:
         watcher.close()
         harness.cleanup()

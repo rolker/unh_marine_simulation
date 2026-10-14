@@ -70,7 +70,9 @@ class FakeRunner(mc.Runner):
         self.started.append(spec.name)
 
     def stop(self, name, timeout):
-        self.stopped.append(name)
+        self.stop_calls = getattr(self, 'stop_calls', 0) + 1
+        if name not in self.stopped:
+            self.stopped.append(name)
 
     def stop_all(self):
         self.stopped_all += 1
