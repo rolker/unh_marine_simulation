@@ -19,3 +19,20 @@ issue: 98
 - [ ] Datum: the chart grid is MLLW (mbes_sim adds tide above MLLW) while the 4 m compilation's datum is unstated; the README caveat and the provenance JSON must say so, and a seam check between sources is worth reporting in the coverage summary.
 - [ ] Recommendation: pin the host package (mbes_sim owns the grid reader; marine_simulation owns the demo) and the demo-grid location/launch default in the plan; add rosdep keys only if new (GDAL already a dependency; no pip, ADR-0009).
 - [ ] Recommendation: README, `.agents/README.md` (inventory, pitfalls), and `.gitignore` for the generated grid land in the same PR (consequences).
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-14 13:03 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-98/plan.md` at `14041a3`
+**Branch**: feature/issue-98 at `14041a3`
+**Phases**: single
+
+### Open questions
+- [ ] Demo lat/lon box for the README command
+- [ ] Default grid location (`~/data/sim/mbes_truth/` vs `~/data/world/`)
+- [ ] Attribution/licence wording; ask CCOM GIS for licence and vertical datum
+- [ ] Datum treated as MLLW-comparable until answered
+- [ ] Nodata -9999 outside chart extent vs clip to chart extent
+- [ ] Declare python3-numpy
