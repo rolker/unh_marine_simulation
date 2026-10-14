@@ -93,12 +93,12 @@ def test_stop_targets_each_pid_once_and_forgets_exited_ones():
     emitted = []
     run._service.emit_event = emitted.append
     run._pids = {'a': {11, 12}, 'b': {21}}
-    run.stop('a', 5.0)
+    run.stop('a')
     assert len(emitted) == 2
-    run.stop('a', 5.0)                  # called again on the next tick: nothing new
+    run.stop('a')                  # called again on the next tick: nothing new
     assert len(emitted) == 2
     run._pids['a'].add(13)              # a process that was still starting up
-    run.stop('a', 5.0)
+    run.stop('a')
     assert len(emitted) == 3
     assert all(type(e).__name__ == 'ShutdownProcess' for e in emitted)
 
@@ -193,3 +193,51 @@ def test_an_on_shutdown_handler_is_never_unregistered_with_its_group():
     context.register_event_handler('chain')
     run.group_stopped('boats')
     assert context.registered == [keep]
+
+
+def test_change_state_handlers_of_a_lifecycle_group_are_not_registered():
+    from launch.event_handlers import OnProcessStart
+    from launch_ros.events.lifecycle import ChangeState
+    context = FakeContext()
+
+    class Service:
+        pass
+
+    service = Service()
+    service.context = context
+    run = manager.LaunchRunner(service)
+    run._sole_writer.add('boats')                 # what start() does for a lifecycle group
+    chain = launch.EventHandler(matcher=lambda event: isinstance(event, ChangeState),
+                                entities=[])
+    other = OnProcessStart(on_start=lambda *args: None)
+    context.environment[manager.GROUP_ENV] = 'boats'
+    context.register_event_handler(chain)
+    context.register_event_handler(other)
+    assert context.registered == [other] and run.suppressed == 1
+    context.environment[manager.GROUP_ENV] = 'camp'         # no lifecycle section: untouched
+    context.register_event_handler(chain)
+    assert chain in context.registered and run.suppressed == 1
+    del context.environment[manager.GROUP_ENV]
+    context.register_event_handler(chain)                   # outside any group: untouched
+    assert context.registered.count(chain) == 2
+
+
+def test_start_marks_only_lifecycle_groups_as_sole_writer(monkeypatch):
+    from launch_manager_proto.config import LifecycleSpec
+    monkeypatch.setattr(manager, 'group_description', lambda spec: launch.LaunchDescription([]))
+    context = FakeContext()
+
+    class Service:
+        pass
+
+    service = Service()
+    service.context = context
+    service.emit_event = lambda event: None
+    run = manager.LaunchRunner(service)
+    monkeypatch.setattr(manager.LaunchSession, 'from_service',
+                        lambda *args: __import__('contextlib').nullcontext())
+    run.start(GroupSpec(name='boats', package=None, file='x', lifecycle=LifecycleSpec(
+        nodes=['/a'])))
+    run.start(GroupSpec(name='camp', package=None, file='y'))
+    run.close()
+    assert run._sole_writer == {'boats'}

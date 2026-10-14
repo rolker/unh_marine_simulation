@@ -82,7 +82,6 @@ class GroupSpec:
     ready_nodes: List[str] = field(default_factory=list)
     ready_timeout: float = 60.0
     restart: str = 'on-failure'
-    shutdown_timeout: float = 10.0
     description: str = ''
 
 
@@ -233,7 +232,7 @@ def _parse_group(name, raw, problems) -> Optional[GroupSpec]:
         problems.append('%s must be a mapping' % where)
         return None
     _unknown(raw, ('launch', 'exec', 'arguments', 'requires', 'follows', 'lifecycle', 'ready',
-                   'restart', 'shutdown', 'description'), where, problems)
+                   'restart', 'description'), where, problems)
     if 'exec' in raw:
         problems.append('%s.exec is not supported in this prototype (launch files only)'
                         % where)
@@ -263,14 +262,6 @@ def _parse_group(name, raw, problems) -> Optional[GroupSpec]:
     group.restart = raw.get('restart', 'on-failure')
     if group.restart not in RESTART_POLICIES:
         problems.append('%s.restart must be one of %s' % (where, ', '.join(RESTART_POLICIES)))
-    shutdown = raw.get('shutdown') or {}
-    if not isinstance(shutdown, dict):
-        problems.append('%s.shutdown must be a mapping' % where)
-        shutdown = {}
-    _unknown(shutdown, ('timeout',), where + '.shutdown', problems)
-    if 'timeout' in shutdown:
-        group.shutdown_timeout = _positive(
-            shutdown['timeout'], where + '.shutdown.timeout', problems, 10.0)
     group.description = str(raw.get('description', ''))
     return group
 

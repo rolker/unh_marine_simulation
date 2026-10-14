@@ -62,6 +62,7 @@ from launch_manager_proto import manager_core as mc
 from launch_manager_proto.config import GroupSpec, launch_argument_text, ManagerSpec
 from launch_manager_proto.lifecycle_core import LifecycleConverger
 from launch_manager_proto.lifecycle_rclpy import discover_lifecycle_nodes, RclpyBackend
+from launch_ros.events.lifecycle import ChangeState
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
@@ -126,30 +127,56 @@ class LaunchRunner(mc.Runner):
         self._pids: Dict[str, Set[int]] = {}
         self._targeted: Set[int] = set()
         self._handlers: Dict[str, List] = {}
+        self._sole_writer: Set[str] = set()
+        self.suppressed = 0
         self.supports_scoped_stop = True
         self._record_handlers()
 
     def _record_handlers(self) -> None:
         """
-        Remember which event handlers each group's launch description registers.
+        Watch the event handlers each group's launch description registers.
 
-        launch keeps a handler until it is unregistered, and ``launch_ros`` lifecycle chains
-        subscribe by node name. A group started a second time in the same service would
-        therefore have its old chains answer the new processes' transitions as well: two
-        writers per node, and a Python lifecycle node dies on the second (found live, a
-        restarted boats group lost its ``mbes_sim`` and ``joy_to_helm`` processes). Handlers
-        registered while a group's description is being visited carry the group's
-        environment tag, so they can be removed again when the group has stopped.
+        Two things are done with them, both because an ``rclpy`` lifecycle node dies on a
+        transition request that is invalid for its state (``Transition is not registered``
+        escapes the service callback), so a node must never have two writers:
+
+        * In a group with a ``lifecycle`` section the manager is the only writer: launch_ros's
+          handler for ``ChangeState`` events is not registered, so the per-package launch
+          files' autostart chains still emit their events and nobody acts on them. Left in,
+          a chain that was merely slow raced the convergence loop and killed nodes.
+        * Every other handler registered while a group is visited carries the group's
+          environment tag, and is unregistered when the group has stopped. launch keeps a
+          handler until told otherwise and launch_ros subscribes by node name, so a group
+          started a second time would have its old chains answer the new processes too
+          (found live: a restarted boats group lost its ``mbes_sim`` and ``joy_to_helm``).
         """
         context = self._service.context
         original = context.register_event_handler
+        probe = ChangeState(lifecycle_node_matcher=lambda action: True, transition_id=1)
+
+        def is_change_state_handler(event_handler) -> bool:
+            try:
+                return bool(event_handler.matches(probe))
+            except Exception:  # noqa: B902  an exotic handler is simply not one of ours
+                return False
 
         def register(event_handler, append=False):
             group = context.environment.get(GROUP_ENV)
+            if not group:
+                return original(event_handler, append)
+            if group in self._sole_writer and is_change_state_handler(event_handler):
+                # The manager is the only writer of lifecycle transitions in a group that
+                # has a ``lifecycle`` section. launch_ros's own handler for ChangeState
+                # events is what turns the per-package launch files' autostart chains into
+                # requests; rclpy lifecycle nodes die on a request that is invalid for their
+                # state, so a slow chain racing the convergence loop killed them. With the
+                # handler gone the chains still emit their events, and nobody acts on them.
+                self.suppressed += 1
+                return None
             # An OnShutdown handler outlives the group: launch_ros registers the one that
             # stops its ROS adapter thread from whichever group first needs the adapter, and
             # without it the process cannot exit.
-            if group and not isinstance(event_handler, OnShutdown):
+            if not isinstance(event_handler, OnShutdown):
                 with self._lock:
                     self._handlers.setdefault(group, []).append(event_handler)
             return original(event_handler, append)
@@ -204,6 +231,8 @@ class LaunchRunner(mc.Runner):
 
     def start(self, spec: GroupSpec) -> None:
         description = group_description(spec)
+        if spec.lifecycle is not None:
+            self._sole_writer.add(spec.name)
 
         def hold() -> None:
             with LaunchSession.from_service(self._service, description):
@@ -213,7 +242,7 @@ class LaunchRunner(mc.Runner):
         thread.start()
         self._threads.append(thread)
 
-    def stop(self, name: str, timeout: float) -> None:
+    def stop(self, name: str) -> None:
         """
         Stop only this group: one ``ShutdownProcess`` per attributed pid, once each.
 

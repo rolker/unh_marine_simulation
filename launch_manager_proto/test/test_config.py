@@ -143,6 +143,12 @@ def test_launch_by_path_is_accepted_and_bad_launch_forms_are_not():
     assert 'launch must be' in problems(data)
 
 
+def test_shutdown_timeouts_are_not_configurable_here():
+    data = good()
+    data['groups']['camp']['shutdown'] = {'timeout': 5}
+    assert "unknown key 'shutdown'" in problems(data)
+
+
 def test_exec_groups_and_unknown_keys_are_rejected():
     data = good()
     data['groups']['camp']['exec'] = ['ls']
@@ -175,9 +181,8 @@ def test_numbers_must_be_positive_and_real():
     data = good()
     data['manager']['status_period'] = 0
     data['groups']['boats']['ready']['timeout'] = float('nan')
-    data['groups']['camp']['shutdown'] = {'timeout': -1}
     text = problems(data)
-    assert text.count('positive number') == 3
+    assert text.count('positive number') == 2
 
 
 def test_declared_arguments_are_typed_and_defaults_checked():

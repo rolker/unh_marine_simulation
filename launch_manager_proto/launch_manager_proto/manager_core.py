@@ -79,7 +79,7 @@ class Runner:
         """Inject the group's launch description."""
         raise NotImplementedError
 
-    def stop(self, name: str, timeout: float) -> None:
+    def stop(self, name: str) -> None:
         """Stop only this group's processes (when ``supports_scoped_stop``)."""
         raise NotImplementedError
 
@@ -337,7 +337,7 @@ class ManagerCore:
                 self._drop_converger(g)
                 self._set(g, STOPPED, '', now)
             elif self._runner.supports_scoped_stop:
-                self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
+                self._runner.stop(g.spec.name)
             return
         if g.state in (STOPPED, BLOCKED):
             self._step_idle(g, now)
@@ -349,7 +349,7 @@ class ManagerCore:
             if g.state != STOPPING:
                 self._begin_stop(g, now)
             elif self._runner.supports_scoped_stop:
-                self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
+                self._runner.stop(g.spec.name)
         elif g.state != STOPPED:
             self._drop_converger(g)
             self._set(g, STOPPED, '', now)
@@ -359,7 +359,7 @@ class ManagerCore:
     def _begin_stop(self, g: _Group, now: float) -> None:
         self._suspend(g)
         if self._runner.supports_scoped_stop:
-            self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
+            self._runner.stop(g.spec.name)
         else:
             everything_stopped = all(x.desired == DESIRED_STOPPED for x in self._groups.values())
             if not everything_stopped:
