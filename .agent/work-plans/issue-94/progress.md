@@ -72,21 +72,21 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 **Round**: 1 | **Ship**: continue — real defects found, two independent sources agree on three; Gemini arm timed out (7 min), Codex and two Claude lenses ran
 
 ### Findings
-- [ ] (must-fix) `wmctrl -b` takes two properties; the four-property clear leaves maximized_horz set (Claude A, Codex) — `marine_simulation/scripts/place_windows.py:243`
-- [ ] (must-fix) `target_area_file` is only validated when enable_target_area is true; a typo reaches CAMP unrefused and the README claim is false (Claude A, Codex) — `marine_simulation/launch/demo_launch.py:467`
-- [ ] (must-fix) A CAMP already running is found first by the window match and placed instead of the demo's; refuse to start when one runs and prefer the newest matching window (Claude B, Claude A, Codex) — `marine_simulation/scripts/place_windows.py:226`
-- [ ] (must-fix) Fail-fast refusals (Wayland, no wmctrl, monitor unplugged) reach the helper as a Python traceback; run_demo.sh must check them first in plain words (Claude B) — `marine_simulation/scripts/run_demo.sh:42`
-- [ ] (must-fix) The live tile cache is kept outside the reset settings directory, so a previous session's tiles can be warm-loaded; the README claim is false (Claude A) — `marine_simulation/launch/demo_launch.py:254`
-- [ ] (must-fix) CAMP restores its centre at its first window size and placement then resizes it, so the view may shift; cannot verify without running CAMP (Claude A) — `marine_simulation/launch/demo_launch.py:480`
-- [ ] (suggestion) No lock: a second launch deletes the first one's settings directory (Claude B, Claude A) — `marine_simulation/launch/demo_launch.py:254`
-- [ ] (suggestion) Placement failure is a stderr line only; add a banner on non-zero exit, longer default wait, final pass after the deadline (Claude B, Claude A) — `marine_simulation/scripts/place_windows.py:284`
-- [ ] (suggestion) parse_monitors drops a monitor with several output names (Claude A) — `marine_simulation/scripts/place_windows.py:68`
-- [ ] (suggestion) load_view does not check types or ranges (Claude A) — `marine_simulation/launch/demo_launch.py:227`
-- [ ] (suggestion) check_session refuses an X11 session whose XDG_SESSION_TYPE is unset (Claude A) — `marine_simulation/scripts/place_windows.py:338`
-- [ ] (suggestion) Pause between clearing window state and moving it (Claude A) — `marine_simulation/scripts/place_windows.py:243`
-- [ ] (suggestion) Tests: realistic wmctrl lines (title with spaces, desktop -1, negative offsets), exact poll count for the single deadline (Claude A) — `marine_simulation/test/test_place_windows.py:1`
-- [ ] (suggestion) run_demo.sh requires joysticks.yaml and layout.yaml even when the matching feature is switched off (Claude A) — `marine_simulation/scripts/run_demo.sh:35`
-- [ ] (suggestion) run_demo.sh keeps an already exported ROS_DOMAIN_ID, so the domain is not private; also check HOME (Claude B) — `marine_simulation/scripts/run_demo.sh:29`
-- [ ] (suggestion) Pass the target file to CAMP as an absolute path (Claude B) — `marine_simulation/launch/demo_launch.py:480`
-- [ ] (suggestion) README: XDG_CONFIG_HOME change also hides other CAMP config; placement is one-shot; state directory persists (Claude B, Claude A) — `marine_simulation/README.md:1`
-- [ ] (suggestion) Harden reset_settings_root (symlinked parents, temp-file write for scorer params, scorer exit banner) (Claude B) — `marine_simulation/launch/demo_launch.py:254`
+- [x] (must-fix) `wmctrl -b` takes two properties; the four-property clear leaves maximized_horz set (Claude A, Codex) — `marine_simulation/scripts/place_windows.py:243`
+- [x] (must-fix) `target_area_file` is only validated when enable_target_area is true; a typo reaches CAMP unrefused and the README claim is false (Claude A, Codex) — `marine_simulation/launch/demo_launch.py:467`
+- [x] (must-fix) A CAMP already running is found first by the window match and placed instead of the demo's; refuse to start when one runs and prefer the newest matching window (Claude B, Claude A, Codex) — `marine_simulation/scripts/place_windows.py:226`
+- [x] (must-fix) Fail-fast refusals (Wayland, no wmctrl, monitor unplugged) reach the helper as a Python traceback; run_demo.sh must check them first in plain words (Claude B) — `marine_simulation/scripts/run_demo.sh:42`
+- [x] (must-fix) The live tile cache is kept outside the reset settings directory, so a previous session's tiles can be warm-loaded; the README claim is false (Claude A) — `marine_simulation/launch/demo_launch.py:254`
+- [x] (must-fix) CAMP restores its centre at its first window size and placement then resizes it, so the view may shift; cannot verify without running CAMP (Claude A) — `marine_simulation/launch/demo_launch.py:480` (deferred: not fixable in this repo; filed rolker/camp#242, README says the view must be checked at the rehearsal)
+- [x] (suggestion) No lock: a second launch deletes the first one's settings directory (Claude B, Claude A) — `marine_simulation/launch/demo_launch.py:254`
+- [x] (suggestion) Placement failure is a stderr line only; add a banner on non-zero exit, longer default wait, final pass after the deadline (Claude B, Claude A) — `marine_simulation/scripts/place_windows.py:284`
+- [x] (suggestion) parse_monitors drops a monitor with several output names (Claude A) — `marine_simulation/scripts/place_windows.py:68`
+- [x] (suggestion) load_view does not check types or ranges (Claude A) — `marine_simulation/launch/demo_launch.py:227`
+- [x] (suggestion) check_session refuses an X11 session whose XDG_SESSION_TYPE is unset (Claude A) — `marine_simulation/scripts/place_windows.py:338`
+- [x] (suggestion) Pause between clearing window state and moving it (Claude A) — `marine_simulation/scripts/place_windows.py:243`
+- [x] (suggestion) Tests: realistic wmctrl lines (title with spaces, desktop -1, negative offsets), exact poll count for the single deadline (Claude A) — `marine_simulation/test/test_place_windows.py:1`
+- [x] (suggestion) run_demo.sh requires joysticks.yaml and layout.yaml even when the matching feature is switched off (Claude A) — `marine_simulation/scripts/run_demo.sh:35`
+- [x] (suggestion) run_demo.sh keeps an already exported ROS_DOMAIN_ID, so the domain is not private; also check HOME (Claude B) — `marine_simulation/scripts/run_demo.sh:29`
+- [x] (suggestion) Pass the target file to CAMP as an absolute path (Claude B) — `marine_simulation/launch/demo_launch.py:480`
+- [x] (suggestion) README: XDG_CONFIG_HOME change also hides other CAMP config; placement is one-shot; state directory persists (Claude B, Claude A) — `marine_simulation/README.md:1`
+- [x] (suggestion) Harden reset_settings_root (symlinked parents, temp-file write for scorer params, scorer exit banner) (Claude B) — `marine_simulation/launch/demo_launch.py:254` (deferred: directory mode 0o700 done; the rest is low risk behind the marker and lock rules, and a scorer crash is visible in the output; no respawn is deliberate)
