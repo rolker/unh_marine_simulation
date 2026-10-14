@@ -433,3 +433,55 @@ def test_cube_never_reloads_from_disk():
     params = yaml.safe_load(PARAMS.read_text())['/**/cube_bathymetry']['ros__parameters']
     assert params['draft_dir'] == '' and params['prior_store_dir'] == ''
     assert 'bizzyboat' not in LAUNCH.read_text()
+
+
+# --- mbes grid resolution ---------------------------------------------------------------
+
+def _grids(tmp_path):
+    demo_grid, chart, other = (tmp_path / n for n in ('demo.tif', 'chart.tif', 'other.tif'))
+    for path in (demo_grid, chart, other):
+        path.write_bytes(b'x')
+    return str(demo_grid), str(chart), str(other)
+
+
+def test_an_explicit_grid_argument_wins_over_everything(tmp_path):
+    demo_grid, chart, other = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid(other, {'MBES_DEMO_GRID': demo_grid}, demo_grid, chart)
+    assert path == other and 'argument' in message
+
+
+def test_an_explicit_grid_that_is_not_a_file_is_refused(tmp_path):
+    demo_grid, chart, _ = _grids(tmp_path)
+    with pytest.raises(ValueError, match='is not a file'):
+        demo.resolve_mbes_grid(str(tmp_path / 'missing.tif'), {}, demo_grid, chart)
+
+
+def test_the_environment_grid_is_next_and_must_exist(tmp_path):
+    demo_grid, chart, other = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {'MBES_DEMO_GRID': other}, demo_grid, chart)
+    assert path == other and 'MBES_DEMO_GRID' in message
+    with pytest.raises(ValueError, match='MBES_DEMO_GRID'):
+        gone = {'MBES_DEMO_GRID': str(tmp_path / 'gone.tif')}
+        demo.resolve_mbes_grid('', gone, demo_grid, chart)
+
+
+def test_the_demo_grid_is_used_when_it_exists(tmp_path):
+    demo_grid, chart, _ = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {}, demo_grid, chart)
+    assert path == demo_grid and 'demo truth grid' in message
+
+
+def test_without_a_demo_grid_the_chart_grid_is_used_and_the_command_is_named(tmp_path):
+    _, chart, _ = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {}, str(tmp_path / 'absent.tif'), chart)
+    assert path == chart
+    assert 'not found' in message and 'falling back' in message
+    assert 'build_demo_bathy' in message and str(tmp_path / 'absent.tif') in message
+
+
+def test_the_shipped_default_is_the_demo_location_and_the_launch_argument_is_empty():
+    assert demo.DEMO_GRID == '~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif'
+    declared = {a.name: a for a in demo.generate_launch_description().entities
+                if hasattr(a, 'name')}
+    default = declared['mbes_grid_file'].default_value
+    assert default is not None and ''.join(s.text for s in default) == ''
