@@ -193,3 +193,21 @@ Specialists: Claude adversarial Lens A and Lens B on the fix delta (fresh subage
 - [x] (suggestion) G17 a single missed `node_visible` tick degrades a group (Gemini) (deferred: only `ready.nodes` is affected and the demo does not use it)
 
 Dismissed after checking: Gemini's claim that stopping one group shuts the shared LaunchService down (`_GroupSession` keeps no process collectors, so the exit path never calls shutdown; now a test), the shared-environment race (the launch loop visits one description at a time) and non-thread-safe `emit_event` (launch documents it as thread-safe).
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 14:46 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-97 at `449f2ee` (not pushed)
+**Addressed**: `## Local Review (Pre-Push)` round 2 (G1 - G17; fixed in the same pass that produced the entry)
+**Commits**: `3741e5a` (round 2 fixes), `449f2ee` (test flake: a forked child shows its parent's environment until exec)
+
+### Actions
+- [x] G1 – G3 (must-fix) start grace and its START/STOP interactions, signal handler without the service lock — `manager_core.py`, `manager.py`
+- [x] G4 – G12 suspend in the grace, signal before the loop, honest comment, shutdown told on every exit path, exact group tag, one join budget, finite settle, real-class session test, hold lapse
+- [x] G13 – G17 deferred with reasons in the review entry (late spawn handlers, silent node, crash cascade, private launch fields, discovery debounce)
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation`: 364 tests, 0 errors, 8 failures, 2 skipped. The 8 are the pre-existing marine_simulation lint in files this work does not touch; every launch_manager_proto test passes.
+- Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 72.17s. Plain launch with the guard on 176: `demo_boats_selftest.py --start-launch --boats bluefin,clownfish` exit 0, 12 PASS. No process of this worktree was left running afterwards.
