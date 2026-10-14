@@ -62,8 +62,10 @@ def wait_for_up(proc):
 
 
 def test_leftovers_that_obey_sigint_are_stopped_first():
-    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
-                             env=tagged_env())
+    child = subprocess.Popen(
+        [sys.executable, '-c', 'import time; print("up", flush=True); time.sleep(60)'],
+        env=tagged_env(), stdout=subprocess.PIPE, text=True)
+    wait_for_up(child)
     run = runner()
     run._pids = {'g': {child.pid}}
     began = time.monotonic()
@@ -342,9 +344,11 @@ def test_a_stopped_groups_holder_thread_ends_and_a_restart_gets_a_new_one(monkey
 
 
 def test_a_pid_tagged_for_another_group_is_not_ours():
-    other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
-                             env=dict(os.environ, **{manager.GROUP_ENV: 'other'}))
+    other = subprocess.Popen(
+        [sys.executable, '-c', 'import time; print("up", flush=True); time.sleep(60)'],
+        env=dict(os.environ, **{manager.GROUP_ENV: 'other'}), stdout=subprocess.PIPE, text=True)
     try:
+        wait_for_up(other)              # until it has exec'd: before that /proc shows the parent's
         assert manager._has_group_tag(other.pid, 'other') is True
         assert manager._has_group_tag(other.pid, 'g') is False
         assert manager._has_group_tag(other.pid, 'othe') is False       # exact, not a prefix
