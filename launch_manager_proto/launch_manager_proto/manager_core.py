@@ -87,6 +87,9 @@ class Runner:
         """Stop every group at once."""
         raise NotImplementedError
 
+    def group_stopped(self, name: str) -> None:
+        """Tell the runner a group has fully stopped: drop whatever it kept for it."""
+
 
 class Services:
     """Access to the ROS graph for readiness and lifecycle."""
@@ -144,6 +147,7 @@ class ManagerCore:
         self._acks: List[dict] = []
         self._stop_all_issued = False
         self._began = False
+        self._shutting_down = False
 
     # -- queries ---------------------------------------------------------------------------
 
@@ -186,12 +190,16 @@ class ManagerCore:
         if g is not None:
             g.alive[pid] = name
 
+    def on_shutdown(self) -> None:
+        """Note that the launch service is going down: exits from now on are expected."""
+        self._shutting_down = True
+
     def on_process_exited(self, group: str, pid: int, name: str, returncode: int) -> None:
         g = self._groups.get(group)
         if g is None:
             return
         g.alive.pop(pid, None)
-        if g.state in (STOPPING, FAILED) or g.desired == DESIRED_STOPPED:
+        if self._shutting_down or g.state in (STOPPING, FAILED) or g.desired == DESIRED_STOPPED:
             return  # a requested stop, or the first cause is already on record
         now = self._clock()
         if not g.alive:
@@ -448,7 +456,8 @@ class ManagerCore:
             g.converger.suspend()
 
     def _drop_converger(self, g: _Group) -> None:
-        """Forget the last run's lifecycle nodes: a stopped group has none to report."""
+        """Forget the last run: a stopped group has no lifecycle nodes and no live handlers."""
+        self._runner.group_stopped(g.spec.name)
         if g.converger is not None:
             self._services.forget(g.converger.node_names())
             g.converger = None

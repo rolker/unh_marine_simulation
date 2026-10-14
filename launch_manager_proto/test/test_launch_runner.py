@@ -105,7 +105,7 @@ def test_stop_targets_each_pid_once_and_forgets_exited_ones():
 
 def test_process_events_are_attributed_by_the_environment_tag():
     run = runner()
-    assert len(run.base_description().entities) == 2
+    assert len(run.base_description().entities) == 3
 
     class Event:
         """The few fields of a process event the handlers read."""
@@ -136,3 +136,60 @@ def test_group_description_passes_declared_defaults_only(monkeypatch):
 def test_a_missing_launch_file_is_a_clear_error():
     with pytest.raises(Exception, match='no launch file|not found|not installed|PackageNot'):
         manager.launch_file_path('launch_manager_proto', 'no_such_launch.py')
+
+
+class FakeContext:
+    """Just enough of LaunchContext for the handler bookkeeping."""
+
+    def __init__(self):
+        self.environment = {}
+        self.registered = []
+        self.asyncio_loop = None
+
+    def register_event_handler(self, handler, append=False):
+        self.registered.append(handler)
+
+    def unregister_event_handler(self, handler):
+        self.registered.remove(handler)
+
+
+def test_handlers_registered_inside_a_group_are_unregistered_when_it_stops():
+    context = FakeContext()
+
+    class Service:
+        pass
+
+    service = Service()
+    service.context = context
+    run = manager.LaunchRunner(service)
+    context.environment[manager.GROUP_ENV] = 'boats'
+    context.register_event_handler('chain-1')
+    context.register_event_handler('chain-2')
+    context.environment[manager.GROUP_ENV] = 'scorer'
+    context.register_event_handler('scorer-chain')
+    del context.environment[manager.GROUP_ENV]
+    context.register_event_handler('base')                # outside any group: kept
+    assert context.registered == ['chain-1', 'chain-2', 'scorer-chain', 'base']
+    run.group_stopped('boats')
+    assert context.registered == ['scorer-chain', 'base']
+    run.group_stopped('boats')                                   # idempotent
+    run.group_stopped('never-started')
+    assert context.registered == ['scorer-chain', 'base']
+
+
+def test_an_on_shutdown_handler_is_never_unregistered_with_its_group():
+    from launch.event_handlers import OnShutdown
+    context = FakeContext()
+
+    class Service:
+        pass
+
+    service = Service()
+    service.context = context
+    run = manager.LaunchRunner(service)
+    keep = OnShutdown(on_shutdown=lambda *a: None)       # launch_ros's adapter handler
+    context.environment[manager.GROUP_ENV] = 'boats'
+    context.register_event_handler(keep)
+    context.register_event_handler('chain')
+    run.group_stopped('boats')
+    assert context.registered == [keep]

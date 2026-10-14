@@ -77,6 +77,9 @@ class FakeRunner(mc.Runner):
     def stop_all(self):
         self.stopped_all += 1
 
+    def group_stopped(self, name):
+        self.cleaned = getattr(self, 'cleaned', []) + [name]
+
     def launch_process(self, group, name='proc'):
         self.pids += 1
         self.core.on_process_started(group, self.pids, name)
@@ -459,3 +462,25 @@ def test_a_stopped_group_reports_no_lifecycle_nodes_and_its_clients_are_forgotte
     entry = [g for g in w.core.status()['groups'] if g['name'] == 'boats'][0]
     assert entry['state'] == mc.STOPPED and entry['lifecycle']['nodes'] == {}
     assert sorted(w.services.forgotten) == ['/b1/x', '/b2/x']
+
+
+def test_the_runner_is_told_when_a_group_has_stopped_so_it_can_drop_its_handlers():
+    w = World()
+    w.boot()
+    w.core.handle_command({'request_id': 'k', 'type': 'STOP', 'groups': ['boats']})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(0.5)
+    assert w.runner.cleaned == ['boats']
+
+
+def test_exits_during_a_shutdown_are_not_failures():
+    w = World()
+    w.boot()
+    w.core.on_shutdown()
+    for pid in list(w.core._groups['boats'].alive):
+        w.core.on_process_exited('boats', pid, 'x', -2)
+    for pid in list(w.core._groups['scorer'].alive):
+        w.core.on_process_exited('scorer', pid, 'x', 0)
+    w.run(0.5)
+    assert w.state('boats') != mc.FAILED and w.state('scorer') != mc.FAILED

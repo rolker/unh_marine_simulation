@@ -42,6 +42,7 @@ held open by a dedicated thread until the manager itself exits.
 """
 
 from collections import deque
+import faulthandler
 import json
 import os
 import signal
@@ -53,7 +54,7 @@ from ament_index_python.packages import get_package_share_directory
 import launch
 from launch.actions import (GroupAction, IncludeLaunchDescription, RegisterEventHandler,
                             SetEnvironmentVariable)
-from launch.event_handlers import OnProcessExit, OnProcessStart
+from launch.event_handlers import OnProcessExit, OnProcessStart, OnShutdown
 from launch.events.process import ShutdownProcess
 from launch.events.process.process_matchers import matches_pid
 from launch.launch_description_sources import AnyLaunchDescriptionSource
@@ -124,7 +125,55 @@ class LaunchRunner(mc.Runner):
         self._lock = threading.Lock()
         self._pids: Dict[str, Set[int]] = {}
         self._targeted: Set[int] = set()
+        self._handlers: Dict[str, List] = {}
         self.supports_scoped_stop = True
+        self._record_handlers()
+
+    def _record_handlers(self) -> None:
+        """
+        Remember which event handlers each group's launch description registers.
+
+        launch keeps a handler until it is unregistered, and ``launch_ros`` lifecycle chains
+        subscribe by node name. A group started a second time in the same service would
+        therefore have its old chains answer the new processes' transitions as well: two
+        writers per node, and a Python lifecycle node dies on the second (found live, a
+        restarted boats group lost its ``mbes_sim`` and ``joy_to_helm`` processes). Handlers
+        registered while a group's description is being visited carry the group's
+        environment tag, so they can be removed again when the group has stopped.
+        """
+        context = self._service.context
+        original = context.register_event_handler
+
+        def register(event_handler, append=False):
+            group = context.environment.get(GROUP_ENV)
+            # An OnShutdown handler outlives the group: launch_ros registers the one that
+            # stops its ROS adapter thread from whichever group first needs the adapter, and
+            # without it the process cannot exit.
+            if group and not isinstance(event_handler, OnShutdown):
+                with self._lock:
+                    self._handlers.setdefault(group, []).append(event_handler)
+            return original(event_handler, append)
+
+        context.register_event_handler = register
+
+    def group_stopped(self, name: str) -> None:
+        """Unregister the group's event handlers (on the launch loop) now that it has stopped."""
+        with self._lock:
+            handlers = self._handlers.pop(name, [])
+        context = self._service.context
+
+        def unregister() -> None:
+            for handler in handlers:
+                try:
+                    context.unregister_event_handler(handler)
+                except ValueError:
+                    pass            # already gone
+
+        loop = context.asyncio_loop
+        if loop is None:
+            unregister()            # the service is not running: nothing else touches it
+        else:
+            loop.call_soon_threadsafe(unregister)
 
     def _on_started(self, event, context) -> None:
         group = (event.env or {}).get(GROUP_ENV)
@@ -142,11 +191,15 @@ class LaunchRunner(mc.Runner):
             self.events.append(
                 ('exited', group, event.pid, event.process_name, event.returncode))
 
+    def _on_shutdown(self, event, context) -> None:
+        self.events.append(('shutdown', '', 0, '', None))
+
     def base_description(self) -> launch.LaunchDescription:
         """Return the handlers that watch every process of every group."""
         return launch.LaunchDescription([
             RegisterEventHandler(OnProcessStart(on_start=self._on_started)),
             RegisterEventHandler(OnProcessExit(on_exit=self._on_exited)),
+            RegisterEventHandler(OnShutdown(on_shutdown=self._on_shutdown)),
         ])
 
     def start(self, spec: GroupSpec) -> None:
@@ -284,7 +337,9 @@ class ManagerNode(Node):
         events = self._runner.events
         while events:
             kind, group, pid, name, code = events.popleft()
-            if kind == 'started':
+            if kind == 'shutdown':
+                self.core.on_shutdown()
+            elif kind == 'started':
                 self.core.on_process_started(group, pid, name)
             else:
                 self.core.on_process_exited(group, pid, name, code)
@@ -320,6 +375,8 @@ def run_manager(spec: ManagerSpec) -> int:
     service = launch.LaunchService(noninteractive=True)
     runner = LaunchRunner(service)
     service.include_launch_description(runner.base_description())
+    # `kill -USR1 <pid>` prints every thread's stack to stderr (a hung shutdown is diagnosable).
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     # rclpy's own SIGINT handler would replace launch's, and ctrl-c would then stop nothing.
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = ManagerNode(spec, runner, on_finished=service.shutdown)
