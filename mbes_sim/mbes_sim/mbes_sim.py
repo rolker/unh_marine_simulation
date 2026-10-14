@@ -157,7 +157,9 @@ class SonarSim(Node):
 
         chart_depth = self.bathy.getDepthAtLatLon(lat_deg, lon_deg)
         self.get_logger().debug(f'chart_depth: {chart_depth}')
-        if chart_depth is not None and chart_depth >= 0:
+        # No ping over a cell with no data, a dry cell, or water the tide has drained.
+        if (chart_depth is not None and chart_depth >= 0
+                and chart_depth + self.tide_level > 0):
             # Actual water depth = chart depth (MLLW) + tide above MLLW
             depth = chart_depth + self.tide_level
             try:

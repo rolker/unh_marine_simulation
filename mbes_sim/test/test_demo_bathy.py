@@ -348,6 +348,12 @@ def _service_info(info):
     return db.service_info('http://svc', lambda url, timeout: body)
 
 
+def test_a_spatial_reference_with_only_latest_wkid_is_accepted():
+    extent = _info()['extent']
+    extent['spatialReference'] = {'latestWkid': 3857}
+    assert _service_info(_info(extent=extent))['step'] == 4.0
+
+
 def test_a_sane_service_description_is_accepted():
     assert _service_info(_info())['step'] == 4.0
 

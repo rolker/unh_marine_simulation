@@ -267,7 +267,8 @@ def service_info(service: str, opener: Opener) -> Dict:
                   'xmax': float(extent['xmax']), 'ymin': float(extent['ymin']),
                   'step': float(info['pixelSizeX']), 'nodata': float(info['noDataValue'])}
         step_y = float(info['pixelSizeY'])
-        wkid = extent['spatialReference'].get('latestWkid', extent['spatialReference']['wkid'])
+        reference = extent['spatialReference']
+        wkid = reference.get('latestWkid') or reference['wkid']
     except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise DemoBathyError('%s: unexpected service description (%s)' % (service, error))
     if wkid not in (3857, 102100, 102113):
@@ -358,10 +359,10 @@ def fetch_tiles(service: str, info: Dict, pixels: Tuple[int, int, int, int], til
         if not cached:
             body = fetch_with_retry(export_url(service, box, ncols, nrows), opener, is_tiff)
             handle, partial = tempfile.mkstemp(dir=work_dir, suffix='.partial')
-            os.chmod(partial, 0o644)
             try:
                 with os.fdopen(handle, 'wb') as stream:
                     stream.write(body)
+                os.chmod(partial, 0o644)
                 check_tile(partial, box, ncols, nrows, info['step'])
                 os.replace(partial, path)
             finally:
@@ -603,14 +604,14 @@ def build(*, bbox: Sequence[float], out: str, resolution: float = DEFAULT_RESOLU
         os.makedirs(out_dir, exist_ok=True)
         # Unique names, so two builds into one directory never share a half-written file.
         partials = []
-        for suffix in ('.partial', '.provenance.partial'):
-            handle, name = tempfile.mkstemp(dir=out_dir, prefix='.build_demo_bathy_',
-                                            suffix=suffix)
-            os.close(handle)
-            os.chmod(name, 0o644)  # mkstemp makes it 0600; the product is for everyone
-            partials.append(name)
-        partial, partial_provenance = partials
         try:
+            for suffix in ('.partial', '.provenance.partial'):
+                handle, name = tempfile.mkstemp(dir=out_dir, prefix='.build_demo_bathy_',
+                                                suffix=suffix)
+                partials.append(name)
+                os.close(handle)
+                os.chmod(name, 0o644)  # mkstemp makes it 0600; the product is for everyone
+            partial, partial_provenance = partials
             write_grid(partial, depth, grid)
             verify_grid(partial, depth, grid)
             provenance = build_provenance(
