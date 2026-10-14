@@ -295,6 +295,40 @@ def test_terminating_the_manager_alone_stops_every_group(tmp_path):
         harness.cleanup()
 
 
+def test_hanging_up_on_the_manager_alone_stops_every_group(tmp_path):
+    harness = Harness(tmp_path, 'a8', closer_seconds=600)
+    watcher = Watcher('lmp_a8')
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            harness.text()
+        os.kill(harness.proc.pid, signal.SIGHUP)
+        harness.proc.wait(timeout=60)
+        assert harness.leftovers() == [], harness.text()
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
+def test_a_malformed_command_is_rejected_and_the_manager_keeps_working(tmp_path):
+    harness = Harness(tmp_path, 'a9', closer_seconds=600)
+    watcher = Watcher('lmp_a9')
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            harness.text()
+        for request_id, profile in (('bad1', [1]), ('bad2', {'a': 1}), ('bad3', None)):
+            ack = watcher.send(request_id, 'SET_PROFILE', profile=profile)
+            assert ack['result'] == 'REJECTED'
+        watcher.command.publish(String(data='{"request_id": ' * 2000))        # not JSON
+        watcher.command.publish(String(data='[' * 100000))                    # recursion bomb
+        assert watcher.send('fine', 'STOP', groups=['closer'])['result'] == 'ACCEPTED'
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'STOPPED', 40)
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
 def test_guard_converges_a_launch_that_loses_replies(tmp_path):
     """The standalone guard fixes the same race for a launch nobody manages."""
     token = 'a3'

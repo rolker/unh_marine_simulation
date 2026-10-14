@@ -70,8 +70,48 @@ from rclpy.signals import SignalHandlerOptions
 from ros2launch_session import LaunchSession
 from std_msgs.msg import String
 
+LOG = launch.logging.get_logger('launch_manager_proto')
 GROUP_ENV = 'LAUNCH_MANAGER_GROUP'
 TICK_PERIOD = 0.1
+
+
+class _GroupSession(LaunchSession):
+    """
+    ``LaunchSession.from_service`` without the output and process collectors.
+
+    ``ros2launch_session`` wraps every injected description in handlers that keep every line
+    of output of every process, and every process event, in lists that are never trimmed.
+    That is right for a test that lives for minutes; a manager runs for days, and each start
+    of each group would add another unbounded copy. The manager tracks what it needs itself.
+    (A ``capture_output=False`` option belongs in ros2launch_session.)
+    """
+
+    def _wrap_launch_description(self, launch_description):
+        return launch.LaunchDescription([
+            IncludeLaunchDescription(
+                launch.LaunchDescriptionSource(launch_description=launch_description))])
+
+
+def shutdown_if_running(service: launch.LaunchService) -> bool:
+    """
+    Shut the launch service down; return False (and do nothing) if its loop is not running yet.
+
+    ``LaunchService.shutdown()`` silently does nothing before ``run()`` has started its loop,
+    so a caller that needs the shutdown to have taken effect has to ask.
+    """
+    if service.context.asyncio_loop is None:
+        return False
+    service.shutdown()
+    return True
+
+
+def _has_group_tag(pid: int) -> bool:
+    """Return whether ``pid`` carries the manager's group tag (is still one of ours)."""
+    try:
+        with open('/proc/%d/environ' % pid, 'rb') as f:
+            return (GROUP_ENV + '=').encode() in f.read()
+    except OSError:
+        return False
 
 
 def _is_running(pid: int) -> bool:
@@ -139,7 +179,7 @@ class LaunchRunner(mc.Runner):
     def __init__(self, service: launch.LaunchService):
         self._service = service
         self.events: Deque[Tuple[str, str, int, str, Optional[int], bool]] = deque()
-        self._release = threading.Event()
+        self._releases: Dict[str, List[threading.Event]] = {}
         self._threads: List[threading.Thread] = []
         self._lock = threading.Lock()
         self._pids: Dict[str, Set[int]] = {}
@@ -205,6 +245,9 @@ class LaunchRunner(mc.Runner):
         """Unregister the group's event handlers (on the launch loop) now that it has stopped."""
         with self._lock:
             handlers = self._handlers.pop(name, [])
+            releases = self._releases.pop(name, [])
+        for event in releases:
+            event.set()             # the holder thread leaves its context and ends
         context = self._service.context
 
         def unregister() -> None:
@@ -217,8 +260,11 @@ class LaunchRunner(mc.Runner):
         loop = context.asyncio_loop
         if loop is None:
             unregister()            # the service is not running: nothing else touches it
-        else:
+            return
+        try:
             loop.call_soon_threadsafe(unregister)
+        except RuntimeError as error:   # the loop closed under us: the service is ending
+            LOG.warning('could not unregister the handlers of group %s: %s' % (name, error))
 
     def _on_started(self, event, context) -> None:
         group = (event.env or {}).get(GROUP_ENV)
@@ -252,13 +298,19 @@ class LaunchRunner(mc.Runner):
         if spec.lifecycle is not None:
             self._sole_writer.add(spec.name)
 
+        release = threading.Event()
+        with self._lock:
+            self._releases.setdefault(spec.name, []).append(release)
+
         def hold() -> None:
-            with LaunchSession.from_service(self._service, description):
-                self._release.wait()
+            # The context stays open until the group has stopped (or the manager exits):
+            # leaving it earlier would make from_service shut the shared service down.
+            with _GroupSession.from_service(self._service, description):
+                release.wait()
 
         thread = threading.Thread(target=hold, name='group-%s' % spec.name, daemon=True)
         thread.start()
-        self._threads.append(thread)
+        self._threads = [t for t in self._threads if t.is_alive()] + [thread]
 
     def stop(self, name: str) -> None:
         """
@@ -272,14 +324,22 @@ class LaunchRunner(mc.Runner):
             pids = [p for p in sorted(self._pids.get(name, ())) if p not in self._targeted]
             self._targeted.update(pids)
         for pid in pids:
-            self._service.emit_event(ShutdownProcess(process_matcher=matches_pid(pid)))
+            try:
+                self._service.emit_event(ShutdownProcess(process_matcher=matches_pid(pid)))
+            except Exception as error:  # noqa: B902  the loop may be closing; try again next tick
+                LOG.warning('could not ask launch to stop pid %d: %s' % (pid, error))
+                with self._lock:
+                    self._targeted.discard(pid)
 
     def stop_all(self) -> None:
         self._service.shutdown()
 
     def close(self) -> None:
         """Let the group threads leave their contexts and make sure no process outlives us."""
-        self._release.set()
+        with self._lock:
+            events = [e for group in self._releases.values() for e in group]
+        for event in events:
+            event.set()
         for thread in self._threads:
             thread.join(timeout=5.0)
         self.terminate_leftovers()
@@ -296,7 +356,7 @@ class LaunchRunner(mc.Runner):
         """
         with self._lock:
             pids = sorted(set().union(*self._pids.values())) if self._pids else []
-        remaining = [p for p in pids if _is_running(p)]
+        remaining = [p for p in pids if _is_running(p) and _has_group_tag(p)]
         signalled = list(remaining)
         for sig, wait in patience:
             for pid in remaining:
@@ -307,7 +367,7 @@ class LaunchRunner(mc.Runner):
             end = time.monotonic() + wait
             while remaining and time.monotonic() < end:
                 time.sleep(0.1)
-                remaining = [p for p in remaining if _is_running(p)]
+                remaining = [p for p in remaining if _is_running(p) and _has_group_tag(p)]
             if not remaining:
                 break
         return signalled
@@ -349,7 +409,7 @@ class ManagerNode(Node):
     """Publishes ``~/status``, takes ``~/command`` and ticks the core."""
 
     def __init__(self, spec: ManagerSpec, runner: LaunchRunner,
-                 on_finished: Callable[[], None]):
+                 on_finished: Callable[[], bool]):
         super().__init__(spec.name)
         self.spec = spec
         self._runner = runner
@@ -372,13 +432,16 @@ class ManagerNode(Node):
 
     def _on_command(self, message: String) -> None:
         try:
-            parsed = json.loads(message.data)
-        except ValueError:
-            parsed = None
-        ack = self.core.handle_command(parsed)
-        if not ack['request_id']:
-            self.get_logger().warning('ignored a command without a usable request_id')
-        self._publish(force=True)
+            try:
+                parsed = json.loads(message.data)
+            except (ValueError, RecursionError):
+                parsed = None
+            ack = self.core.handle_command(parsed)
+            if not ack['request_id']:
+                self.get_logger().warning('ignored a command without a usable request_id')
+            self._publish(force=True)
+        except Exception as error:  # noqa: B902  one bad message must not end the executor
+            self.get_logger().error('command handling failed: %r' % (error,))
 
     def _drain(self) -> None:
         events = self._runner.events
@@ -392,13 +455,18 @@ class ManagerNode(Node):
                 self.core.on_process_exited(group, pid, name, code, respawning)
 
     def _tick(self) -> None:
-        self._drain()
-        self.core.tick()
-        self._publish()
+        try:
+            self._drain()
+            self.core.tick()
+            self._publish()
+        except Exception as error:  # noqa: B902  the next tick may succeed; never end the thread
+            self.get_logger().error('tick failed: %r' % (error,))
+            return
         if self.core.finished and not self._finished:
-            self._finished = True
-            self.get_logger().info('every group is stopped: the manager is done')
-            self._on_finished()
+            # The launch loop may not be running yet; keep asking until the shutdown is taken.
+            if self._on_finished():
+                self._finished = True
+                self.get_logger().info('every group is stopped: the manager is done')
 
     def _publish(self, force: bool = False) -> None:
         snapshot = self.core.status()
@@ -422,26 +490,38 @@ def run_manager(spec: ManagerSpec) -> int:
     service = launch.LaunchService(noninteractive=True)
     runner = LaunchRunner(service)
     service.include_launch_description(runner.base_description())
-    # `kill -USR1 <pid>` prints every thread's stack to stderr (a hung shutdown is diagnosable).
-    faulthandler.register(signal.SIGUSR1, all_threads=True)
     # rclpy's own SIGINT handler would replace launch's, and ctrl-c would then stop nothing.
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-    node = ManagerNode(spec, runner, on_finished=service.shutdown)
+    node = ManagerNode(spec, runner, on_finished=lambda: shutdown_if_running(service))
     executor = SingleThreadedExecutor()
     executor.add_node(node)
-    spinner = threading.Thread(target=executor.spin, name='rclpy', daemon=True)
+
+    def spin() -> None:
+        try:
+            executor.spin()
+        except Exception as error:  # noqa: B902  a dead executor means nothing is managed
+            LOG.error('the manager thread died (%r): shutting down' % (error,))
+            shutdown_if_running(service)
+
+    spinner = threading.Thread(target=spin, name='rclpy', daemon=True)
     spinner.start()
+    # `kill -USR1 <pid>` prints every thread's stack to stderr (a hung shutdown is diagnosable).
+    faulthandler.register(signal.SIGUSR1, all_threads=True)
     # launch records a SIGTERM handler but leaves the OS disposition at its default, so a
-    # plain `kill` (what systemd sends) ends the process at once and orphans every group.
-    # A Python-level handler makes the signal arrive; it shuts down like ctrl-c does.
-    signal.signal(signal.SIGTERM,
-                  lambda signum, frame: service.shutdown(force_sync=True))
+    # plain `kill` (what systemd sends) ends the process at once and orphans every group, and
+    # a closed terminal (SIGHUP) does the same. A Python-level handler makes the signal
+    # arrive; it shuts down like ctrl-c does.
+    for signum in (signal.SIGTERM, signal.SIGHUP):
+        signal.signal(signum, lambda number, frame: service.shutdown(force_sync=True))
     try:
         return service.run(shutdown_when_idle=False)
     finally:
         runner.close()
         executor.shutdown()
         spinner.join(timeout=5.0)
-        node.destroy_node()
+        if spinner.is_alive():
+            LOG.warning('the manager thread did not stop; leaving its node undestroyed')
+        else:
+            node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()

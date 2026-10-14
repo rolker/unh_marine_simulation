@@ -52,12 +52,18 @@ def runner():
     return manager.LaunchRunner(launch.LaunchService(noninteractive=True))
 
 
+def tagged_env():
+    """Return an environment carrying the group tag, as every group process has."""
+    return dict(os.environ, **{manager.GROUP_ENV: 'g'})
+
+
 def wait_for_up(proc):
     assert proc.stdout.readline().strip() == 'up'
 
 
 def test_leftovers_that_obey_sigint_are_stopped_first():
-    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'])
+    child = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             env=tagged_env())
     run = runner()
     run._pids = {'g': {child.pid}}
     began = time.monotonic()
@@ -69,7 +75,7 @@ def test_leftovers_that_obey_sigint_are_stopped_first():
 
 def test_leftovers_that_ignore_sigint_and_sigterm_are_killed():
     child = subprocess.Popen([sys.executable, '-c', IGNORES_EVERYTHING],
-                             stdout=subprocess.PIPE, text=True)
+                             stdout=subprocess.PIPE, text=True, env=tagged_env())
     wait_for_up(child)
     run = runner()
     run._pids = {'g': {child.pid}}
@@ -82,7 +88,7 @@ def test_leftovers_that_ignore_sigint_and_sigterm_are_killed():
 def test_no_leftovers_means_no_signals():
     run = runner()
     assert run.terminate_leftovers() == []
-    done = subprocess.Popen([sys.executable, '-c', 'pass'])
+    done = subprocess.Popen([sys.executable, '-c', 'pass'], env=tagged_env())
     done.wait()
     run._pids = {'g': {done.pid}}
     assert run.terminate_leftovers() == []
@@ -263,3 +269,75 @@ def test_will_respawn_reads_launchs_private_fields_and_fails_safe():
     real = launch.actions.ExecuteProcess(cmd=['true'], respawn=True)
     assert manager.will_respawn(real) is True
     assert manager.will_respawn(launch.actions.ExecuteProcess(cmd=['true'])) is False
+
+
+def test_a_pid_that_no_longer_carries_the_group_tag_is_never_signalled():
+    stranger = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                                env={k: v for k, v in os.environ.items()
+                                     if k != manager.GROUP_ENV})
+    try:
+        run = runner()
+        run._pids = {'g': {stranger.pid}}        # as if the pid had been recycled
+        assert run.terminate_leftovers(patience=((signal.SIGKILL, 0.5),)) == []
+        assert stranger.poll() is None           # still running: nobody touched it
+    finally:
+        stranger.kill()
+        stranger.wait()
+
+
+def test_shutdown_if_running_does_nothing_before_the_loop_runs():
+    service = launch.LaunchService(noninteractive=True)
+    assert manager.shutdown_if_running(service) is False
+
+
+def test_the_group_session_keeps_no_output_or_process_collectors():
+    from launch.actions import IncludeLaunchDescription, RegisterEventHandler
+    service = launch.LaunchService(noninteractive=True)
+    session = manager._GroupSession._create_borrowed(service)
+    wrapped = session._wrap_launch_description(launch.LaunchDescription([]))
+    kinds = [type(e) for e in wrapped.entities]
+    assert kinds == [IncludeLaunchDescription]
+    assert RegisterEventHandler not in kinds
+
+
+def test_a_stopped_groups_holder_thread_ends_and_a_restart_gets_a_new_one(monkeypatch):
+    import contextlib
+    import threading
+    monkeypatch.setattr(manager, 'group_description', lambda spec: launch.LaunchDescription([]))
+    log = []
+
+    @contextlib.contextmanager
+    def fake_from_service(service, description):
+        log.append('enter')
+        try:
+            yield object()
+        finally:
+            log.append('exit')
+
+    monkeypatch.setattr(manager._GroupSession, 'from_service', fake_from_service)
+    context = FakeContext()
+
+    class Service:
+        pass
+
+    service = Service()
+    service.context = context
+    run = manager.LaunchRunner(service)
+    spec = GroupSpec(name='camp', package=None, file='x')
+    run.start(spec)
+    deadline = time.monotonic() + 3
+    while log != ['enter'] and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert log == ['enter']
+    run.group_stopped('camp')                  # the group has stopped: its context is released
+    deadline = time.monotonic() + 3
+    while log != ['enter', 'exit'] and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert log == ['enter', 'exit']
+    run.start(spec)
+    run.close()
+    deadline = time.monotonic() + 3
+    while len(log) < 4 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert log == ['enter', 'exit', 'enter', 'exit']
+    assert threading.active_count() >= 1
