@@ -69,6 +69,7 @@ DISCOVER_PERIOD = 2.0
 # decides, and names it. Everything here is final.
 _BAD_NODE_STATUS = (core.FAILED, core.FINALIZED_STATUS)
 START_GRACE = 3.0
+HOLD_OPEN_SECONDS = 300.0
 _NO_SCOPED_STOP = ('scoped stop is not supported by this runner: stop everything or leave '
                    'the group running')
 
@@ -153,6 +154,7 @@ class ManagerCore:
         self._began = False
         self._shutting_down = False
         self._hold_open = False
+        self._hold_open_until = 0.0
 
     # -- queries ---------------------------------------------------------------------------
 
@@ -172,11 +174,13 @@ class ManagerCore:
     @property
     def finished(self) -> bool:
         """Whether the manager should exit: configured to, and every group is at rest."""
-        return (self.spec.exit_when_all_stopped and self._began and not self._hold_open and all(
+        held = self._hold_open and self._clock() < self._hold_open_until
+        return (self.spec.exit_when_all_stopped and self._began and not held and all(
             g.desired == DESIRED_STOPPED and g.state == STOPPED and not g.alive
             for g in self._groups.values()))
         # _hold_open: after CLEAR_FAILURE the operator is about to START again; an
-        # all-stopped manager must not exit under them (cleared by START or SET_PROFILE).
+        # all-stopped manager must not exit under them. Cleared by START, SET_PROFILE or STOP,
+        # and it lapses after HOLD_OPEN_SECONDS.
 
     # -- starting up ------------------------------------------------------------------------
 
@@ -310,6 +314,9 @@ class ManagerCore:
             self._groups[n].desired = DESIRED_STOPPED
         if kind == 'CLEAR_FAILURE':
             self._hold_open = True
+            self._hold_open_until = self._clock() + HOLD_OPEN_SECONDS
+        else:
+            self._hold_open = False     # an explicit STOP: the operator is not retrying
         return ACCEPTED, '%s %s' % ('clear failure of' if kind == 'CLEAR_FAILURE' else 'stop',
                                     ', '.join(names))
 
@@ -365,6 +372,8 @@ class ManagerCore:
                 self._tick_converger(g)
             return
         if g.state == STOPPING:
+            if not g.alive and g.start_pending and now - g.started_at < START_GRACE:
+                return              # a launch still spawning is neither stopped nor restartable
             if not g.alive:
                 self._drop_converger(g)
                 self._set(g, STOPPED, '', now)
@@ -384,8 +393,10 @@ class ManagerCore:
                 self._runner.stop(g.spec.name)
         elif g.start_pending and now - g.started_at < START_GRACE:
             # The launch is still spawning its processes: none is attributed yet, but some
-            # will be. Stopping now would drop the group's handlers and then find them.
-            self._set(g, STOPPING, 'waiting for the launch to finish starting', now)
+            # will be. Stopping now would drop the group's handlers and then find them. The
+            # state stays as it was so that _begin_stop still runs when a process shows up.
+            self._suspend(g)
+            g.detail = 'stop requested; waiting for the launch to finish starting'
         elif g.state != STOPPED:
             self._drop_converger(g)
             self._set(g, STOPPED, '', now)
@@ -437,6 +448,8 @@ class ManagerCore:
     def _step_running(self, g: _Group, now: float) -> None:
         if self._shutting_down:
             return
+        if g.converger is not None and g.converger.suspended:
+            g.converger.resume()    # a stop during the start grace was withdrawn by a START
         self._tick_converger(g, discover=True)
         reasons = self._not_ready_reasons(g)
         bad = [r for r in (g.converger.report() if g.converger else [])

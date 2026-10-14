@@ -599,7 +599,8 @@ def test_stop_right_after_start_waits_for_the_launch_to_show_its_processes():
     w.run(0.3)                                     # boats injected, no process attributed yet
     w.core.handle_command({'request_id': 'x', 'type': 'STOP', 'groups': ['boats']})
     w.run(1.0)
-    assert w.state('boats') == mc.STOPPING         # not declared stopped while launching
+    assert w.state('boats') == mc.STARTING         # not declared stopped while launching
+    assert 'waiting for the launch' in w.core.status()['groups'][0]['detail']
     w.runner.launch_process('boats')               # the process appears late
     w.run(0.5)
     assert w.runner.stopped == ['boats']
@@ -634,3 +635,66 @@ def test_stop_everything_works_again_after_a_group_was_started_while_stopping():
     w.core.handle_command({'request_id': 'c', 'type': 'STOP', 'groups': everything})
     w.run(0.5)
     assert w.runner.stopped_all == 2                            # issued again, not skipped
+
+
+def test_start_during_the_grace_does_not_launch_a_second_copy():
+    w = World()
+    w.core.begin()
+    w.run(0.3)
+    w.core.handle_command({'request_id': 'x', 'type': 'STOP', 'groups': ['boats']})
+    w.run(0.5)
+    w.core.handle_command({'request_id': 'y', 'type': 'START', 'groups': ['boats']})
+    w.run(1.0)
+    assert w.runner.started.count('boats') == 1          # the first launch is still the one
+    w.runner.launch_process('boats')
+    w.runner.launch_process('boats')
+    assert w.run(30, until=lambda: w.state('boats') == mc.READY), w.core.status()
+
+
+def test_stop_everything_during_the_grace_is_issued_once_a_process_shows_up():
+    w = World(scoped=False)
+    w.core.begin()
+    w.run(0.3)
+    w.core.handle_command({'request_id': 'x', 'type': 'STOP',
+                           'groups': ['boats', 'camp', 'scorer']})
+    w.run(0.5)
+    assert w.runner.stopped_all == 0                     # nothing to stop yet
+    w.runner.launch_process('boats')
+    w.runner.launch_process('scorer')
+    w.run(0.5)
+    assert w.runner.stopped_all == 1
+    w.runner.finish_stop('boats')
+    w.runner.finish_stop('scorer')
+    w.run(1)
+    assert w.core.finished
+
+
+def test_clear_failure_does_not_hold_the_manager_open_forever():
+    data = copy.deepcopy(DATA)
+    data['groups']['camp']['requires'] = []
+    data['groups']['boats']['follows'] = []
+    data['groups']['scorer']['follows'] = []
+    data['profiles']['demo'] = ['boats']
+    w = World(data=data, nodes={'/b1/x': FakeNode(), '/score': FakeNode()})
+    w.core.begin()
+    w.run(1)
+    w.runner.launch_process('boats')
+    w.run(30)
+    w.core.handle_command({'request_id': 'c', 'type': 'CLEAR_FAILURE', 'groups': ['boats']})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(1)
+    assert not w.core.finished
+    w.run(mc.HOLD_OPEN_SECONDS + 1)
+    assert w.core.finished                               # the hold lapsed
+    w2 = World(data=data, nodes={'/b1/x': FakeNode(), '/score': FakeNode()})
+    w2.core.begin()
+    w2.run(1)
+    w2.runner.launch_process('boats')
+    w2.run(30)
+    w2.core.handle_command({'request_id': 'c', 'type': 'CLEAR_FAILURE', 'groups': ['boats']})
+    w2.core.handle_command({'request_id': 's', 'type': 'STOP', 'groups': ['boats']})
+    w2.run(0.5)
+    w2.runner.finish_stop('boats')
+    w2.run(1)
+    assert w2.core.finished                              # an explicit STOP clears the hold

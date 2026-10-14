@@ -302,7 +302,6 @@ def test_the_group_session_keeps_no_output_or_process_collectors():
 
 def test_a_stopped_groups_holder_thread_ends_and_a_restart_gets_a_new_one(monkeypatch):
     import contextlib
-    import threading
     monkeypatch.setattr(manager, 'group_description', lambda spec: launch.LaunchDescription([]))
     log = []
 
@@ -340,4 +339,66 @@ def test_a_stopped_groups_holder_thread_ends_and_a_restart_gets_a_new_one(monkey
     while len(log) < 4 and time.monotonic() < deadline:
         time.sleep(0.02)
     assert log == ['enter', 'exit', 'enter', 'exit']
-    assert threading.active_count() >= 1
+
+
+def test_a_pid_tagged_for_another_group_is_not_ours():
+    other = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)'],
+                             env=dict(os.environ, **{manager.GROUP_ENV: 'other'}))
+    try:
+        assert manager._has_group_tag(other.pid, 'other') is True
+        assert manager._has_group_tag(other.pid, 'g') is False
+        assert manager._has_group_tag(other.pid, 'othe') is False       # exact, not a prefix
+        run = runner()
+        run._pids = {'g': {other.pid}}                                  # attributed to g
+        assert run.terminate_leftovers(patience=((signal.SIGKILL, 0.5),)) == []
+        assert other.poll() is None
+    finally:
+        other.kill()
+        other.wait()
+
+
+def test_the_signal_handler_does_not_wait_for_the_services_lock():
+    import threading
+    service = launch.LaunchService(noninteractive=True)
+    handler = manager.make_signal_handler(service)
+    lock = service._LaunchService__loop_from_run_thread_lock
+    held = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with lock:                     # as shutdown() does while it waits for the loop
+            held.set()
+            release.wait(5)
+
+    thread = threading.Thread(target=hold)
+    thread.start()
+    held.wait(5)
+    finished = threading.Event()
+    threading.Thread(target=lambda: (handler(signal.SIGTERM, None), finished.set())).start()
+    assert finished.wait(2), 'the handler blocked on the service lock'
+    release.set()
+    thread.join()
+
+
+def test_a_signal_before_the_loop_runs_still_ends_the_run():
+    service = launch.LaunchService(noninteractive=True)
+    manager.make_signal_handler(service)(signal.SIGHUP, None)    # arrives during start-up
+    assert service.run(shutdown_when_idle=False) == 0
+
+
+def test_leaving_a_group_session_never_shuts_the_shared_service_down():
+    """The property the holder threads rely on: no collectors, so no shutdown on exit."""
+    calls = []
+
+    class Service:
+        """Records what the session asks of the shared service."""
+
+        def emit_event(self, event):
+            calls.append(('emit', type(event).__name__))
+
+        def shutdown(self):
+            calls.append(('shutdown',))
+
+    with manager._GroupSession.from_service(Service(), launch.LaunchDescription([])):
+        pass
+    assert calls == [('emit', 'IncludeLaunchDescription')]

@@ -212,6 +212,10 @@ class LifecycleConverger:
     def node_names(self) -> List[str]:
         return sorted(self._nodes)
 
+    @property
+    def suspended(self) -> bool:
+        return self._suspended
+
     def suspend(self) -> None:
         """Stop reading and commanding (the group is stopping or stopped)."""
         self._suspended = True

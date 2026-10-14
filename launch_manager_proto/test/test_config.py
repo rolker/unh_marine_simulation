@@ -255,6 +255,8 @@ def test_numbers_and_flags_may_arrive_as_placeholder_text():
     text = problems(data, period='soon', exit='maybe', settle='-1', tries='0', reply='x',
                     ready='y')
     assert text.count('must be') >= 5
+    assert 'finite' in problems(data, period='1', exit='true', settle='nan', tries='1', reply='1',
+                                ready='1')
 
 
 def test_a_lifecycle_section_that_could_never_become_ready_is_refused():

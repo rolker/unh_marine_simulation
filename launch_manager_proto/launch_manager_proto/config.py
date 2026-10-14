@@ -370,8 +370,9 @@ def parse_config(data: Any, substitutions: Optional[Mapping[str, str]] = None) -
                 spec.converge.max_attempts = value
         elif key == 'settle':
             value = _scalar(value)
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
-                problems.append('manager.converge.settle must be >= 0')
+            if isinstance(value, bool) or not isinstance(value, (int, float)) or \
+                    not math.isfinite(value) or value < 0:
+                problems.append('manager.converge.settle must be a finite number >= 0')
             else:
                 spec.converge.settle = float(value)
         elif key in _CONVERGE_FIELDS:

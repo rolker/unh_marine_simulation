@@ -105,13 +105,29 @@ def shutdown_if_running(service: launch.LaunchService) -> bool:
     return True
 
 
-def _has_group_tag(pid: int) -> bool:
-    """Return whether ``pid`` carries the manager's group tag (is still one of ours)."""
+def _has_group_tag(pid: int, group: str) -> bool:
+    """Return whether ``pid`` still carries exactly the tag of the group it was attributed to."""
+    wanted = ('%s=%s' % (GROUP_ENV, group)).encode()
     try:
         with open('/proc/%d/environ' % pid, 'rb') as f:
-            return (GROUP_ENV + '=').encode() in f.read()
+            return wanted in f.read().split(b'\0')
     except OSError:
         return False
+
+
+def make_signal_handler(service: launch.LaunchService):
+    """
+    Return a signal handler that asks the launch service to shut down, without taking a lock.
+
+    It runs on the main thread, which is also the launch loop's thread. ``shutdown()`` holds a
+    lock while it waits for that loop, so a handler that called it could deadlock against the
+    manager thread doing the same; queueing the ``Shutdown`` event directly cannot. It also
+    works before the loop has started: the event waits in the queue and ends the run at once.
+    """
+    def handler(signum, frame):
+        service.context.emit_event_sync(launch.events.Shutdown(
+            reason='signal %s' % signal.Signals(signum).name, due_to_sigint=False))
+    return handler
 
 
 def _is_running(pid: int) -> bool:
@@ -340,8 +356,9 @@ class LaunchRunner(mc.Runner):
             events = [e for group in self._releases.values() for e in group]
         for event in events:
             event.set()
+        deadline = time.monotonic() + 5.0       # one budget for all, not five seconds each
         for thread in self._threads:
-            thread.join(timeout=5.0)
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
         self.terminate_leftovers()
 
     def terminate_leftovers(self, patience=((signal.SIGINT, 8.0), (signal.SIGTERM, 4.0),
@@ -355,8 +372,12 @@ class LaunchRunner(mc.Runner):
         launch's own order: SIGINT, then SIGTERM, then SIGKILL.
         """
         with self._lock:
-            pids = sorted(set().union(*self._pids.values())) if self._pids else []
-        remaining = [p for p in pids if _is_running(p) and _has_group_tag(p)]
+            owner = {pid: group for group, pids in self._pids.items() for pid in pids}
+
+        def ours(pid: int) -> bool:
+            return _is_running(pid) and _has_group_tag(pid, owner[pid])
+
+        remaining = [p for p in sorted(owner) if ours(p)]
         signalled = list(remaining)
         for sig, wait in patience:
             for pid in remaining:
@@ -367,7 +388,7 @@ class LaunchRunner(mc.Runner):
             end = time.monotonic() + wait
             while remaining and time.monotonic() < end:
                 time.sleep(0.1)
-                remaining = [p for p in remaining if _is_running(p) and _has_group_tag(p)]
+                remaining = [p for p in remaining if ours(p)]
             if not remaining:
                 break
         return signalled
@@ -510,12 +531,16 @@ def run_manager(spec: ManagerSpec) -> int:
     # launch records a SIGTERM handler but leaves the OS disposition at its default, so a
     # plain `kill` (what systemd sends) ends the process at once and orphans every group, and
     # a closed terminal (SIGHUP) does the same. A Python-level handler makes the signal
-    # arrive; it shuts down like ctrl-c does.
+    # arrive and queues a Shutdown event, like ctrl-c. launch's own SIGTERM handler also runs
+    # and cancels the run task, so on SIGTERM the orderly stop can be cut short: whatever is
+    # still running afterwards is stopped by pid in close() below.
+    handler = make_signal_handler(service)
     for signum in (signal.SIGTERM, signal.SIGHUP):
-        signal.signal(signum, lambda number, frame: service.shutdown(force_sync=True))
+        signal.signal(signum, handler)
     try:
         return service.run(shutdown_when_idle=False)
     finally:
+        runner.events.append(('shutdown', '', 0, '', None, False))   # the core must know
         runner.close()
         executor.shutdown()
         spinner.join(timeout=5.0)

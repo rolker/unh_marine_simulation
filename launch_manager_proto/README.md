@@ -165,7 +165,9 @@ here, in the terminal's ERROR line (`group boats FAILED: ... /clownfish/mbes_sim
 a CAMP that never opens, instead of as a boat that silently does not work. To retry:
 `command clear-failure boats`, then `command start boats` (or close the manager and run it
 again). After a `CLEAR_FAILURE` an all-stopped manager waits for the `START` instead of
-exiting, even with `exit_when_all_stopped`.
+exiting, even with `exit_when_all_stopped`; the wait ends with a `START`, `SET_PROFILE` or
+`STOP`, or after five minutes. A `STOP` sent while a group's launch is still starting is held
+for up to three seconds until its processes show up, so that nothing is left running.
 
 ## Trust
 
