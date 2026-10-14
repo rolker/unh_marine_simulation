@@ -156,3 +156,22 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [x] a window that closes mid-placement is a named problem, not an abort — `marine_simulation/scripts/place_windows.py:356`
 - [x] switches read in any letter case; one look after the deadline; private state directories; empty-fleet guard
 - [x] fixed ROS domain 42 on shared hosts, tilde paths in direct launches — `marine_simulation/scripts/run_demo.sh:29` (deferred: needs an owner decision / low risk, see the review entry)
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 11:43 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-94 at `6b32167`
+**Mode**: pre-push
+**Depth**: Deep (reason: launch and process control code), reduced re-review of the round 2 fixes: Codex and one Claude pass (Gemini timed out at 420 s)
+**Must-fix**: 0 | **Suggestions**: 5
+**Round**: 3 | **Ship**: recommended — Codex's three must-fix items were fixed in 477727f and 6b32167; only suggestions remain
+
+### Findings
+- [ ] (suggestion) a window that vanishes during settle is not looked for again within the timeout (Codex) — `marine_simulation/scripts/place_windows.py:323`
+- [ ] (suggestion) mode 0o700 only applies to a newly created state directory; an existing 0755 one stays (Claude) — `marine_simulation/launch/demo_launch.py:354`
+- [ ] (suggestion) the top-of-loop list_windows in place_all can still abort every placement on a wmctrl failure (Claude) — `marine_simulation/scripts/place_windows.py:313`
+- [ ] (suggestion) no test for DEMO_PLACE_WINDOWS precedence or the "package not found" branch (Claude) — `marine_simulation/test/test_run_demo.py:1`
+- [ ] (suggestion) fixed ROS domain 42 on shared hosts (carried from round 2, deferred) — `marine_simulation/scripts/run_demo.sh:29`
