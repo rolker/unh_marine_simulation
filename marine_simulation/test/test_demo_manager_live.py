@@ -28,14 +28,19 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 """
-Host-only: the demo's boats under the launch manager, checked end to end.
+Host-only: the demo's boats under the launch manager, end to end.
 
 Needs the geoid and VDatum grids under ``~/data/world/datum``, takes a minute or two and
 starts about forty processes, so it only runs when ``ROS_DOMAIN_ID`` is set to a private
 domain above 100 (set it on purpose; this test never picks one for you) and otherwise skips
-with that reason. It starts ``demo_manager.py`` with the ``boats`` profile for two boats
-and no joysticks, waits for the manager to call the boats READY, and runs the existing
-``demo_boats_selftest.py`` against them. No CAMP and no GUI is started.
+with that reason.
+
+It starts ``demo_manager.py`` with the ``headless`` profile (boats and scorer, no CAMP) for
+two boats and no joysticks, and waits for the manager to call the boats READY. Then it runs
+the existing ``demo_boats_selftest.py`` against them, stops and restarts the boats group (a
+restart used to kill every Python lifecycle node: stale launch_ros handlers sent them a
+second, invalid transition) and finally interrupts the manager, which must take everything
+down. No CAMP and no GUI is started.
 """
 
 import json
@@ -43,8 +48,10 @@ import os
 import pathlib
 import signal
 import subprocess
+import sys
 import time
 
+from ament_index_python.packages import get_package_prefix
 import pytest
 import rclpy
 from std_msgs.msg import String
@@ -61,11 +68,13 @@ pytestmark = [
 ]
 
 
-def test_boats_under_the_manager_reach_ready_and_pass_the_selftest(tmp_path):
+def test_boats_under_the_manager_reach_ready_restart_and_stop_cleanly(tmp_path):
     log = tmp_path / 'manager.log'
+    # the script itself, not `ros2 run` (whose wrapper process would take the SIGINT)
+    script = os.path.join(get_package_prefix('marine_simulation'), 'lib', 'marine_simulation',
+                          'demo_manager.py')
     manager = subprocess.Popen(
-        ['ros2', 'run', 'marine_simulation', 'demo_manager.py', '--profile', 'boats',
-         '--boats', BOATS, '--no-joysticks'],
+        [sys.executable, script, '--profile', 'headless', '--boats', BOATS, '--no-joysticks'],
         stdout=open(log, 'w'), stderr=subprocess.STDOUT, start_new_session=True)
     rclpy.init()
     node = rclpy.create_node('demo_manager_live_test')
@@ -73,29 +82,63 @@ def test_boats_under_the_manager_reach_ready_and_pass_the_selftest(tmp_path):
     node.create_subscription(
         String, '/demo_manager/status',
         lambda m: latest.update(json.loads(m.data)), 10)
-    try:
-        end = time.monotonic() + 240
-        ready = False
+    commands = node.create_publisher(String, '/demo_manager/command', 10)
+
+    def boats():
+        return {g['name']: g for g in latest.get('groups', [])}['boats']
+
+    def wait_for(predicate, timeout):
+        end = time.monotonic() + timeout
         while time.monotonic() < end and manager.poll() is None:
             rclpy.spin_once(node, timeout_sec=0.2)
-            groups = {g['name']: g for g in latest.get('groups', [])}
-            if groups.get('boats', {}).get('state') == 'READY':
-                ready = True
-                break
-        assert ready, (json.dumps(latest, indent=1), log.read_text()[-3000:])
-        nodes = groups['boats']['lifecycle']['nodes']
+            if latest and predicate():
+                return True
+        return False
+
+    def command(request_id, kind, **fields):
+        message = String(data=json.dumps({'request_id': request_id, 'type': kind, **fields}))
+        end = time.monotonic() + 20
+        while time.monotonic() < end:
+            if any(a['request_id'] == request_id for a in latest.get('acks', [])):
+                return
+            commands.publish(message)
+            wait_for(lambda: False, 0.5)
+        raise AssertionError('no ack for %s' % request_id)
+
+    try:
+        assert wait_for(lambda: boats()['state'] == 'READY', 240), \
+            (json.dumps(latest, indent=1), log.read_text()[-3000:])
+        nodes = boats()['lifecycle']['nodes']
         assert len(nodes) >= 10, sorted(nodes)
         assert all(n['state'] == 'active' for n in nodes.values()), nodes
         selftest = subprocess.run(
             ['ros2', 'run', 'marine_simulation', 'demo_boats_selftest.py', '--boats', BOATS],
             capture_output=True, text=True, timeout=400)
         assert selftest.returncode == 0, selftest.stdout[-4000:] + selftest.stderr[-2000:]
+
+        command('live-stop', 'STOP', groups=['boats'])
+        assert wait_for(lambda: boats()['state'] == 'STOPPED', 120), log.read_text()[-3000:]
+        assert boats()['lifecycle']['nodes'] == {}
+        command('live-start', 'START', groups=['boats'])
+        assert wait_for(lambda: boats()['state'] == 'READY', 240), \
+            (json.dumps(latest, indent=1), log.read_text()[-3000:])
+        assert all(n['state'] == 'active' for n in boats()['lifecycle']['nodes'].values())
+        dead = [line for line in log.read_text().splitlines() if 'process has died' in line
+                and 'asv_sim' not in line]       # asv_sim exits -2 on every SIGINT
+        assert dead == [], dead
+
+        os.kill(manager.pid, signal.SIGINT)               # the manager alone, not its group
+        assert manager.wait(timeout=90) is not None
+        end = time.monotonic() + 8.0                      # let the graph forget the nodes
+        while time.monotonic() < end:
+            rclpy.spin_once(node, timeout_sec=0.2)
+        remaining = sorted(
+            ns.rstrip('/') + '/' + name for name, ns in node.get_node_names_and_namespaces()
+            if ns.startswith(('/bluefin', '/clownfish')) or name in (
+                'asv_sim', 'coverage_assessment', 'demo_manager'))
+        assert remaining == [], remaining
     finally:
         node.destroy_node()
         rclpy.shutdown()
         if manager.poll() is None:
-            os.killpg(manager.pid, signal.SIGINT)
-            try:
-                manager.wait(timeout=60)
-            except subprocess.TimeoutExpired:
-                os.killpg(manager.pid, signal.SIGKILL)
+            os.killpg(manager.pid, signal.SIGKILL)

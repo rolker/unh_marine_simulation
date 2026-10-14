@@ -14,7 +14,10 @@ manager:
   # Closing CAMP stops everything and ends the manager process, so the terminal returns.
   exit_when_all_stopped: true
   converge:
-    settle: 2.0            # autostart in the per-package launch files gets the first move
+    # The manager is the only writer of lifecycle transitions in the groups it runs: the
+    # per-package launch files' autostart chains are not acted on (see the README of
+    # launch_manager_proto), so there is nothing to wait for but a node finishing its start.
+    settle: 1.0
 
 groups:
   boats:

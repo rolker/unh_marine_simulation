@@ -146,6 +146,11 @@ def test_main_refuses_an_unknown_profile_and_an_unknown_boat(capsys):
     assert 'roster problem' in capsys.readouterr().err
 
 
+def test_the_per_boat_node_count_agrees_with_the_launch_file():
+    launch = demo_manager._load_boats_launch(str(PACKAGE))
+    assert demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT == launch.LIFECYCLE_NODES_PER_BOAT
+
+
 def test_boats_regex_escapes():
     assert demo_manager.boats_regex(['a', 'b.c']) == r'a|b\.c'
 
