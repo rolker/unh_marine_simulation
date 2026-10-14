@@ -21,3 +21,21 @@ issue: 94
 - [ ] Watch: item 4 depends on #93 (being worked in parallel); keep it behind a launch argument until it lands.
 - [ ] Consequences: README helper card, `.agents/README.md` inventory/pitfalls, `package.xml` exec_depends (camp already there; add coverage_assessment, wmctrl), CMake install of new dirs/scripts and tests.
 - [ ] The acceptance test (cold boot, one command) is a human rehearsal on the dev laptop and cannot be run by an agent.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-14 10:03 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-94/plan.md` at `a9bf24f`
+**Branch**: feature/issue-94 at `a9bf24f`
+**Phases**: single
+
+### Open questions
+- [ ] Contact name/number for the helper card
+- [ ] Monitor assignment on the event machine
+- [ ] Autostart at login or one typed command
+- [ ] Reset of CUBE/scorer between players (not in plan)
+- [ ] OK to start CAMP directly and file a camp issue for launch arguments
+- [ ] Live coverage colormap and range
+- [ ] Name of the target-area launch/node from #93
