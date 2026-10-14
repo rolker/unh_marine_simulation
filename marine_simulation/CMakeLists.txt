@@ -9,6 +9,7 @@ install(PROGRAMS
   scripts/check_multi_boat_graph.py
   scripts/demo_boats_selftest.py
   scripts/place_windows.py
+  scripts/run_demo.sh
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
@@ -21,6 +22,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_place_windows test/test_place_windows.py)
   ament_add_pytest_test(test_demo_launch test/test_demo_launch.py)
+  ament_add_pytest_test(test_run_demo test/test_run_demo.py)
 endif()
 
 ament_package()
