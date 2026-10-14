@@ -126,11 +126,20 @@ so the demo default must be a set standard.
 
 ## Open Questions
 
-- Demo `SurveyStandard` values: proposal is S-44 Order 1a (a = 0.5, b = 0.013) named `demo`; is a looser "arcade" standard wanted so kids see "meets standard" go up?
-- Node namespace in the demo: should the publisher run in the root namespace so `survey_area` resolves to `/survey_area` like the scorer's example yaml (assumed yes)?
-- Area id: plan is label by default, explicit `area_id` only for a single-area file; OK?
-- Should the node also exit after publishing, or keep spinning to hold the latched samples (plan: keep spinning)?
+All four answered by the owner (relayed 2026-10-14):
+
+- Standard: IHO S-44 Order 1a, a = 0.5, b = 0.013, named `demo`, both parameters.
+- The publisher runs in the root namespace, so the topic is `/survey_area`.
+- Area id: the CAMP label by default; explicit `area_id` only for a single-area file.
+- The node keeps spinning after publishing.
 
 ## Estimated Scope
 
 Single PR, about 400 lines including tests and docs.
+
+## Deviations from the plan
+
+- The late-subscriber test uses the node's own `latched_qos()` plus an inline volatile profile; it does not read the cube README (the README-QoS test in step 5 was dropped as a cross-repo coupling with no value).
+- Step 8 live smoke ran against the node alone on a private domain (`ros2 topic echo` with transient_local showed the area; refusals exit 1); no scorer was started, so "scorer accepts the area" is not verified here.
+- Step 7 was done by reading source (cube `grid` publisher, demo frames); no live-graph check.
+- `make_node` is the testable core and `main` only handles the exit status; `priority` outside int16 is also refused.
