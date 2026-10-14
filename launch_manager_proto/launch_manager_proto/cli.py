@@ -32,7 +32,7 @@ Command line: run the manager, print its status, send it commands, or just conve
 
 ``launch_manager_proto manager --config demo.yaml``
 ``launch_manager_proto status``                       one snapshot as a table (``--json``)
-``launch_manager_proto command start camp``          START / STOP / CLEAR_FAILURE / set-profile
+``launch_manager_proto command start <group>``        START / STOP / CLEAR_FAILURE / set-profile
 ``launch_manager_proto converge --match '^/a/'``     the convergence loop alone, as a guard
 """
 

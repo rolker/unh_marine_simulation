@@ -112,12 +112,14 @@ def test_process_events_are_attributed_by_the_environment_tag():
 
         def __init__(self, env, pid, code=None):
             self.env, self.pid, self.process_name, self.returncode = env, pid, 'n', code
+            self.action = object()
 
     run._on_started(Event({manager.GROUP_ENV: 'boats'}, 5), None)
     run._on_started(Event({'OTHER': '1'}, 6), None)           # not ours: ignored
     run._on_started(Event(None, 7), None)                     # no environment at all
     run._on_exited(Event({manager.GROUP_ENV: 'boats'}, 5, 0), None)
     assert [e[:3] for e in run.events] == [('started', 'boats', 5), ('exited', 'boats', 5)]
+    assert [e[5] for e in run.events] == [False, False]
     assert run._pids['boats'] == set()
 
 
@@ -241,3 +243,23 @@ def test_start_marks_only_lifecycle_groups_as_sole_writer(monkeypatch):
     run.start(GroupSpec(name='camp', package=None, file='y'))
     run.close()
     assert run._sole_writer == {'boats'}
+
+
+class FakeAction:
+    """An ExecuteProcess action as far as will_respawn looks at it."""
+
+    def __init__(self, respawn, limit=-1, retries=0):
+        self._ExecuteLocal__respawn = respawn
+        self._ExecuteLocal__respawn_max_retries = limit
+        self._ExecuteLocal__respawn_retries = retries
+
+
+def test_will_respawn_reads_launchs_private_fields_and_fails_safe():
+    assert manager.will_respawn(FakeAction(True)) is True
+    assert manager.will_respawn(FakeAction(False)) is False
+    assert manager.will_respawn(FakeAction(True, limit=3, retries=2)) is True
+    assert manager.will_respawn(FakeAction(True, limit=3, retries=3)) is False
+    assert manager.will_respawn(object()) is False        # no such fields: assume not
+    real = launch.actions.ExecuteProcess(cmd=['true'], respawn=True)
+    assert manager.will_respawn(real) is True
+    assert manager.will_respawn(launch.actions.ExecuteProcess(cmd=['true'])) is False

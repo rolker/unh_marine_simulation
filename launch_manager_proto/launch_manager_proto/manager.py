@@ -90,6 +90,24 @@ def _is_running(pid: int) -> bool:
     return True
 
 
+def will_respawn(action) -> bool:
+    """
+    Return whether ``launch`` is about to restart the process of this action.
+
+    ``respawn=True`` processes come back as new processes of the same
+    node name, in ``unconfigured``; that is a repair for the convergence loop, not a failure
+    of the group. launch exposes no public way to ask, so the private fields are read, and
+    an action that lacks them is treated as not respawning (the safe, loud direction).
+    """
+    try:
+        respawn = getattr(action, '_ExecuteLocal__respawn')
+        limit = getattr(action, '_ExecuteLocal__respawn_max_retries')
+        retries = getattr(action, '_ExecuteLocal__respawn_retries')
+    except AttributeError:
+        return False
+    return respawn is True and (limit < 0 or retries < limit)
+
+
 def launch_file_path(package: str, file: str) -> str:
     """Return the installed path of ``<package>/launch/<file>``; raise if it is not there."""
     path = os.path.join(get_package_share_directory(package), 'launch', file)
@@ -120,7 +138,7 @@ class LaunchRunner(mc.Runner):
 
     def __init__(self, service: launch.LaunchService):
         self._service = service
-        self.events: Deque[Tuple[str, str, int, str, Optional[int]]] = deque()
+        self.events: Deque[Tuple[str, str, int, str, Optional[int], bool]] = deque()
         self._release = threading.Event()
         self._threads: List[threading.Thread] = []
         self._lock = threading.Lock()
@@ -148,7 +166,7 @@ class LaunchRunner(mc.Runner):
           environment tag, and is unregistered when the group has stopped. launch keeps a
           handler until told otherwise and launch_ros subscribes by node name, so a group
           started a second time would have its old chains answer the new processes too
-          (found live: a restarted boats group lost its ``mbes_sim`` and ``joy_to_helm``).
+          (found live: a restarted group lost its Python lifecycle nodes).
         """
         context = self._service.context
         original = context.register_event_handler
@@ -207,7 +225,7 @@ class LaunchRunner(mc.Runner):
         if group:
             with self._lock:
                 self._pids.setdefault(group, set()).add(event.pid)
-            self.events.append(('started', group, event.pid, event.process_name, None))
+            self.events.append(('started', group, event.pid, event.process_name, None, False))
 
     def _on_exited(self, event, context) -> None:
         group = (event.env or {}).get(GROUP_ENV)
@@ -215,11 +233,11 @@ class LaunchRunner(mc.Runner):
             with self._lock:
                 self._pids.get(group, set()).discard(event.pid)
                 self._targeted.discard(event.pid)
-            self.events.append(
-                ('exited', group, event.pid, event.process_name, event.returncode))
+            self.events.append(('exited', group, event.pid, event.process_name, event.returncode,
+                                will_respawn(event.action)))
 
     def _on_shutdown(self, event, context) -> None:
-        self.events.append(('shutdown', '', 0, '', None))
+        self.events.append(('shutdown', '', 0, '', None, False))
 
     def base_description(self) -> launch.LaunchDescription:
         """Return the handlers that watch every process of every group."""
@@ -365,13 +383,13 @@ class ManagerNode(Node):
     def _drain(self) -> None:
         events = self._runner.events
         while events:
-            kind, group, pid, name, code = events.popleft()
+            kind, group, pid, name, code, respawning = events.popleft()
             if kind == 'shutdown':
                 self.core.on_shutdown()
             elif kind == 'started':
                 self.core.on_process_started(group, pid, name)
             else:
-                self.core.on_process_exited(group, pid, name, code)
+                self.core.on_process_exited(group, pid, name, code, respawning)
 
     def _tick(self) -> None:
         self._drain()

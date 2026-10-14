@@ -484,3 +484,29 @@ def test_exits_during_a_shutdown_are_not_failures():
         w.core.on_process_exited('scorer', pid, 'x', 0)
     w.run(0.5)
     assert w.state('boats') != mc.FAILED and w.state('scorer') != mc.FAILED
+
+
+def test_a_respawning_lifecycle_process_is_repaired_not_failed():
+    w = World()
+    w.boot()
+    victim = '/b1/x'
+    pid = list(w.core._groups['boats'].alive)[0]
+    w.core.on_process_exited('boats', pid, 'helm_manager', 1, respawning=True)
+    w.nodes[victim].state = core.UNCONFIGURED          # the respawned process starts blank
+    w.run(0.3)
+    assert w.state('boats') in (mc.READY, mc.DEGRADED)  # never FAILED
+    new_pid = w.runner.launch_process('boats', 'helm_manager')
+    assert new_pid != pid
+    assert w.run(30, until=lambda: w.state('boats') == mc.READY)
+    assert w.nodes[victim].received[-2:] == ['configure', 'activate']
+    assert 'respawning it' in w.core.status()['groups'][0]['detail']
+
+
+def test_a_respawning_exit_does_not_close_a_restart_never_group():
+    w = World()
+    w.boot()
+    camp_pid = list(w.core._groups['camp'].alive)[0]
+    w.core.on_process_exited('camp', camp_pid, 'camp', 0, respawning=True)
+    w.run(1)
+    assert w.core.desired('camp') == mc.DESIRED_RUNNING
+    assert w.core.desired('boats') == mc.DESIRED_RUNNING

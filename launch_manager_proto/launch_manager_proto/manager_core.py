@@ -194,13 +194,25 @@ class ManagerCore:
         """Note that the launch service is going down: exits from now on are expected."""
         self._shutting_down = True
 
-    def on_process_exited(self, group: str, pid: int, name: str, returncode: int) -> None:
+    def on_process_exited(self, group: str, pid: int, name: str, returncode: int,
+                          respawning: bool = False) -> None:
+        """
+        Record a process exit.
+
+        ``respawning`` means launch is restarting it: the group is not failed and not closed,
+        its lifecycle node comes back unconfigured and the convergence loop repairs it, which
+        is the gap ``LifecycleNode(autostart=True)`` leaves (it acts once, at launch time).
+        """
         g = self._groups.get(group)
         if g is None:
             return
         g.alive.pop(pid, None)
         if self._shutting_down or g.state in (STOPPING, FAILED) or g.desired == DESIRED_STOPPED:
             return  # a requested stop, or the first cause is already on record
+        if respawning:
+            g.notes.append('process %s exited(%d), launch is respawning it' % (name, returncode))
+            del g.notes[:-5]
+            return
         now = self._clock()
         if not g.alive:
             if returncode == 0 and g.spec.restart == 'never':
