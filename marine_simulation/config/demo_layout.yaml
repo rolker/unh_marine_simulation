@@ -5,8 +5,8 @@
 # Monitor names are the ones `xrandr --listmonitors` prints in its last column.
 # Placement needs an X11 session ("GNOME on Xorg") and the wmctrl package.
 
-# How long to wait for each window to appear, in seconds (default 60).
-timeout_seconds: 60
+# How long to wait for the windows to appear, in seconds (default 90).
+timeout_seconds: 90
 
 windows:
   # CAMP, full screen on the big display.

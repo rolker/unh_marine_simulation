@@ -98,6 +98,38 @@ def test_the_shipped_example_layout_loads_and_places_camp_full_screen():
     assert timeout > 0
 
 
+def test_windows_with_spaces_in_the_title_a_sticky_desktop_and_negative_positions():
+    listing = ('0x01  -1 gjs.Gjs  host Desktop Icons 1\n'
+               '0x02   0 a.B  host \n'
+               '0x03   1 CCOM.CCOM  host  A title  with   spaces\n')
+    geometry = ('0x01  -1 0 0 1920 1080  host Desktop Icons 1\n'
+                '0x02   0 -1920 -30 800 600  host \n'
+                '0x03   1 5 6 7 8  host  A title  with   spaces\n')
+    windows = pw.parse_windows(listing, geometry)
+    assert [w.ident for w in windows] == ['0x01', '0x02', '0x03']
+    assert windows[0].title == 'Desktop Icons 1' and windows[1].title == ''
+    assert (windows[1].x, windows[1].y) == (-1920, -30)
+    assert windows[2].title.split() == 'A title with spaces'.split()
+
+
+def test_monitors_with_negative_offsets_and_several_outputs():
+    text = (' 0: +*HDMI-0 3840/800x2160/450+0+0  HDMI-0\n'
+            ' 1: +DP-2 1920/519x1200/320+-1920+120  DP-2\n'
+            ' 2: +Wall 3840/1x1080/1+3840+0  DP-4 DP-5\n')
+    monitors = pw.parse_monitors(text)
+    assert monitors['DP-2'].x == -1920 and monitors['DP-2'].y == 120
+    wall = pw.Monitor('Wall', 3840, 0, 3840, 1080)
+    assert monitors['Wall'] == monitors['DP-4'] == monitors['DP-5'] == wall
+
+
+def test_the_newest_matching_window_wins():
+    listing = ('0x0100  0 CAMP.CAMP  host old\n0x0300  0 CAMP.CAMP  host new\n'
+               '0x0200  0 CAMP.CAMP  host middle\n')
+    windows = pw.parse_windows(listing, '')
+    found = pw.find_window(windows, pw.Placement('c', 'CAMP', '', 'm', True, None))
+    assert found.title == 'new'
+
+
 # --- layout refusals ----------------------------------------------------------------
 
 @pytest.mark.parametrize('overrides', [
@@ -170,13 +202,31 @@ def test_matching_by_class_and_title():
         is None
 
 
-def test_move_commands_clear_state_then_move_then_fullscreen():
+def test_clear_commands_never_send_more_than_two_properties():
+    w = pw.Window('0x1', 'c', 't')
+    commands = pw.clear_commands(w)
+    assert [c[-1] for c in commands] == ['remove,fullscreen',
+                                         'remove,maximized_vert,maximized_horz']
+    assert all(len(c[-1].split(',')) <= 3 for c in commands)  # action + two properties
+
+
+def test_move_commands_move_then_fullscreen():
     w = pw.Window('0x1', 'c', 't')
     commands = pw.move_commands(w, (0, 240, 3840, 2160), True)
-    assert commands[0][-1] == 'remove,fullscreen,maximized_vert,maximized_horz'
-    assert commands[1][-2:] == ['-e', '0,0,240,3840,2160']
-    assert commands[2][-1] == 'add,fullscreen'
-    assert len(pw.move_commands(w, (0, 0, 10, 10), False)) == 2
+    assert commands[0][-2:] == ['-e', '0,0,240,3840,2160']
+    assert commands[1][-1] == 'add,fullscreen'
+    assert len(pw.move_commands(w, (0, 0, 10, 10), False)) == 1
+
+
+def test_the_window_manager_gets_a_pause_between_clearing_and_moving():
+    desktop = FakeDesktop()
+    sleeps = []
+    pw.settle(pw.Window('0x04200003', 'c', 't'),
+              pw.Placement('camp', 'c', '', 'HDMI-0', True, None), (0, 240, 3840, 2160),
+              desktop.runner, lambda s: (sleeps.append(s), desktop.sleep(s)), lambda _: None)
+    order = [c for c in desktop.calls if c[0] == 'wmctrl' and c[1] == '-i']
+    assert order[0][-1] == 'remove,fullscreen' and '-e' in order[2]
+    assert sleeps[0] == pw.CLEAR_SECONDS
 
 
 # --- placing ------------------------------------------------------------------------
@@ -195,6 +245,10 @@ class FakeDesktop:
 
     def runner(self, command):
         self.calls.append(list(command))
+        if '-b' in command:
+            # wmctrl reads at most two properties after add/remove/toggle.
+            action, *props = command[-1].split(',')
+            assert action in ('add', 'remove', 'toggle') and 1 <= len(props) <= 2, command
         if command[:2] == ['wmctrl', '-lx']:
             self.polls += 1
             if self.polls <= self.appear_after:
@@ -257,6 +311,7 @@ def test_a_window_that_never_appears_is_a_named_problem():
     desktop = FakeDesktop(appear_after=10 ** 6)
     problems, _ = _place(desktop, timeout=3.0)
     assert len(problems) == 1 and "'camp'" in problems[0] and 'did not appear' in problems[0]
+    assert desktop.polls == 7  # t = 0, 0.5, ... 3.0: one last look at the deadline
 
 
 def test_a_window_that_will_not_stay_is_a_named_problem():
@@ -272,7 +327,8 @@ def test_one_deadline_covers_every_window():
     ps = [pw.Placement(n, 'zzz', '', 'HDMI-0', True, None) for n in ('a', 'b', 'c')]
     problems = pw.place_all(ps, monitors, 3.0, runner=desktop.runner, sleep=desktop.sleep,
                             clock=desktop.clock, log=lambda _: None)
-    assert len(problems) == 3 and desktop.now < 3.0 + 2 * pw.POLL_SECONDS
+    assert len(problems) == 3
+    assert desktop.polls == 7  # one wait for all three windows, not three waits
 
 
 def test_tolerance_accepts_a_title_bar_offset_but_not_a_wrong_size():
@@ -298,6 +354,19 @@ def test_x11_with_a_display_is_accepted():
     pw.check_session({'XDG_SESSION_TYPE': 'x11', 'DISPLAY': ':0'})
 
 
+@pytest.mark.parametrize('session', ['', 'tty'])
+def test_an_x_display_without_a_session_type_is_accepted(session):
+    pw.check_session({'XDG_SESSION_TYPE': session, 'DISPLAY': ':0'})
+    pw.check_session({'DISPLAY': ':0'})
+
+
+@pytest.mark.parametrize('environ', [
+    {'XDG_SESSION_TYPE': 'tty'}, {}, {'DISPLAY': ':0', 'WAYLAND_DISPLAY': 'wayland-0'}])
+def test_no_x_display_or_a_wayland_one_is_still_refused(environ):
+    with pytest.raises(pw.LayoutError, match='X11'):
+        pw.check_session(environ)
+
+
 def test_a_missing_tool_says_how_to_install_it(monkeypatch):
     def boom(*a, **k):
         raise FileNotFoundError()
@@ -310,3 +379,41 @@ def test_main_exits_2_for_an_unusable_session(monkeypatch, tmp_path, capsys):
     monkeypatch.setenv('XDG_SESSION_TYPE', 'wayland')
     assert pw.main(['--layout', _layout(tmp_path)]) == 2
     assert 'X11' in capsys.readouterr().err
+
+
+# --- check_layout / --check -----------------------------------------------------
+
+class Tools:
+    """A runner standing in for wmctrl and xrandr."""
+
+    def __init__(self, xrandr=XRANDR, wmctrl_ok=True):
+        self.xrandr = xrandr
+        self.wmctrl_ok = wmctrl_ok
+
+    def __call__(self, command):
+        if command[0] == 'wmctrl':
+            if not self.wmctrl_ok:
+                raise pw.LayoutError('wmctrl is not installed (sudo apt install wmctrl)')
+            return 'Name: Mutter\n'
+        return self.xrandr
+
+
+X11 = {'XDG_SESSION_TYPE': 'x11', 'DISPLAY': ':0'}
+
+
+def test_check_layout_accepts_the_shipped_example_on_a_matching_desktop():
+    placements, timeout, monitors = pw.check_layout(
+        str(PACKAGE / 'config' / 'demo_layout.yaml'), X11, Tools())
+    assert placements[0].monitor in monitors and timeout > 0
+
+
+def test_check_layout_names_what_is_wrong(tmp_path):
+    path = str(PACKAGE / 'config' / 'demo_layout.yaml')
+    with pytest.raises(pw.LayoutError, match='X11'):
+        pw.check_layout(path, {'XDG_SESSION_TYPE': 'wayland', 'DISPLAY': ':0'}, Tools())
+    with pytest.raises(pw.LayoutError, match='apt install wmctrl'):
+        pw.check_layout(path, X11, Tools(wmctrl_ok=False))
+    with pytest.raises(pw.LayoutError, match='HDMI-0'):
+        pw.check_layout(path, X11, Tools(' 0: +*DP-2 1920/1x1080/1+0+0  DP-2\n'))
+    with pytest.raises(pw.LayoutError, match='cannot read'):
+        pw.check_layout(str(tmp_path / 'missing.yaml'), X11, Tools())

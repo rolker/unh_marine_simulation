@@ -32,9 +32,10 @@
 Put the demo's windows where the layout file says (X11, needs ``wmctrl``).
 
     place_windows.py --layout ~/.config/marine_simulation_demo/layout.yaml
+    place_windows.py --check --layout ...      # only check, change nothing
 
 The layout file is described in ``config/demo_layout.yaml``. For every window it
-names, this waits for the window to appear (up to ``timeout_seconds``), clears its
+names, this waits for the window to appear (up to ``timeout_seconds``, default 90 s), clears its
 maximised and full screen state, moves and sizes it on the named monitor (or makes it
 full screen there), then reads the geometry back and, because an application may
 resize itself after its first show, applies it once more when it does not match.
@@ -56,16 +57,23 @@ from typing import Callable, Dict, List, Optional, Sequence
 
 import yaml
 
-DEFAULT_TIMEOUT = 60.0
+DEFAULT_TIMEOUT = 90.0
 POLL_SECONDS = 0.5
 SETTLE_SECONDS = 1.5
+# Time for the window manager to finish un-fullscreening / un-maximising before the
+# move; a move sent straight after the clear can be ignored.
+CLEAR_SECONDS = 0.3
 # wmctrl -lG reports a window's outer position on some window managers and its
 # client position on others; a title bar and border are tens of pixels. Sizes must
 # match closely, positions only within the decoration allowance.
 SIZE_TOLERANCE = 4
 POSITION_TOLERANCE = 64
 
-_MONITOR = re.compile(r'^\s*\d+:\s+\S+\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)\s+(\S+)\s*$')
+# `N: +[*]name WIDTH/mmxHEIGHT/mm+X+Y output [output ...]`; a monitor made from
+# several outputs lists them all after the geometry, and the layout may use the
+# monitor's name or any of its outputs.
+_MONITOR = re.compile(
+    r'^\s*\d+:\s+[+*]*(\S+)\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)\s*(.*)$')
 
 
 class LayoutError(Exception):
@@ -103,13 +111,15 @@ class Placement:
 
 
 def parse_monitors(text: str) -> Dict[str, Monitor]:
-    """Parse ``xrandr --listmonitors`` into ``{name: Monitor}``."""
+    """Parse ``xrandr --listmonitors`` into ``{name: Monitor}`` (by name and by output)."""
     monitors = {}
     for line in text.splitlines():
         m = _MONITOR.match(line)
         if m:
-            w, h, x, y, name = m.groups()
-            monitors[name] = Monitor(name, int(x), int(y), int(w), int(h))
+            name, w, h, x, y, outputs = m.groups()
+            monitor = Monitor(name, int(x), int(y), int(w), int(h))
+            for key in [name] + outputs.split():
+                monitors.setdefault(key, monitor)
     return monitors
 
 
@@ -142,8 +152,11 @@ def parse_windows(listing: str, geometry: str) -> List[Window]:
 
 def load_layout(path: str):
     """Read the layout file; return ``(placements, timeout_seconds)``."""
-    with open(path) as f:
-        data = yaml.safe_load(f)
+    try:
+        with open(path) as f:
+            data = yaml.safe_load(f)
+    except (OSError, yaml.YAMLError) as error:
+        raise LayoutError('cannot read %s: %s' % (path, error)) from None
     if not isinstance(data, dict):
         raise LayoutError('%s: expected a mapping' % path)
     unknown = set(data) - {'timeout_seconds', 'windows'}
@@ -217,14 +230,22 @@ def target_geometry(placement: Placement, monitors: Dict[str, Monitor]):
 
 
 def find_window(windows: Sequence[Window], placement: Placement) -> Optional[Window]:
-    """Return the first window that matches, or None."""
+    """
+    Return the newest window that matches, or None.
+
+    The newest (highest id) because a window left over from an earlier run, or one
+    the operator opened, is older than the one the demo just started.
+    """
+    matches = []
     for window in windows:
         if placement.wm_class and placement.wm_class not in window.wm_class:
             continue
         if placement.title and placement.title not in window.title:
             continue
-        return window
-    return None
+        matches.append(window)
+    if not matches:
+        return None
+    return max(matches, key=lambda w: int(w.ident, 16))
 
 
 def in_place(window: Window, geometry) -> bool:
@@ -236,14 +257,22 @@ def in_place(window: Window, geometry) -> bool:
             abs(window.y - y) <= POSITION_TOLERANCE)
 
 
+def clear_commands(window: Window) -> List[List[str]]:
+    """
+    Return the wmctrl calls that clear full screen and maximised state.
+
+    wmctrl's ``-b`` reads at most two properties, so full screen and the two
+    maximised flags need two calls.
+    """
+    return [['wmctrl', '-i', '-r', window.ident, '-b', 'remove,fullscreen'],
+            ['wmctrl', '-i', '-r', window.ident, '-b', 'remove,maximized_vert,maximized_horz']]
+
+
 def move_commands(window: Window, geometry, fullscreen: bool) -> List[List[str]]:
-    """Return the wmctrl calls that put a window at ``geometry``."""
+    """Return the wmctrl calls that put a window at ``geometry`` (after clearing it)."""
     x, y, width, height = geometry
-    commands = [
-        ['wmctrl', '-i', '-r', window.ident, '-b',
-         'remove,fullscreen,maximized_vert,maximized_horz'],
-        ['wmctrl', '-i', '-r', window.ident, '-e', '0,%d,%d,%d,%d' % (x, y, width, height)],
-    ]
+    commands = [['wmctrl', '-i', '-r', window.ident, '-e',
+                 '0,%d,%d,%d,%d' % (x, y, width, height)]]
     if fullscreen:
         commands.append(['wmctrl', '-i', '-r', window.ident, '-b', 'add,fullscreen'])
     return commands
@@ -281,7 +310,7 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
     problems = []
     pending = list(placements)
     deadline = clock() + timeout
-    while pending and clock() < deadline:
+    while True:
         windows = list_windows(runner)
         for placement in list(pending):
             window = find_window(windows, placement)
@@ -291,8 +320,11 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
             problem = settle(window, placement, geometries[placement.name], runner, sleep, log)
             if problem:
                 problems.append(problem)
-        if pending:
-            sleep(POLL_SECONDS)
+        # One look after the deadline too: placing a window takes seconds, and a
+        # window that appeared meanwhile must not be reported as missing.
+        if not pending or clock() >= deadline:
+            break
+        sleep(POLL_SECONDS)
     for placement in pending:
         problems.append('window %r (%s) did not appear within %.0f s'
                         % (placement.name, describe(placement), timeout))
@@ -318,6 +350,9 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
     """Move one window, verify it, and move it once more if it did not stay."""
     wanted = geometry_text(*geometry)
     for attempt in (1, 2):
+        for command in clear_commands(window):
+            runner(command)
+        sleep(CLEAR_SECONDS)
         for command in move_commands(window, geometry, placement.fullscreen):
             runner(command)
         sleep(SETTLE_SECONDS)
@@ -336,23 +371,55 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
 
 
 def check_session(environ=os.environ) -> None:
-    """Raise unless this is an X11 session."""
+    """
+    Raise unless this is an X11 session.
+
+    ``XDG_SESSION_TYPE`` is ``x11`` on a normal login. Where it is unset or ``tty``
+    (a session started from a console or a service) an X display with no Wayland
+    display is accepted as X11 too.
+    """
     session = environ.get('XDG_SESSION_TYPE', '')
-    if session != 'x11':
+    if session in ('', 'tty'):
+        if environ.get('WAYLAND_DISPLAY') or not environ.get('DISPLAY'):
+            raise LayoutError('window placement needs an X11 session (DISPLAY %s, '
+                              'WAYLAND_DISPLAY %s); log in with "GNOME on Xorg"'
+                              % (environ.get('DISPLAY') or 'unset',
+                                 environ.get('WAYLAND_DISPLAY') or 'unset'))
+    elif session != 'x11':
         raise LayoutError('window placement needs an X11 session, this one is %r (log in '
                           'with "GNOME on Xorg")' % session)
     if not environ.get('DISPLAY'):
         raise LayoutError('DISPLAY is not set')
 
 
+def check_layout(path: str, environ=os.environ, runner=run):
+    """
+    Check everything placement needs; return ``(placements, timeout, monitors)``.
+
+    The session is X11, a window manager answers to ``wmctrl`` (which also proves it
+    is installed), the layout file is well formed and every monitor it names is
+    connected. Raises LayoutError with the reason otherwise.
+    """
+    check_session(environ)
+    placements, timeout = load_layout(os.path.expanduser(path))
+    runner(['wmctrl', '-m'])
+    monitors = parse_monitors(runner(['xrandr', '--listmonitors']))
+    for placement in placements:
+        target_geometry(placement, monitors)
+    return placements, timeout, monitors
+
+
 def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     parser.add_argument('--layout', required=True, help='layout YAML file')
+    parser.add_argument('--check', action='store_true',
+                        help='only check the session, tools, layout and monitors')
     args = parser.parse_args(argv)
     try:
-        check_session()
-        placements, timeout = load_layout(os.path.expanduser(args.layout))
-        monitors = parse_monitors(run(['xrandr', '--listmonitors']))
+        placements, timeout, monitors = check_layout(args.layout)
+        if args.check:
+            print('place_windows: layout %s is usable' % args.layout)
+            return 0
         problems = place_all(placements, monitors, timeout)
     except (LayoutError, OSError, yaml.YAMLError) as error:
         print('place_windows: %s' % error, file=sys.stderr)
