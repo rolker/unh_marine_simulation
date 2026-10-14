@@ -51,3 +51,32 @@ Independence uncertain: same context that authored the plan; no fresh dispatch.
 - [x] (suggestion) area_id semantics ambiguous with several areas; label by default, explicit id only for a single-area file. Folded in.
 - [x] (suggestion) State the stamp clock (sim time under use_sim_time). Folded in.
 - [ ] (suggestion) Implementer verifies the geographic_msgs exec_depend need and the late-subscriber QoS test is not flaky (timeouts) before relying on it.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 10:34 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-93 at `a0481dc`
+**Mode**: pre-push
+**Depth**: Standard (reason: new node + ~290-line script + tests, 715 lines changed)
+**Must-fix**: 5 | **Suggestions**: 10
+**Round**: 1 | **Ship**: continue — five concrete defects, three confirmed by two or more readers; fix then re-review once
+
+### Findings
+- [ ] (must-fix) stamp read before /clock under use_sim_time is 0, so a restart after an edit is ignored by the scorer (gemini, codex, Lens A) — `marine_simulation/scripts/publish_survey_area.py:251`
+- [ ] (must-fix) more than 100 areas silently evicted from the depth-100 latched history (codex, Lens A, Lens B) — `marine_simulation/scripts/publish_survey_area.py:219`
+- [ ] (must-fix) module-level importorskip skips the ROS-free parser tests too (codex, Lens A) — `marine_simulation/test/test_publish_survey_area.py:191`
+- [ ] (must-fix) deeply nested JSON raises RecursionError, not a refusal; recursive _items overflows (Lens B) — `marine_simulation/scripts/publish_survey_area.py:77`
+- [ ] (must-fix) script committed non-executable (gemini; verify) — `marine_simulation/scripts/publish_survey_area.py:1`
+- [ ] (suggestion) wrong-type parameters (standard_a:=1) die with a traceback instead of the refusal path (Lens A, Lens B) — `marine_simulation/scripts/publish_survey_area.py:238`
+- [ ] (suggestion) ExternalShutdownException on SIGTERM not caught (gemini, Lens B) — `marine_simulation/scripts/publish_survey_area.py:275`
+- [ ] (suggestion) at least 3 distinct vertices, not 3 entries (Lens A, gemini) — `marine_simulation/scripts/publish_survey_area.py:124`
+- [ ] (suggestion) non-list children raises TypeError; no file size cap; vertex cap (gemini, Lens B) — `marine_simulation/scripts/publish_survey_area.py:78`
+- [ ] (suggestion) expand ~ in file parameter (gemini) — `marine_simulation/scripts/publish_survey_area.py:133`
+- [ ] (suggestion) volatile-subscriber test passes vacuously; fixed domain 87 and deprecated ROS_LOCALHOST_ONLY; grep-only install test (Lens A) — `marine_simulation/test/test_publish_survey_area.py:183`
+- [ ] (suggestion) fallback label can collide with a user label (Lens B) — `marine_simulation/scripts/publish_survey_area.py:103`
+- [ ] (suggestion) relative topic under a launch namespace; document (Lens B) — `marine_simulation/README.md`
+- [ ] (suggestion) README claim that CAMP opens the same file is not checked against CAMP source (Lens A) — `marine_simulation/README.md`
+- [ ] (false positive, dropped) GeoPolygon import source: SurveyArea.msg uses marine_interfaces/GeoPolygon (gemini) — `marine_simulation/scripts/publish_survey_area.py:204`
