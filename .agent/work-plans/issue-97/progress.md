@@ -130,3 +130,31 @@ Specialists: static analysis (flake8 via pre-commit, clean), governance and plan
 - [x] (suggestion) F28 A node stuck in a transition after READY leaves the group DEGRADED, never FAILED (visible in status; by design) (Gemini) (deferred) (deferred: visible as DEGRADED with the node and its state in status; making it FAILED would turn a slow transition into a sticky failure)
 
 Dismissed after checking: Gemini's shared-environment race between groups (the launch loop visits one description at a time, on one thread); Gemini's `ChangeState` probe only matching transition 1 (launch_ros's handler matches every `ChangeState` event); command-topic flooding and authentication (the manager is a trusted-network design like udp_bridge; stated in the README).
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 14:28 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-97 at `0c51b5d` (not pushed)
+**Addressed**: `## Local Review (Pre-Push)` round 1 (branch at `0c34207`): 28 findings, 9 must-fix
+**Commits**: `f2d5ce1` (core), `cd22486` (manager process), `6897c9c` (config and CLI), `09459aa` (demo starter), README commit, `0c51b5d` (boxes checked)
+
+### Actions
+- [x] F1 non-string profile / any exception in a command rejected; bad tick or command logged and survived; dead executor shuts the service down — `manager_core.py`, `manager.py`
+- [x] F2 CLEAR_FAILURE keeps an all-stopped manager alive until START or SET_PROFILE — `manager_core.py`
+- [x] F3 groups use a session without the unbounded collectors; holder threads end with the group — `manager.py`
+- [x] F4 nothing converges or starts during shutdown — `manager_core.py`
+- [x] F5 `--roster` forwarded to the boats launch — `demo_manager.py`, `demo_manager.yaml`
+- [x] F6 `ament_index_python` declared, plus a test that every import is declared — `package.xml`, `test_boundary.py`
+- [x] F7 finished-shutdown retried until the loop runs — `manager.py`
+- [x] F8 dropped converger suspended first — `manager_core.py`
+- [x] F9 never-seen node no longer fails the group before its ready timeout — `manager_core.py`
+- [x] F10 – F25 as listed in the review entry (start grace, confirm reset, generation counter, stable reasons, config validation, placeholder scalars, CLI fixes, SIGHUP, pid tag check, exception guards, CTest timeout, temp directory, launch path bounds, stop-all flag, node destroy)
+- [x] F26 addressed in the README only — `marine_simulation/README.md`
+- [x] F27 deferred (deferred: only a runner that cannot stop one group is affected; the shipped LaunchRunner can, and the failure is loud) — `manager_core.py`
+- [x] F28 deferred (deferred: a node stuck after READY shows as DEGRADED with its state; a sticky FAILED would punish a slow transition) — `manager_core.py`
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation`: 357 tests, 0 errors, 8 failures, 2 skipped. The same 8 pre-existing marine_simulation lint failures in files this work does not touch; every launch_manager_proto test passes.
+- Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 70.40s. Plain launch with the guard, `demo_boats_selftest.py --start-launch --boats bluefin,clownfish` on 176: exit 0, 12 PASS.
