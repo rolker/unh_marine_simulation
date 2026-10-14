@@ -13,7 +13,8 @@
 | `mbes_sim` | Python | Multibeam echosounder simulator using bathymetry grids |
 | `marine_charts_to_gazebo_world` | Python | Generates Gazebo Harmonic SDF worlds from S57 ENC chart data |
 | `portsmouth_nh_gazebo` | Python | Pre-configured Gazebo world for Portsmouth NH harbor |
-| `marine_simulation` | CMake (config, launch, scripts) | Aggregation package with scenario launch files, configs, and the multi-boat demo (launch, roster, self-test, graph check); see `marine_simulation/README.md` |
+| `launch_manager_proto` | Python | Prototype persistent launch and lifecycle manager (convergence loop, groups, profiles, status/command); **no marine dependency**, the seed of the future `ros2launch_manager` repository; see `launch_manager_proto/README.md` |
+| `marine_simulation` | CMake (config, launch, scripts) | Aggregation package with scenario launch files, configs, and the multi-boat demo (launch, roster, self-test, graph check, `demo_manager.py` and its configuration); see `marine_simulation/README.md` |
 
 ## Repository Layout
 
@@ -40,10 +41,13 @@ unh_marine_simulation/
 ├── portsmouth_nh_gazebo/              # Portsmouth NH Gazebo world
 │   ├── config/                        #   portsmouth.yaml, isles_of_shoals.yaml, ...
 │   └── launch/                        #   harbor_launch.py, isles_of_shoals_launch.py, ...
+├── launch_manager_proto/              # Launch/lifecycle manager prototype (generic, issue #97)
+│   ├── launch_manager_proto/          #   lifecycle_core, lifecycle_rclpy, config, manager_core, manager, cli
+│   └── test/                          #   fakes + fake lifecycle node, core/config/process tests
 └── marine_simulation/                 # Scenario launch files
     ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml
-    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/manager.yaml
+    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, demo_manager.py
     ├── test/                          #   pytest: demo launch fail-fast checks, graph check
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes
 ```
@@ -87,7 +91,7 @@ Data flow: `cmd_vel` → helm → `throttle`/`rudder` → `asv_sim` → position
 
 ```bash
 # From the layer workspace directory (layers/main/simulation_ws/)
-colcon build --packages-select asv_sim asv_sim_msgs asv_helm vrx_project11 mbes_sim marine_charts_to_gazebo_world portsmouth_nh_gazebo marine_simulation
+colcon build --packages-select asv_sim asv_sim_msgs asv_helm vrx_project11 mbes_sim marine_charts_to_gazebo_world portsmouth_nh_gazebo launch_manager_proto marine_simulation
 
 # Testing requires setup.bash in the same shell
 source ../../../.agent/scripts/setup.bash && colcon test --packages-select asv_sim && colcon test-result --verbose
@@ -110,6 +114,7 @@ Known build issues:
 | `mbes_sim` | `marine_acoustic_msgs` | underlay | `marine_acoustic_msgs/msg/SonarDetections` |
 | `mbes_sim` | `marine_autonomy` | core | `marine_autonomy.nav`, `marine_autonomy.geodesic` |
 | `marine_simulation` | `cube_bathymetry` | sensors | Runtime (rviz plugin) |
+| `launch_manager_proto` | `ros2launch_session` | underlay | `LaunchSession.from_service()` (one shared `LaunchService`); no marine package, enforced by `test_boundary.py` |
 | `marine_simulation` (demo boats) | `ben_description`, `helm_manager`, `joy_to_helm`, `marine_autonomy`, `mru_transform`, `cube_bathymetry` | platforms / core / sensors | Runtime: URDF xacro, per-node launch files, `joy_linux` driver from apt (`ros-jazzy-joy-linux`) |
 
 ## Common Pitfalls
@@ -128,3 +133,7 @@ Known build issues:
 - **A four-boat stack (about 50 processes) is not fully discoverable with `ROS_LOCALHOST_ONLY=1`.** Observed: a second process saw only part of the graph. Use default discovery on a private `ROS_DOMAIN_ID` for the self-test.
 - **Empty string parameters cannot be `-p` overrides** (`Failed to parse global arguments`); put them in a parameter file (the demo's `draft_dir` / `prior_store_dir` for `cube_bathymetry`).
 - **`marine_simulation` lint was already failing** (copyright, flake8 I100, pep257 D213 in `bizzyboat_massabesic_launch.py`, `gazebo_*_launch.py`, `simulator_launch.py`); new files there follow the D213 style (summary on the second line).
+- **A Python (`rclpy`) lifecycle node dies on a transition that is invalid for its state.** `Transition is not registered` escapes the service callback and the process exits 1 (C++ nodes just answer `success=false`). Two writers on one node therefore kill it: a `launch_ros` autostart chain plus anything else. Inside `launch_manager_proto` the manager is the only writer (it does not register launch_ros's `ChangeState` handler for groups with a `lifecycle` section) and re-reads right before every request; the standalone `converge` guard coexists with a launch's chains by waiting for the state to be quiet, which narrows the race but cannot close it.
+- **`LaunchSession.from_service()` shuts the whole shared `LaunchService` down when its `with` block exits**, so a manager holds each group's context open (one thread per group) until it exits itself. `LaunchService.run()` must be on the main thread, `shutdown_when_idle=False` or an all-stopped manager exits, and `rclpy.init()` must be given `SignalHandlerOptions.NO` or its SIGINT handler replaces launch's and ctrl-c stops nothing. launch leaves SIGTERM at its default disposition (it records a handler, installs none), so a plain `kill` orphans every process unless the program installs its own.
+- **Restarting a launch description in the same `LaunchService` leaves the old one's event handlers registered**, and `launch_ros` lifecycle chains subscribe by node name, so the old chains answer the new processes. `launch_manager_proto` records handlers by the `LAUNCH_MANAGER_GROUP` environment tag and unregisters them when a group has stopped, except `OnShutdown` ones (launch_ros registers the handler that stops its adapter thread from whichever group first needs the adapter; removing it hangs the process at exit).
+- **Never leave processes of a test behind.** Use `kill` on a pid or process group you started, never `pkill -f`; the live check (`marine_simulation/test/test_demo_manager_live.py`) refuses to run without a private `ROS_DOMAIN_ID` above 100, and a SIGKILLed manager orphans its children (they keep the node names, and a second launch then sees duplicates).
