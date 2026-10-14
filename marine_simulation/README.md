@@ -61,7 +61,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `enable_nav` | `false` | Reserved. `true` is refused ("not wired yet"). |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
-| `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why). An explicit path must be a file. |
+| `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why, on stderr). An explicit path must be a file. |
 | `cell_size` | `1.0` | CUBE cell size in metres. |
 | `ping_interval` | `0.2` | Seconds between simulated multibeam pings. |
 | `beam_count` | `120` | Beams per ping. |
@@ -76,7 +76,7 @@ argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
 an explicit `mbes_grid_file` (or `$MBES_DEMO_GRID`) is not a file, `cell_size`, `beam_count` or `ping_interval` is
 not positive (or not finite), `tide_speed_factor` or `current_speed` is negative
 (or not finite; 0 is allowed for both), the datum grids above are missing, or
-`enable_nav` is true.
+`enable_nav` is true. It also refuses a truth grid GDAL cannot read or whose CRS is not projected in metres, and prints a warning for every boat whose start position has no water in the grid (the sonar publishes nothing there).
 
 ### The roster is the only place boat names live
 
