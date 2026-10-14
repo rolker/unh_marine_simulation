@@ -41,3 +41,22 @@ issue: 97
 - [ ] Scoped-stop spike fails: accept all-or-nothing with per-group STOP/START rejected?
 - [ ] Package name launch_manager_proto, rename at move time?
 - [ ] Record design deviations in the uma design doc via follow-up, or only in this README?
+
+## Plan Review
+**Status**: complete
+**When**: 2026-10-14 12:29 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5) (in-context — author self-review)
+
+**Plan**: `.agent/work-plans/issue-97/plan.md` at `14c09c1`
+**PR**: PR-less
+Independence uncertain: this review ran in the same context that authored the plan (no fresh dispatch), and the By model string matches the author's.
+**Verdict**: changes-requested (must-fix items folded into the plan in the same commit; ready for implementation once re-read)
+
+### Findings
+- [x] (must-fix) Step 4 said `restart: on-failure` means group restart while the Deferred list says there is no group restart; contradictory. Folded in: both behave the same except clean exit; dead process -> FAILED with cause.
+- [x] (must-fix) Step 8 guard plus the manager would be two convergence loops driving the same nodes. Folded in: one-writer rule, `lifecycle_guard:=false` for the managed boats group, test in both directions.
+- [x] (must-fix) Convergence after a group stops was unspecified (would fight shutdown, report MISSING). Folded in: convergence suspended unless desired RUNNING and launch started; test (e2).
+- [ ] (suggestion) New package should carry a LICENSE file and the ament lint tests (copyright/flake8/pep257) like marine_simulation; list in Files to Change.
+- [ ] (suggestion) The scorer's node name/namespace is not verified in the plan; confirm the coverage_assessment_node naming before writing its match regex.
+- [ ] (suggestion) If boats go FAILED, camp stays BLOCKED with no CAMP window; say in the README what a helper sees (status CLI) and consider a log line naming the failed node.
+- [ ] (suggestion) Scope is above the 10-file guideline; cut order (scoped stop, then guard, then host-only test) is already stated and acceptable.
