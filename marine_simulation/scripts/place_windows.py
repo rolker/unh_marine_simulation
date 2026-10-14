@@ -48,6 +48,7 @@ tested without a display.
 
 import argparse
 import dataclasses
+import math
 import os
 import re
 import subprocess
@@ -163,7 +164,8 @@ def load_layout(path: str):
     if unknown:
         raise LayoutError('%s: unknown key(s) %s' % (path, ', '.join(sorted(unknown))))
     timeout = data.get('timeout_seconds', DEFAULT_TIMEOUT)
-    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or timeout <= 0:
+    if (isinstance(timeout, bool) or not isinstance(timeout, (int, float))
+            or not math.isfinite(timeout) or timeout <= 0):
         raise LayoutError('%s: timeout_seconds must be a positive number' % path)
     entries = data.get('windows')
     if not isinstance(entries, list) or not entries:
@@ -311,6 +313,8 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
     pending = list(placements)
     deadline = clock() + timeout
     while True:
+        # The listing taken at or after the deadline is the last one.
+        last = clock() >= deadline
         windows = list_windows(runner)
         for placement in list(pending):
             window = find_window(windows, placement)
@@ -322,7 +326,7 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
                 problems.append(problem)
         # One look after the deadline too: placing a window takes seconds, and a
         # window that appeared meanwhile must not be reported as missing.
-        if not pending or clock() >= deadline:
+        if not pending or last:
             break
         sleep(POLL_SECONDS)
     for placement in pending:
@@ -350,13 +354,17 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
     """Move one window, verify it, and move it once more if it did not stay."""
     wanted = geometry_text(*geometry)
     for attempt in (1, 2):
-        for command in clear_commands(window):
-            runner(command)
-        sleep(CLEAR_SECONDS)
-        for command in move_commands(window, geometry, placement.fullscreen):
-            runner(command)
-        sleep(SETTLE_SECONDS)
-        now = next((w for w in list_windows(runner) if w.ident == window.ident), None)
+        try:
+            for command in clear_commands(window):
+                runner(command)
+            sleep(CLEAR_SECONDS)
+            for command in move_commands(window, geometry, placement.fullscreen):
+                runner(command)
+            sleep(SETTLE_SECONDS)
+            now = next((w for w in list_windows(runner) if w.ident == window.ident), None)
+        except LayoutError as error:
+            # A window that closed under us (a splash screen) must not stop the others.
+            return 'window %r could not be placed: %s' % (placement.name, error)
         if now is None:
             return 'window %r disappeared while it was being placed' % placement.name
         window = now

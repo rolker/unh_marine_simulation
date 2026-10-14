@@ -148,10 +148,13 @@ def test_the_newest_matching_window_wins():
     {'windows': [_window_entry(extra=1)]},
     {'timeout_seconds': 0},
     {'timeout_seconds': 'soon'},
+    {'timeout_seconds': float('nan')},
+    {'timeout_seconds': float('inf')},
     {'surprise': 1},
 ], ids=['no-windows', 'neither', 'both', 'rect-short', 'rect-negative', 'fullscreen-string',
         'match-empty', 'match-unknown', 'monitor-empty', 'name-empty', 'duplicate-name',
-        'unknown-key', 'timeout-zero', 'timeout-text', 'top-level-unknown'])
+        'unknown-key', 'timeout-zero', 'timeout-text', 'timeout-nan', 'timeout-inf',
+        'top-level-unknown'])
 def test_layout_rejects_a_malformed_file(tmp_path, overrides):
     with pytest.raises(pw.LayoutError):
         pw.load_layout(_layout(tmp_path, **overrides))
@@ -417,3 +420,43 @@ def test_check_layout_names_what_is_wrong(tmp_path):
         pw.check_layout(path, X11, Tools(' 0: +*DP-2 1920/1x1080/1+0+0  DP-2\n'))
     with pytest.raises(pw.LayoutError, match='cannot read'):
         pw.check_layout(str(tmp_path / 'missing.yaml'), X11, Tools())
+
+
+def test_a_window_that_closes_while_it_is_placed_does_not_stop_the_others():
+    desktop = FakeDesktop()
+    real = desktop.runner
+
+    def runner(command):
+        if '-b' in command and '0x04200003' in command:
+            raise pw.LayoutError('wmctrl failed: Cannot find client window')
+        return real(command)
+
+    monitors = pw.parse_monitors(XRANDR)
+    ps = [pw.Placement('camp', 'CCOMAutonomousMissionPlanner', '', 'HDMI-0', True, None),
+          pw.Placement('other', 'zzz', '', 'HDMI-0', True, None)]
+    problems = pw.place_all(ps, monitors, 3.0, runner=runner, sleep=desktop.sleep,
+                            clock=desktop.clock, log=lambda _: None)
+    assert len(problems) == 2
+    assert "'camp' could not be placed" in problems[0] and 'did not appear' in problems[1]
+
+
+def test_a_window_that_appears_while_another_is_placed_is_still_found_after_the_deadline():
+    desktop = FakeDesktop()
+    real = desktop.runner
+    seen = {'late': False}
+
+    def runner(command):
+        out = real(command)
+        if command[:2] == ['wmctrl', '-lx'] and desktop.now >= 1.0:
+            seen['late'] = True
+            out += '0x05000001  0 late.late  host LATE\n'
+        return out
+
+    monitors = pw.parse_monitors(XRANDR)
+    ps = [pw.Placement('camp', 'CCOMAutonomousMissionPlanner', '', 'HDMI-0', True, None),
+          pw.Placement('late', 'late', '', 'HDMI-0', True, None)]
+    # camp settles in 2 s, which is past the 1 s deadline; late must still get one look.
+    problems = pw.place_all(ps, monitors, 1.0, runner=runner, sleep=desktop.sleep,
+                            clock=desktop.clock, log=lambda _: None)
+    assert seen['late']
+    assert not any('did not appear' in p for p in problems)
