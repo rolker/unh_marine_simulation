@@ -23,3 +23,21 @@ issue: 97
 - [ ] Recommendation: state which design open items are deferred (output channel, stale-command reordering, ack slot, force field, sticky FAILED on link groups, scoped group shutdown beyond all-or-nothing, delegate, readiness predicates beyond nodes/lifecycle_active).
 - [ ] Recommendation: consequences to land in the same PR: marine_simulation README (demo section), .agents/README.md package inventory and layout, package.xml exec_depend changes, and a note on #96 linking the fix.
 - [ ] Recommendation: ADR-0008 conventions apply (license headers, ament_python layout, flake8 config incl. D213 style already used here); no ADR needed (design doc says deliberately none).
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-14 12:29 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-97/plan.md` at `78861da`
+**Branch**: feature/issue-97 at `78861da`
+**Phases**: single
+
+### Open questions
+- [ ] lifecycle_guard default on in demo_boats_launch.py?
+- [ ] JSON in std_msgs/String acceptable for the prototype wire format?
+- [ ] Closing CAMP stops the whole demo and exits the manager?
+- [ ] Target-area publisher (#93) stub group now or later?
+- [ ] Scoped-stop spike fails: accept all-or-nothing with per-group STOP/START rejected?
+- [ ] Package name launch_manager_proto, rename at move time?
+- [ ] Record design deviations in the uma design doc via follow-up, or only in this README?
