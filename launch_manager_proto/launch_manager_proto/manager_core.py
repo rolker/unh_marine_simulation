@@ -65,7 +65,10 @@ COMMAND_TYPES = ('SET_PROFILE', 'START', 'STOP', 'CLEAR_FAILURE')
 SCHEMA = 1
 ACK_RING = 8
 DISCOVER_PERIOD = 2.0
-_BAD_NODE_STATUS = (core.FAILED, core.FINALIZED_STATUS, core.MISSING)
+# A node never seen (MISSING) is not an immediate failure: the group's own ready timeout
+# decides, and names it. Everything here is final.
+_BAD_NODE_STATUS = (core.FAILED, core.FINALIZED_STATUS)
+START_GRACE = 3.0
 _NO_SCOPED_STOP = ('scoped stop is not supported by this runner: stop everything or leave '
                    'the group running')
 
@@ -130,6 +133,7 @@ class _Group:
         self.last_discovery = 0.0
         self.left_by_exit = False
         self.notes: List[str] = []
+        self.start_pending = False      # injected, no process attributed yet
 
 
 class ManagerCore:
@@ -148,6 +152,7 @@ class ManagerCore:
         self._stop_all_issued = False
         self._began = False
         self._shutting_down = False
+        self._hold_open = False
 
     # -- queries ---------------------------------------------------------------------------
 
@@ -167,9 +172,11 @@ class ManagerCore:
     @property
     def finished(self) -> bool:
         """Whether the manager should exit: configured to, and every group is at rest."""
-        return (self.spec.exit_when_all_stopped and self._began and all(
+        return (self.spec.exit_when_all_stopped and self._began and not self._hold_open and all(
             g.desired == DESIRED_STOPPED and g.state == STOPPED and not g.alive
             for g in self._groups.values()))
+        # _hold_open: after CLEAR_FAILURE the operator is about to START again; an
+        # all-stopped manager must not exit under them (cleared by START or SET_PROFILE).
 
     # -- starting up ------------------------------------------------------------------------
 
@@ -189,10 +196,13 @@ class ManagerCore:
         g = self._groups.get(group)
         if g is not None:
             g.alive[pid] = name
+            g.start_pending = False
 
     def on_shutdown(self) -> None:
-        """Note that the launch service is going down: exits from now on are expected."""
+        """Note that the launch service is going down: exits are expected, nothing converges."""
         self._shutting_down = True
+        for g in self._groups.values():
+            self._suspend(g)
 
     def on_process_exited(self, group: str, pid: int, name: str, returncode: int,
                           respawning: bool = False) -> None:
@@ -243,7 +253,10 @@ class ManagerCore:
         for ack in self._acks:
             if ack['request_id'] == request_id:
                 return ack
-        result, detail = self._execute(message)
+        try:
+            result, detail = self._execute(message)
+        except Exception as error:  # noqa: B902  a bad message must never take the manager down
+            result, detail = REJECTED, 'could not process the command: %s' % error
         ack = {'request_id': request_id, 'result': result, 'detail': detail}
         self._acks.append(ack)
         del self._acks[:-ACK_RING]
@@ -256,7 +269,7 @@ class ManagerCore:
             return REJECTED, 'type must be one of %s' % ', '.join(COMMAND_TYPES)
         if kind == 'SET_PROFILE':
             profile = message.get('profile')
-            if profile not in self.spec.profiles:
+            if not isinstance(profile, str) or profile not in self.spec.profiles:
                 return REJECTED, 'unknown profile %r' % (profile,)
             members = set(self.spec.profiles[profile])
             wanted = {n: (DESIRED_RUNNING if n in members else DESIRED_STOPPED)
@@ -265,6 +278,8 @@ class ManagerCore:
             if problem:
                 return REJECTED, problem
             self._write_profile(profile)
+            self._hold_open = False
+            self._stop_all_issued = False
             return ACCEPTED, 'profile %s written' % profile
         names = message.get('groups')
         if not isinstance(names, list) or not names or not all(
@@ -279,6 +294,8 @@ class ManagerCore:
                 return REJECTED, '%s is FAILED: CLEAR_FAILURE first' % ', '.join(failed)
             for n in names:
                 self._groups[n].desired = DESIRED_RUNNING
+            self._hold_open = False
+            self._stop_all_issued = False
             return ACCEPTED, 'start %s' % ', '.join(names)
         if kind == 'CLEAR_FAILURE':
             not_failed = [n for n in names if self._groups[n].state != FAILED]
@@ -291,6 +308,8 @@ class ManagerCore:
             return REJECTED, problem
         for n in names:
             self._groups[n].desired = DESIRED_STOPPED
+        if kind == 'CLEAR_FAILURE':
+            self._hold_open = True
         return ACCEPTED, '%s %s' % ('clear failure of' if kind == 'CLEAR_FAILURE' else 'stop',
                                     ', '.join(names))
 
@@ -342,7 +361,8 @@ class ManagerCore:
             self._step_stopped(g, now)
             return
         if g.state == FAILED:
-            self._tick_converger(g)
+            if not self._shutting_down:
+                self._tick_converger(g)
             return
         if g.state == STOPPING:
             if not g.alive:
@@ -362,6 +382,10 @@ class ManagerCore:
                 self._begin_stop(g, now)
             elif self._runner.supports_scoped_stop:
                 self._runner.stop(g.spec.name)
+        elif g.start_pending and now - g.started_at < START_GRACE:
+            # The launch is still spawning its processes: none is attributed yet, but some
+            # will be. Stopping now would drop the group's handlers and then find them.
+            self._set(g, STOPPING, 'waiting for the launch to finish starting', now)
         elif g.state != STOPPED:
             self._drop_converger(g)
             self._set(g, STOPPED, '', now)
@@ -383,6 +407,8 @@ class ManagerCore:
         self._set(g, STOPPING, 'stopping', now)
 
     def _step_idle(self, g: _Group, now: float) -> None:
+        if self._shutting_down:
+            return
         blockers = [r for r in g.spec.requires if self._groups[r].state != READY]
         if blockers:
             g.blocked_by = blockers
@@ -400,13 +426,17 @@ class ManagerCore:
             g.converger = self._services.make_converger(g.spec.lifecycle.target)
             for node_name in g.spec.lifecycle.nodes:
                 g.converger.add_node(node_name)
+        g.start_pending = True
         self._set(g, STARTING, 'launch injected', now)
         try:
             self._runner.start(g.spec)
         except Exception as error:  # noqa: B902  any failure to start is the group's failure
+            g.start_pending = False
             self._fail(g, 'cannot start: %s' % error, now)
 
     def _step_running(self, g: _Group, now: float) -> None:
+        if self._shutting_down:
+            return
         self._tick_converger(g, discover=True)
         reasons = self._not_ready_reasons(g)
         bad = [r for r in (g.converger.report() if g.converger else [])
@@ -471,6 +501,7 @@ class ManagerCore:
         """Forget the last run: a stopped group has no lifecycle nodes and no live handlers."""
         self._runner.group_stopped(g.spec.name)
         if g.converger is not None:
+            g.converger.suspend()       # a read still in flight must not send anything
             self._services.forget(g.converger.node_names())
             g.converger = None
 

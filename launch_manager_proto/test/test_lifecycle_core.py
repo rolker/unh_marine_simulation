@@ -353,3 +353,41 @@ def test_every_transition_sent_is_logged_with_the_attempt_number():
     assert sent[0].endswith('sending configure from unconfigured (attempt 1)')
     assert sent[1].endswith('sending configure from unconfigured (attempt 2)')
     assert sent[2].endswith('sending activate from inactive (attempt 1)')
+
+
+def test_confirm_state_does_not_survive_reaching_target():
+    node = FakeNode(core.UNCONFIGURED)
+    nodes = {'/a': node}
+    conv, backend = make(nodes, settle=0.0)
+    run(conv, backend, 30, until=conv.all_on_target)
+    assert conv._nodes['/a'].confirm_state == ''
+    node.state = core.INACTIVE                 # drift: the next request needs a fresh confirm
+    backend.sent.clear()
+    run(conv, backend, 0.3)
+    assert backend.sent == []                  # first read only decides, then asks again
+
+
+def test_a_read_in_flight_across_suspend_and_resume_is_ignored():
+    node = FakeNode(core.ACTIVE)
+    nodes = {'/a': node}
+    conv, backend = make(nodes, settle=0.0)
+    conv.tick()                                # a read of the old run is in flight
+    conv.suspend()
+    node.state = core.UNCONFIGURED             # the node was replaced meanwhile
+    conv.resume()
+    backend.clock.now += 0.1
+    backend.pump()                             # the stale 'active' answer arrives
+    assert status(conv).status != core.ON_TARGET
+    assert status(conv).state == core.UNKNOWN
+
+
+def test_reasons_carry_no_changing_numbers_so_status_is_not_republished_every_tick():
+    node = FakeNode(core.UNCONFIGURED, ignore_request_on=(1,))
+    nodes = {'/a': node}
+    conv, backend = make(nodes, settle=0.0, backoff=(5.0,), reply_timeout=1.0)
+    seen = set()
+    for _ in range(60):
+        run(conv, backend, 0.1)
+        seen.add(status(conv).reason)
+    assert not any(any(ch.isdigit() for ch in reason.replace('0 s limit', '')) for reason in seen
+                   if 'attempt' not in reason and 'sent' not in reason), seen

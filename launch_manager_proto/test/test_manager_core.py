@@ -510,3 +510,127 @@ def test_a_respawning_exit_does_not_close_a_restart_never_group():
     w.run(1)
     assert w.core.desired('camp') == mc.DESIRED_RUNNING
     assert w.core.desired('boats') == mc.DESIRED_RUNNING
+
+
+@pytest.mark.parametrize('profile', [[1], {'a': 1}, 7, None, True])
+def test_a_set_profile_command_with_a_non_string_profile_is_rejected(profile):
+    w = World()
+    ack = w.core.handle_command({'request_id': 'p', 'type': 'SET_PROFILE', 'profile': profile})
+    assert ack['result'] == mc.REJECTED and 'unknown profile' in ack['detail']
+
+
+def test_an_exception_while_executing_a_command_becomes_a_rejection():
+    w = World()
+    w.core._execute = lambda message: 1 / 0
+    ack = w.core.handle_command({'request_id': 'boom', 'type': 'STOP', 'groups': ['camp']})
+    assert ack['result'] == mc.REJECTED and 'could not process' in ack['detail']
+
+
+def test_clear_failure_keeps_an_all_stopped_manager_alive_until_the_operator_acts():
+    data = copy.deepcopy(DATA)
+    data['groups']['camp']['requires'] = []
+    data['groups']['boats']['follows'] = []
+    data['groups']['scorer']['follows'] = []
+    data['profiles']['demo'] = ['boats']
+    w = World(data=data, nodes={'/b1/x': FakeNode(), '/score': FakeNode()})
+    w.core.begin()
+    w.run(1)
+    w.runner.launch_process('boats')
+    w.run(30)
+    assert w.state('boats') == mc.FAILED
+    w.core.handle_command({'request_id': 'c', 'type': 'CLEAR_FAILURE', 'groups': ['boats']})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(3)
+    assert w.state('boats') == mc.STOPPED and not w.core.finished      # waits for START
+    w.core.handle_command({'request_id': 's', 'type': 'START', 'groups': ['boats']})
+    w.run(1)
+    assert w.state('boats') == mc.STARTING
+    w.core.handle_command({'request_id': 'n', 'type': 'SET_PROFILE', 'profile': 'none'})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(3)
+    assert w.core.finished
+
+
+def test_nothing_converges_or_starts_once_the_launch_is_shutting_down():
+    w = World()
+    w.boot()
+    w.core.on_shutdown()
+    w.nodes['/b1/x'].state = core.INACTIVE
+    sent = len(w.services.backend.sent)
+    w.run(5)
+    assert len(w.services.backend.sent) == sent
+    fresh = World()
+    fresh.core.begin()
+    fresh.core.on_shutdown()
+    fresh.run(2)
+    assert fresh.runner.started == []
+
+
+def test_a_stopped_groups_converger_is_suspended_before_it_is_dropped():
+    w = World()
+    w.boot()
+    conv = w.core._groups['boats'].converger
+    w.core.handle_command({'request_id': 'q', 'type': 'STOP', 'groups': ['boats']})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(0.5)
+    assert w.core._groups['boats'].converger is None
+    assert all(r.status == core.SUSPENDED for r in conv.report())
+
+
+def test_a_node_that_never_appears_does_not_fail_the_group_before_its_ready_timeout():
+    w = World(nodes={'/b1/x': FakeNode(), '/score': FakeNode()})
+    w.services.config.appear_timeout = 5.0
+    w.core.begin()
+    w.run(1)
+    w.runner.launch_process('boats')
+    w.run(12)                                                  # past appear_timeout
+    assert w.state('boats') == mc.STARTING
+    w.run(30)
+    assert w.state('boats') == mc.FAILED
+    assert 'not ready after 20 s' in w.core.status()['groups'][0]['detail']
+
+
+def test_stop_right_after_start_waits_for_the_launch_to_show_its_processes():
+    w = World()
+    w.core.begin()
+    w.run(0.3)                                     # boats injected, no process attributed yet
+    w.core.handle_command({'request_id': 'x', 'type': 'STOP', 'groups': ['boats']})
+    w.run(1.0)
+    assert w.state('boats') == mc.STOPPING         # not declared stopped while launching
+    w.runner.launch_process('boats')               # the process appears late
+    w.run(0.5)
+    assert w.runner.stopped == ['boats']
+    w.runner.finish_stop('boats')
+    w.run(0.5)
+    assert w.state('boats') == mc.STOPPED
+
+
+def test_a_start_that_never_produces_a_process_is_stopped_after_the_grace():
+    w = World()
+    w.core.begin()
+    w.run(0.3)
+    w.core.handle_command({'request_id': 'x', 'type': 'STOP', 'groups': ['boats']})
+    w.run(mc.START_GRACE + 1)
+    assert w.state('boats') == mc.STOPPED
+
+
+def test_stop_everything_works_again_after_a_group_was_started_while_stopping():
+    w = World(scoped=False)
+    w.boot()
+    everything = ['boats', 'camp', 'scorer']
+    w.core.handle_command({'request_id': 'a', 'type': 'STOP', 'groups': everything})
+    w.run(0.5)
+    assert w.runner.stopped_all == 1
+    w.core.handle_command({'request_id': 'b', 'type': 'START', 'groups': ['boats']})
+    for name in everything:
+        w.runner.finish_stop(name)
+    w.run(1)
+    assert w.state('boats') == mc.STARTING                      # restarted
+    w.runner.launch_process('boats')
+    w.run(0.5)
+    w.core.handle_command({'request_id': 'c', 'type': 'STOP', 'groups': everything})
+    w.run(0.5)
+    assert w.runner.stopped_all == 2                            # issued again, not skipped

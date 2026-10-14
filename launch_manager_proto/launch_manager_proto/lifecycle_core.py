@@ -163,6 +163,7 @@ class _Node:
     backoff_until: float = 0.0
     confirm_state: str = ''
     confirm_at: float = 0.0
+    generation: int = 0
     failed: bool = False
     status: str = UNKNOWN_STATUS
     last_result: str = ''
@@ -242,6 +243,9 @@ class LifecycleConverger:
         node.ever_seen = False
         node.observed = UNKNOWN
         node.status = UNKNOWN_STATUS
+        node.generation += 1
+        node.query_pending = False
+        node.next_query = 0.0
 
     # -- the loop ------------------------------------------------------------------------
 
@@ -258,16 +262,18 @@ class LifecycleConverger:
     def _query(self, node: _Node, now: float) -> None:
         node.query_pending = True
         issued = now
+        generation = node.generation
 
         def done(state: Optional[str]) -> None:
-            self._on_state(node.name, issued, state)
+            self._on_state(node.name, issued, state, generation)
 
         self._backend.get_state(node.name, done)
 
-    def _on_state(self, name: str, issued: float, state: Optional[str]) -> None:
+    def _on_state(self, name: str, issued: float, state: Optional[str],
+                  generation: int = 0) -> None:
         node = self._nodes.get(name)
-        if node is None:
-            return
+        if node is None or generation != node.generation:
+            return      # a read of an earlier run of this node (it was reset since)
         node.query_pending = False
         if self._suspended:
             return
@@ -292,6 +298,7 @@ class LifecycleConverger:
         elif state != node.observed:
             node.observed = state
             node.state_since = now
+            node.confirm_state = ''
         self._decide(node, issued, now)
 
     def _decide(self, node: _Node, issued: float, now: float) -> None:
@@ -302,7 +309,7 @@ class LifecycleConverger:
         if state in TRANSITIONAL:
             if now - node.state_since > self.config.inflight_timeout:
                 node.status = STUCK
-                node.reason = 'in %s for %.0f s' % (state, now - node.state_since)
+                node.reason = 'in %s past the %.0f s limit' % (state, self.config.inflight_timeout)
             else:
                 node.status = WAITING
                 node.reason = 'in flight: %s' % state
@@ -316,7 +323,7 @@ class LifecycleConverger:
             return
         if now < node.backoff_until:
             node.status = WAITING
-            node.reason = 'retry in %.1f s' % (node.backoff_until - now)
+            node.reason = 'backing off before the next attempt'
             return
         quiet_since = max(node.first_seen, node.state_since)
         if now - quiet_since < self.config.settle:
@@ -345,6 +352,7 @@ class LifecycleConverger:
         node.sent_at = None
         node.reply = None
         node.backoff_until = 0.0
+        node.confirm_state = ''
         node.status = ON_TARGET
         node.reason = ''
 
