@@ -90,3 +90,28 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [x] (suggestion) Pass the target file to CAMP as an absolute path (Claude B) — `marine_simulation/launch/demo_launch.py:480`
 - [x] (suggestion) README: XDG_CONFIG_HOME change also hides other CAMP config; placement is one-shot; state directory persists (Claude B, Claude A) — `marine_simulation/README.md:1`
 - [x] (suggestion) Harden reset_settings_root (symlinked parents, temp-file write for scorer params, scorer exit banner) (Claude B) — `marine_simulation/launch/demo_launch.py:254` (deferred: directory mode 0o700 done; the rest is low risk behind the marker and lock rules, and a scorer crash is visible in the output; no respawn is deliberate)
+
+## Implementation
+**Status**: complete (pending owner rehearsal)
+**When**: 2026-10-14 11:25 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Commits**: 0d5594b..e56e7b3 (review round 1 fixes, on top of the first implementation commits cd45492..8570d23)
+
+### What was done
+- One launch for the whole demo display (demo_launch.py), run_demo.sh, place_windows.py, per-machine layout, docs; round-1 review fixes in 0d5594b..e56e7b3.
+- Owner requirement met and tested (dae53c0): closing CAMP shuts the whole launch down.
+
+### Deferrals
+- View may shift when placement resizes CAMP after it restored its centre: not fixable in this repo, filed rolker/camp#242; README says to check the view at the rehearsal.
+- Reset-guard hardening beyond directory mode 0o700 (symlinked parents, temp-file write for scorer params, scorer exit banner): low risk behind the marker and lock rules; a scorer crash is visible in the output.
+
+### CAMP issues filed
+- rolker/camp#240
+- rolker/camp#242
+
+### Live self-test (ROS_DOMAIN_ID=88, two boats)
+- demo run 1 (earlier agent): 14 of 14 passed.
+- demo runs 2, 4, 5 (clean): 13/14 (clownfish CUBE coverage 0 messages), 13/14 (bluefin chart_datum frames missing), 11/14 (platform, motion); each failing log shows a launch_ros lifecycle "Abandoning wait for ... change_state service response" at shutdown. Run 3 was contaminated by two runs sharing the domain and is not counted.
+- The unmodified boats self-test (no --demo) fails the same way: 4 of 6 runs passed all 12 checks (demo_launch without the scorer: 2 of 3) (failures: missing chart_datum frames; platforms never appeared). So the flake is pre-existing in the boats launch (lifecycle service responses lost), not caused by this branch. Not fixed here; needs its own issue.
+- Placement live checks (wmctrl not installed, no CAMP started): not run.
