@@ -229,6 +229,7 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
     """
     from marine_interfaces.msg import SurveyArea
     import rclpy
+    from rclpy.clock import Clock, ClockType
     from rclpy.node import Node
 
     if not rclpy.ok():
@@ -248,7 +249,10 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
         areas = load_survey_areas(file_path)
         ids = area_ids(areas, area_id)
         publisher = node.create_publisher(SurveyArea, topic, latched_qos())
-        stamp = node.get_clock().now().to_msg()
+        # Wall-clock time, not the node clock: under use_sim_time the node clock reads 0
+        # until /clock arrives, and a restart after an edit would then carry a stamp the
+        # scorer ignores as not newer than the one it holds for the same id.
+        stamp = Clock(clock_type=ClockType.SYSTEM_TIME).now().to_msg()
         for message in build_survey_areas(
                 areas, ids, stamp, standard_name, standard_a, standard_b, priority):
             publisher.publish(message)
