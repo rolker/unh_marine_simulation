@@ -60,3 +60,27 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [ ] (suggestion) The scorer's node name/namespace is not verified in the plan; confirm the coverage_assessment_node naming before writing its match regex.
 - [ ] (suggestion) If boats go FAILED, camp stays BLOCKED with no CAMP window; say in the README what a helper sees (status CLI) and consider a log line naming the failed node.
 - [ ] (suggestion) Scope is above the 10-file guideline; cut order (scoped stop, then guard, then host-only test) is already stated and acceptable.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-14 14:09 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-97 at `7e11203` (not pushed)
+**Plan**: `.agent/work-plans/issue-97/plan.md`, brought in line with the built code (see its Implementation Notes)
+
+### What was built
+- `launch_manager_proto`: convergence core, rclpy backend, configuration, groups/profiles/`requires`/`follows`, manager node on one shared LaunchService, scoped group stop, CLI (`manager`, `status`, `command`, `converge`).
+- `marine_simulation`: `demo_manager.py` + `config/demo_manager.yaml` (groups boats, camp, scorer; profiles demo, headless, boats), `lifecycle_guard` in `demo_boats_launch.py` (default on).
+- Docs: `launch_manager_proto/README.md`, `marine_simulation/README.md`, `.agents/README.md`.
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation`: 314 tests, 0 errors, 8 failures, 2 skipped. All 8 failures are the lint that was already failing in files this work does not touch (copyright of `bizzyboat_massabesic_launch.py`, flake8 I100 in `simulator_launch.py`, pep257 D213 in three launch files). Every `launch_manager_proto` test passes; the two skips are the host-only live test and one pre-existing skip.
+- Host-only (`ROS_DOMAIN_ID=173`, no CAMP, no GUI): `test_demo_manager_live.py` 1 passed in 72.52s: boats READY under the manager, `demo_boats_selftest.py` passes against them, the group is stopped and restarted without losing a process, ctrl-c on the manager alone leaves nothing in the graph.
+- Plain launch with the guard, `demo_boats_selftest.py --start-launch --boats bluefin,clownfish` on `ROS_DOMAIN_ID=176`: 5 of 5 runs passed (the issue recorded 4 of 6 without it); in 2 of the 5 the guard repaired one node that a lost reply had left in `inactive`.
+- `pre-commit run --from-ref 4324569 --to-ref HEAD` (flake8): passed.
+
+### Open items
+- [ ] The `demo` profile (with CAMP) was not run: no GUI on the owner's desktop. `follows` is covered by the process test with a stand-in group and the unit tests.
+- [ ] Reconcile `demo_manager.py` with the #94 whole-display launch when that lands (scorer parameter generation overlaps).
+- [ ] rolker/unh_marine_autonomy#410 carries the design-document updates.
