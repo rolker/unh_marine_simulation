@@ -220,3 +220,24 @@ def test_switches_are_read_in_any_letter_case_like_the_launch_does(machine):
     result = _run(machine, 'enable_joysticks:=False', 'enable_window_layout:=NO',
                   'enable_camp:=Off', FAKE_PGREP_STATUS='0')
     assert result.returncode == 0, result.stderr
+
+
+def test_the_last_value_of_a_switch_wins_like_in_the_launch(machine):
+    _files(machine, 'layout.yaml')
+    result = _run(machine, 'enable_joysticks:=false', 'enable_joysticks:=true')
+    assert result.returncode == 1 and 'joysticks.yaml' in result.stderr
+    result = _run(machine, 'enable_joysticks:=true', 'enable_joysticks:=false')
+    assert result.returncode == 0, result.stderr
+
+
+def test_without_boats_no_joystick_file_is_needed(machine):
+    _files(machine, 'layout.yaml')
+    result = _run(machine, 'enable_boats:=false')
+    assert result.returncode == 0, result.stderr
+
+
+def test_a_tilde_in_a_file_argument_is_expanded_for_the_launch_too(machine):
+    (machine / 'mine.yaml').write_text('x: 1\n')
+    result = _run(machine, 'layout_config:=~/mine.yaml', 'enable_joysticks:=false')
+    assert result.returncode == 0, result.stderr
+    assert 'layout_config:=%s/mine.yaml' % machine in _record(machine)

@@ -38,15 +38,16 @@ command -v ros2 > /dev/null 2>&1 ||
 # exported ROS_DOMAIN_ID is deliberately not used: lab computers often share one.
 export ROS_DOMAIN_ID=${DEMO_ROS_DOMAIN_ID:-42}
 
-switched_off() { # switched_off <switch> <args...>; the launch reads any letter case
-    local switch=$1 arg
+switched_off() { # switched_off <switch> <args...>; the last one wins and any letter case counts
+    local switch=$1 arg off=1
     shift
     for arg in "$@"; do
         case "${arg,,}" in
-            "$switch:=false" | "$switch:=0" | "$switch:=no" | "$switch:=off") return 0 ;;
+            "$switch:=false" | "$switch:=0" | "$switch:=no" | "$switch:=off") off=0 ;;
+            "$switch:="*) off=1 ;;
         esac
     done
-    return 1
+    return "$off"
 }
 
 given() { # given <name> <args...>: print the last <name>:=value, ~ expanded; fail if absent
@@ -75,8 +76,19 @@ place_windows_tool() { # where the checker is: beside this script, else in the i
     fi
 }
 
+# Path arguments get ~ expanded here, for the checks and for the launch alike.
+passed=()
+for arg in "$@"; do
+    case "$arg" in
+        layout_config:=* | joystick_config:=*) passed+=("${arg%%:=*}:=$(given "${arg%%:=*}" "$arg")") ;;
+        *) passed+=("$arg") ;;
+    esac
+done
+set -- "${passed[@]}"
+
 args=()
-if ! switched_off enable_joysticks "$@" && ! given joystick_config "$@" > /dev/null; then
+if ! switched_off enable_boats "$@" && ! switched_off enable_joysticks "$@" &&
+    ! given joystick_config "$@" > /dev/null; then
     [ -f "$CONFIG_DIR/joysticks.yaml" ] ||
         die "$CONFIG_DIR/joysticks.yaml is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
     args+=("joystick_config:=$CONFIG_DIR/joysticks.yaml")
