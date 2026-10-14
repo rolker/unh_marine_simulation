@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 
 """
 Unit tests for launch/demo_launch.py.
@@ -502,7 +503,7 @@ def test_camp_gets_the_demo_settings_directory(monkeypatch, tmp_path):
 def test_camp_opens_the_target_file_when_one_is_given(monkeypatch, tmp_path):
     target = tmp_path / 'target.json'
     target.write_text('{}')
-    target_off = dict(enable_boats='false', enable_scorer='false')
+    target_off = {'enable_boats': 'false', 'enable_scorer': 'false'}
     camp = _camp(_setup(monkeypatch, tmp_path, target_area_file=str(target), **target_off))[0]
     assert str(target) in _arguments(camp)
     plain = _camp(_setup(monkeypatch, tmp_path, **target_off))[0]

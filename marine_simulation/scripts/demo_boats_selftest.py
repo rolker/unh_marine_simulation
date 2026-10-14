@@ -400,7 +400,7 @@ class SelfTest:
 
     def check_scorer(self, timeout, centre):
         """
-        The scorer is active and assesses a target area published (latched) at ``centre``.
+        Check that the scorer is active and assesses a target area placed at ``centre``.
 
         Publishes what the target-area publisher does: a ``SurveyArea`` on
         ``/survey_area``, reliable and transient_local, so the check does not depend

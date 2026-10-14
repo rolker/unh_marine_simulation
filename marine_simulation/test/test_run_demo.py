@@ -25,6 +25,7 @@
 # CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT
 # LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+# POSSIBILITY OF SUCH DAMAGE.
 
 """Tests for scripts/run_demo.sh with a fake ``ros2`` that records its arguments."""
 
@@ -40,7 +41,7 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'scripts' / 'run_demo.sh'
 
 @pytest.fixture
 def machine(tmp_path):
-    """A fake home with a ``ros2`` on PATH that writes its arguments to a file."""
+    """Return a fake home with a ``ros2`` on PATH that records its arguments."""
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     ros2 = bin_dir / 'ros2'
