@@ -131,12 +131,17 @@ def test_without_substitutions_the_file_is_refused():
 
 
 def test_every_launch_file_the_configuration_names_exists(spec):
+    missing_packages = []
     for group in spec.groups.values():
         try:
             share = get_package_share_directory(group.package)
         except PackageNotFoundError:
-            pytest.skip('package %s is not installed in this environment' % group.package)
+            missing_packages.append(group.package)
+            continue
         assert (pathlib.Path(share) / 'launch' / group.file).is_file(), group.name
+    if missing_packages:
+        pytest.skip('not installed in this environment, so not checked: %s'
+                    % ', '.join(missing_packages))
 
 
 def test_main_refuses_an_unknown_profile_and_an_unknown_boat(capsys):
