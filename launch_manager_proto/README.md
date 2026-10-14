@@ -164,7 +164,18 @@ CAMP does not start until the boats are READY, so a boat that cannot be brought 
 here, in the terminal's ERROR line (`group boats FAILED: ... /clownfish/mbes_sim ...`) and as
 a CAMP that never opens, instead of as a boat that silently does not work. To retry:
 `command clear-failure boats`, then `command start boats` (or close the manager and run it
-again).
+again). After a `CLEAR_FAILURE` an all-stopped manager waits for the `START` instead of
+exiting, even with `exit_when_all_stopped`.
+
+## Trust
+
+The configuration file is a code-execution boundary (a group runs any launch file, a
+`launch: {path: ...}` any file on the host); `{package, file}` cannot leave the package's
+launch directory. The command topic is unauthenticated: anything on the ROS domain can stop
+and start the groups, as with the udp_bridge design this follows. Run the manager on a
+private domain, or behind whatever restricts the domain, and edit the configuration only as
+the user who runs it. A command that is not valid is answered `REJECTED` and never stops the
+manager.
 
 ## Control surface (plain strings, versioned JSON)
 

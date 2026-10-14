@@ -253,6 +253,11 @@ FAILED: lifecycle node /clownfish/mbes_sim FAILED: configure failed 5 times: ...
 `launch_manager_proto status` shows the same, with `!` marking every node that is not
 active. The fix is to close the manager (Ctrl-C) and run it again.
 
+The lifecycle guard of the plain launch is not as loud: a node it cannot fix is reported by
+the guard's own last line (`did not converge ... saw N of M expected node(s)`) and by the exit
+code of the `lifecycle_guard` process in the launch output, and the rest of the launch keeps
+running.
+
 Host-only test of the whole thing (about two minutes, needs the datum grids and a private
 domain above 100; it never starts CAMP or any GUI):
 

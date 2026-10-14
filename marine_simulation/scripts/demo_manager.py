@@ -45,6 +45,7 @@ import argparse
 import importlib.util
 import os
 import re
+import shutil
 import sys
 import tempfile
 from typing import Dict, List, Sequence
@@ -84,7 +85,7 @@ def scorer_parameters(names: Sequence[str]) -> dict:
 
 
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
-                  scorer_params: str) -> Dict[str, str]:
+                  scorer_params: str, roster_file: str) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
         'boats': boats_argument,
@@ -92,6 +93,7 @@ def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: b
         'boats_expect': str(MIN_LIFECYCLE_NODES_PER_BOAT * len(names)),
         'enable_joysticks': 'true' if enable_joysticks else 'false',
         'scorer_params': scorer_params,
+        'roster_file': roster_file,
     }
 
 
@@ -123,23 +125,27 @@ def main(argv: List[str] = None) -> int:
         return 2
     names = [b.name for b in boats]
     state_dir = tempfile.mkdtemp(prefix='demo_manager_')
-    scorer_path = os.path.join(state_dir, 'scorer_params.yaml')
-    with open(scorer_path, 'w') as f:
-        yaml.safe_dump(scorer_parameters(names), f)
     try:
-        spec = load_config(
-            args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
-            substitutions(names, args.boats, not args.no_joysticks, scorer_path))
-    except ConfigError as error:
-        print('configuration error:\n%s' % error, file=sys.stderr)
-        return 2
-    if args.profile:
-        if args.profile not in spec.profiles:
-            print('unknown profile %r; the configuration has %s'
-                  % (args.profile, ', '.join(sorted(spec.profiles))), file=sys.stderr)
+        scorer_path = os.path.join(state_dir, 'scorer_params.yaml')
+        with open(scorer_path, 'w') as f:
+            yaml.safe_dump(scorer_parameters(names), f)
+        try:
+            spec = load_config(
+                args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
+                substitutions(names, args.boats, not args.no_joysticks, scorer_path,
+                              roster_path))
+        except ConfigError as error:
+            print('configuration error:\n%s' % error, file=sys.stderr)
             return 2
-        spec.default_profile = args.profile
-    return run_manager(spec)
+        if args.profile:
+            if args.profile not in spec.profiles:
+                print('unknown profile %r; the configuration has %s'
+                      % (args.profile, ', '.join(sorted(spec.profiles))), file=sys.stderr)
+                return 2
+            spec.default_profile = args.profile
+        return run_manager(spec)
+    finally:
+        shutil.rmtree(state_dir, ignore_errors=True)
 
 
 if __name__ == '__main__':

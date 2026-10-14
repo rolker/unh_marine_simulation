@@ -61,7 +61,8 @@ def roster_names():
 def spec():
     names = roster_names()
     return config.load_config(
-        str(CONFIG), demo_manager.substitutions(names, '', True, '/tmp/scorer_params.yaml'))
+        str(CONFIG),
+        demo_manager.substitutions(names, '', True, '/tmp/scorer_params.yaml', str(ROSTER)))
 
 
 def test_the_shipped_configuration_loads_with_the_roster(spec):
@@ -101,7 +102,8 @@ def test_boat_lifecycle_regex_matches_exactly_the_roster_boats(spec):
 def test_a_boat_subset_narrows_regex_and_expectation():
     names = roster_names()[:2]
     spec = config.load_config(
-        str(CONFIG), demo_manager.substitutions(names, ','.join(names), False, '/x.yaml'))
+        str(CONFIG),
+        demo_manager.substitutions(names, ','.join(names), False, '/x.yaml', '/r.yaml'))
     life = spec.groups['boats'].lifecycle
     assert life.expect == demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT * 2
     assert not re.search(life.match, '/%s/mbes_sim' % roster_names()[2])
@@ -120,7 +122,7 @@ def test_scorer_is_one_lifecycle_node_at_a_fixed_name(spec):
 
 
 def test_every_placeholder_in_the_file_is_provided():
-    names = demo_manager.substitutions(roster_names(), '', True, '/x')
+    names = demo_manager.substitutions(roster_names(), '', True, '/x', '/r.yaml')
     used = set(re.findall(r'\$\{(\w+)\}', CONFIG.read_text()))
     assert used == set(names), 'placeholders and substitutions disagree'
 
@@ -154,6 +156,19 @@ def test_main_refuses_an_unknown_profile_and_an_unknown_boat(capsys):
 def test_the_per_boat_node_count_agrees_with_the_launch_file():
     launch = demo_manager._load_boats_launch(str(PACKAGE))
     assert demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT == launch.LIFECYCLE_NODES_PER_BOAT
+
+
+def test_the_chosen_roster_reaches_the_boats_launch(spec):
+    assert spec.groups['boats'].arguments['roster_file'].default == str(ROSTER)
+    custom = config.load_config(
+        str(CONFIG), demo_manager.substitutions(roster_names(), '', True, '/s', '/my/roster.yaml'))
+    assert custom.groups['boats'].arguments['roster_file'].default == '/my/roster.yaml'
+
+
+def test_a_refused_run_leaves_no_temporary_directory_behind(tmp_path, monkeypatch):
+    monkeypatch.setattr(demo_manager.tempfile, 'tempdir', str(tmp_path))
+    assert demo_manager.main(['--profile', 'nope']) == 2
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_boats_regex_escapes():

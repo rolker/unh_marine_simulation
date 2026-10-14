@@ -25,6 +25,7 @@ groups:
     launch: {package: marine_simulation, file: demo_boats_launch.py}
     arguments:
       boats: {type: string, default: '${boats}'}
+      roster_file: {type: string, default: '${roster_file}'}
       enable_joysticks: {type: bool, default: '${enable_joysticks}'}
       # The manager is the one convergence loop; the launch's own guard stays off.
       lifecycle_guard: {type: bool, default: false}
