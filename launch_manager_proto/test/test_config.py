@@ -238,3 +238,52 @@ def test_load_config_round_trip(tmp_path):
     path = tmp_path / 'ok.yaml'
     path.write_text(yaml.safe_dump(GOOD))
     assert config.load_config(str(path)).default_profile == 'demo'
+
+
+def test_numbers_and_flags_may_arrive_as_placeholder_text():
+    data = good()
+    data['manager']['status_period'] = '${period}'
+    data['manager']['exit_when_all_stopped'] = '${exit}'
+    data['manager']['converge'] = {'settle': '${settle}', 'max_attempts': '${tries}',
+                                   'reply_timeout': '${reply}'}
+    data['groups']['boats']['ready']['timeout'] = '${ready}'
+    spec = config.parse_config(data, {'period': '0.5', 'exit': 'false', 'settle': '0',
+                                      'tries': '3', 'reply': '2', 'ready': '45'})
+    assert spec.status_period == 0.5 and spec.exit_when_all_stopped is False
+    assert spec.converge.settle == 0.0 and spec.converge.max_attempts == 3
+    assert spec.converge.reply_timeout == 2.0 and spec.groups['boats'].ready_timeout == 45.0
+    text = problems(data, period='soon', exit='maybe', settle='-1', tries='0', reply='x',
+                    ready='y')
+    assert text.count('must be') >= 5
+
+
+def test_a_lifecycle_section_that_could_never_become_ready_is_refused():
+    data = good()
+    data['groups']['scorer']['lifecycle'] = {'nodes': ['/a'], 'expect': 3}
+    assert 'more than the 1 node' in problems(data)
+    data = good()
+    data['groups']['boats']['lifecycle'] = {'match': ''}
+    assert 'must not be empty' in problems(data)
+    data = good()
+    data['groups']['scorer']['lifecycle'] = {'nodes': ['/a', '/a', '/b']}
+    spec = config.parse_config(data)
+    assert spec.groups['scorer'].lifecycle.nodes == ['/a', '/b']
+    assert spec.groups['scorer'].lifecycle.expect == 2
+    data = good()
+    data['groups']['boats']['ready']['nodes'] = ['relative']
+    assert 'ready.nodes' in problems(data)
+
+
+@pytest.mark.parametrize('package,file', [
+    ('p', '../x.py'), ('p', '/etc/x.py'), ('p', 'a/../../x.py'), ('../p', 'x.py'),
+    ('p q', 'x.py')])
+def test_a_launch_file_may_not_leave_its_package_directory(package, file):
+    data = good()
+    data['groups']['camp']['launch'] = {'package': package, 'file': file}
+    assert 'launch.' in problems(data)
+
+
+def test_a_launch_file_in_a_subdirectory_of_the_launch_directory_is_fine():
+    data = good()
+    data['groups']['camp']['launch'] = {'package': 'p', 'file': 'sub/x_launch.py'}
+    assert config.parse_config(data).groups['camp'].file == 'sub/x_launch.py'

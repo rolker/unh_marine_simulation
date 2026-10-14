@@ -139,7 +139,31 @@ def _substitute(node: Any, values: Mapping[str, str], problems: List[str], where
     return node
 
 
+def _scalar(value):
+    """
+    Return ``value`` with placeholder text turned into the number or boolean it spells.
+
+    A ``${KEY}`` that fills a whole value arrives as a string; the fields that take a number
+    or a flag accept the text (``'30'``, ``'0.5'``, ``'true'``) as what it says. Anything else
+    is returned unchanged for the caller's own check to reject.
+    """
+    if isinstance(value, str):
+        text = value.strip()
+        if text in ('true', 'false'):
+            return text == 'true'
+        try:
+            return int(text)
+        except ValueError:
+            pass
+        try:
+            return float(text)
+        except ValueError:
+            pass
+    return value
+
+
 def _positive(value, where, problems, default):
+    value = _scalar(value)
     if isinstance(value, bool) or not isinstance(value, (int, float)) or \
             not math.isfinite(value) or value <= 0:
         problems.append('%s must be a positive number, got %r' % (where, value))
@@ -202,7 +226,11 @@ def _parse_lifecycle(raw, where, problems) -> Optional[LifecycleSpec]:
             spec.match = raw['match']
         except (re.error, TypeError) as error:
             problems.append('%s.match is not a valid regular expression (%s)' % (where, error))
-    spec.nodes = _string_list(raw.get('nodes'), where + '.nodes', problems)
+        if not raw['match']:
+            problems.append('%s.match must not be empty (it would never discover anything)'
+                            % where)
+            spec.match = None
+    spec.nodes = list(dict.fromkeys(_string_list(raw.get('nodes'), where + '.nodes', problems)))
     for name in spec.nodes:
         if not name.startswith('/'):
             problems.append('%s.nodes: %r must be a fully qualified name (start with /)'
@@ -217,6 +245,9 @@ def _parse_lifecycle(raw, where, problems) -> Optional[LifecycleSpec]:
         problems.append('%s.expect must be an integer >= 1' % where)
     else:
         spec.expect = expect
+        if spec.match is None and spec.nodes and expect > len(spec.nodes):
+            problems.append('%s.expect (%d) is more than the %d node(s) listed and there is no '
+                            'match to find others' % (where, expect, len(spec.nodes)))
     spec.target = raw.get('target', core.ACTIVE)
     if spec.target not in core.TARGETS:
         problems.append('%s.target must be one of %s' % (where, ', '.join(core.TARGETS)))
@@ -243,6 +274,11 @@ def _parse_group(name, raw, problems) -> Optional[GroupSpec]:
     elif isinstance(launch, dict) and set(launch) == {'package', 'file'} and all(
             isinstance(v, str) and v for v in launch.values()):
         group = GroupSpec(name=str(name), package=launch['package'], file=launch['file'])
+        if not re.fullmatch(r'[A-Za-z][A-Za-z0-9_]*', group.package):
+            problems.append('%s.launch.package %r is not a package name' % (where, group.package))
+        if group.file.startswith('/') or '..' in group.file.split('/'):
+            problems.append('%s.launch.file %r must stay inside the package launch directory '
+                            '(use launch: {path: ...} for any other file)' % (where, group.file))
     else:
         problems.append('%s.launch must be {package: <str>, file: <str>} or {path: <str>}'
                         % where)
@@ -257,6 +293,10 @@ def _parse_group(name, raw, problems) -> Optional[GroupSpec]:
         ready = {}
     _unknown(ready, ('nodes', 'timeout'), where + '.ready', problems)
     group.ready_nodes = _string_list(ready.get('nodes'), where + '.ready.nodes', problems)
+    for name in group.ready_nodes:
+        if not name.startswith('/'):
+            problems.append('%s.ready.nodes: %r must be a fully qualified name (start with /)'
+                            % (where, name))
     if 'timeout' in ready:
         group.ready_timeout = _positive(ready['timeout'], where + '.ready.timeout', problems, 60.0)
     group.restart = raw.get('restart', 'on-failure')
@@ -304,7 +344,7 @@ def parse_config(data: Any, substitutions: Optional[Mapping[str, str]] = None) -
     if 'status_period' in manager:
         spec.status_period = _positive(manager['status_period'], 'manager.status_period',
                                        problems, 1.0)
-    flag = manager.get('exit_when_all_stopped', False)
+    flag = _scalar(manager.get('exit_when_all_stopped', False))
     if not isinstance(flag, bool):
         problems.append('manager.exit_when_all_stopped must be true or false')
     else:
@@ -323,11 +363,13 @@ def parse_config(data: Any, substitutions: Optional[Mapping[str, str]] = None) -
             else:
                 spec.converge.backoff = tuple(float(v) for v in value)
         elif key == 'max_attempts':
+            value = _scalar(value)
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 problems.append('manager.converge.max_attempts must be an integer >= 1')
             else:
                 spec.converge.max_attempts = value
         elif key == 'settle':
+            value = _scalar(value)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or value < 0:
                 problems.append('manager.converge.settle must be >= 0')
             else:

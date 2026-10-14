@@ -72,6 +72,12 @@ def format_status(snapshot: dict) -> str:
     return '\n'.join(lines)
 
 
+def is_snapshot(data) -> bool:
+    """Return whether ``data`` looks like a manager status snapshot (anything else is ignored)."""
+    return (isinstance(data, dict) and isinstance(data.get('manager'), str)
+            and isinstance(data.get('groups'), list) and isinstance(data.get('acks'), list))
+
+
 def _find_status_topics(node: Node, manager: Optional[str]) -> List[str]:
     if manager:
         return ['/%s/status' % manager.strip('/')]
@@ -89,7 +95,7 @@ def _read_snapshot(node: Node, topics: List[str], timeout: float,
                 data = json.loads(message.data)
             except ValueError:
                 return
-            if isinstance(data, dict) and 'groups' in data and 'manager' in data:
+            if is_snapshot(data):
                 latest[topic] = data
         return on_message
 
@@ -197,6 +203,7 @@ def cmd_converge(args) -> int:
         backend, time.monotonic, config, target=args.target,
         log=lambda text: print('[launch_manager_proto] %s' % text, flush=True))
     known = set()
+    terminal = (core.ON_TARGET, core.FAILED, core.FINALIZED_STATUS, core.MISSING)
     end = time.monotonic() + args.timeout
     last_print = 0.0
     last_new = time.monotonic()
@@ -218,9 +225,10 @@ def cmd_converge(args) -> int:
                 print('[launch_manager_proto] %d lifecycle node(s) on target %s' % (
                     len(known), args.target), flush=True)
                 return 0
-            if converger.any_failed() and len(known) >= args.expect and all(
-                    r.status in (core.ON_TARGET, core.FAILED, core.FINALIZED_STATUS)
-                    for r in converger.report()):
+            # Nothing left to try: every node is final and some are not on target. More nodes
+            # may still appear, so wait for the expected count, or for a long quiet spell.
+            if converger.any_failed() and all(r.status in terminal for r in converger.report()) \
+                    and (len(known) >= args.expect or time.monotonic() - last_new > 30.0):
                 break
         print('[launch_manager_proto] did not converge to %s (saw %d of %d expected node(s)):'
               '\n%s' % (args.target, len(known), args.expect, format_report(converger.report())),
@@ -264,7 +272,9 @@ def build_parser() -> argparse.ArgumentParser:
     converge.add_argument('--match', default=None, help='regular expression on node names')
     converge.add_argument('--target', choices=core.TARGETS, default=core.ACTIVE)
     converge.add_argument('--expect', type=int, default=1,
-                          help='nodes that must be seen before success counts')
+                          help='nodes that must be seen before success counts (default 1: '
+                               'success as soon as one node is on target, so pass the number '
+                               'the launch is going to start)')
     converge.add_argument('--timeout', type=float, default=120.0)
     converge.add_argument('--settle', type=float, default=2.0)
     converge.add_argument('--quiet-period', type=float, default=0.0,

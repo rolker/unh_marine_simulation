@@ -44,7 +44,8 @@ ALLOWED_IMPORTS = {
     'ros2launch_session', 'ament_index_python', 'yaml',
 }
 ALLOWED_DEPENDS = {
-    'launch', 'launch_ros', 'lifecycle_msgs', 'rclpy', 'ros2launch_session', 'std_msgs',
+    'ament_index_python', 'launch', 'launch_ros', 'lifecycle_msgs', 'rclpy',
+    'ros2launch_session', 'std_msgs',
     'python3-yaml',
 }
 
@@ -75,6 +76,18 @@ def test_package_xml_depends_only_on_generic_packages():
     depends = {e.text for e in root if e.tag.endswith('depend') and e.tag != 'buildtool_depend'
                and e.tag != 'test_depend'}
     assert depends <= ALLOWED_DEPENDS, depends
+
+
+def test_every_third_party_import_is_declared_in_package_xml():
+    root = ET.parse(os.path.join(PACKAGE_ROOT, 'package.xml')).getroot()
+    declared = {e.text for e in root if e.tag == 'exec_depend'}
+    imported = set()
+    for path in module_files():
+        imported |= third_party_imports(path)
+    imported -= {'launch_manager_proto'}
+    packages = {'yaml': 'python3-yaml'}
+    missing = {packages.get(name, name) for name in imported} - declared
+    assert not missing, 'imported but not declared in package.xml: %s' % sorted(missing)
 
 
 def test_no_marine_package_is_named_anywhere_in_the_package():
