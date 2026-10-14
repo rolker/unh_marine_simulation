@@ -6,8 +6,11 @@ Everything runs against a fake ArcGIS image service that answers ``?f=json`` and
 skips when the CCOM GIS service is not reachable.
 """
 
+import http.client
 import json
 import os
+import ssl
+import stat
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -308,6 +311,65 @@ def test_other_http_errors_are_not_retried():
         _fetch([_http_error(404)])
 
 
+def test_truncated_body_and_ssl_errors_are_retried_not_tracebacks():
+    _, calls, _ = _fetch([http.client.IncompleteRead(b'II*', 100), ssl.SSLError('eof'),
+                          OSError('reset')])
+    assert len(calls) == 4
+
+
+def test_an_oversized_body_is_refused_not_retried(monkeypatch):
+    monkeypatch.setattr(db, 'MAX_BODY_BYTES', 10)
+
+    class Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self, limit):
+            return b'x' * limit
+
+    monkeypatch.setattr(db.urllib.request, 'urlopen', lambda *a, **k: Response())
+    with pytest.raises(db.DemoBathyError, match='larger than'):
+        db.urllib_opener('http://x/a', 1.0)
+
+
+def _info(**changes):
+    info = {'extent': {'xmin': 0.0, 'ymin': 0.0, 'xmax': 100.0, 'ymax': 100.0,
+                       'spatialReference': {'latestWkid': 3857, 'wkid': 102100}},
+            'pixelSizeX': 4.0, 'pixelSizeY': 4.0, 'noDataValue': -99999.0}
+    info.update(changes)
+    return info
+
+
+def _service_info(info):
+    body = json.dumps(info).encode()
+    return db.service_info('http://svc', lambda url, timeout: body)
+
+
+def test_a_sane_service_description_is_accepted():
+    assert _service_info(_info())['step'] == 4.0
+
+
+@pytest.mark.parametrize('changes', [
+    {'pixelSizeX': 0.0}, {'pixelSizeX': -4.0}, {'pixelSizeX': 5000.0},
+    {'pixelSizeX': float('nan')}, {'pixelSizeY': 8.0}, {'noDataValue': float('inf')},
+    {'extent': {'xmin': 5.0, 'xmax': 5.0, 'ymin': 0.0, 'ymax': 9.0,
+                'spatialReference': {'wkid': 3857}}},
+    {'extent': {'xmin': 0.0}}, {'extent': 'oops'}])
+def test_a_bad_service_description_is_a_plain_error(changes):
+    with pytest.raises(db.DemoBathyError):
+        _service_info(_info(**changes))
+
+
+def test_a_service_description_without_pixel_size_y_is_a_plain_error():
+    info = _info()
+    del info['pixelSizeY']
+    with pytest.raises(db.DemoBathyError, match='unexpected service description'):
+        _service_info(info)
+
+
 # --- fill, coverage -----------------------------------------------------------------------
 
 def test_fill_precedence_is_first_layer_first_and_uncovered_stays_nan():
@@ -589,6 +651,110 @@ def test_main_reports_a_failure_as_one_line_and_exit_one(tmp_path, capsys):
 
 def test_the_packaged_chart_grid_path_exists():
     assert os.path.isfile(db.default_chart_grid())
+
+
+def _good_tile_bytes(tmp_path, ncols=20, nrows=10, step=4.0, dtype=gdal.GDT_Float32):
+    path = str(tmp_path / 'good.tif')
+    dataset = gdal.GetDriverByName('GTiff').Create(path, ncols, nrows, 1, dtype)
+    dataset.SetGeoTransform((100.0, step, 0, 200.0, 0, -step))
+    dataset.GetRasterBand(1).Fill(3)
+    dataset = None
+    with open(path, 'rb') as handle:
+        return handle.read()
+
+
+def test_a_truncated_tile_is_rejected_by_check_tile(tmp_path):
+    body = _good_tile_bytes(tmp_path, 400, 400)
+    cut = tmp_path / 'cut.tif'
+    cut.write_bytes(body[:len(body) // 2])
+    with pytest.raises(db.DemoBathyError, match='not a readable raster'):
+        db.check_tile(str(cut), (100.0, 160.0, 1700.0, 1800.0), 400, 400, 4.0)
+
+
+def test_a_tile_of_the_wrong_data_type_is_rejected(tmp_path):
+    path = tmp_path / 'byte.tif'
+    path.write_bytes(_good_tile_bytes(tmp_path, dtype=gdal.GDT_Byte))
+    with pytest.raises(db.DemoBathyError, match='Float32'):
+        db.check_tile(str(path), (100.0, 160.0, 180.0, 200.0), 20, 10, 4.0)
+
+
+def test_a_poisoned_cached_tile_is_fetched_again(tmp_path, chart):
+    network, four, _ = _network(tmp_path)
+    work = str(tmp_path / 'work')
+    _build(tmp_path, chart, network, work_dir=work)
+    first = four.exports
+    for name in os.listdir(work):
+        path = os.path.join(work, name)
+        size = os.path.getsize(path)
+        with open(path, 'r+b') as handle:
+            handle.truncate(size // 2)
+    _build(tmp_path, chart, network, work_dir=work, force=True)
+    assert four.exports == 2 * first
+
+
+def test_a_failed_run_removes_its_temp_work_dir(tmp_path, chart, monkeypatch):
+    made = []
+    real = db.tempfile.mkdtemp
+
+    def recording(*args, **kwargs):
+        made.append(real(*args, dir=str(tmp_path), **kwargs))
+        return made[-1]
+
+    monkeypatch.setattr(db.tempfile, 'mkdtemp', recording)
+    network, _, _ = _network(tmp_path, shift=2.0)
+    with pytest.raises(db.DemoBathyError):
+        db.build(bbox=BBOX, out=str(tmp_path / 'o' / 'demo.tif'), chart_grid=chart,
+                 opener=network, log=lambda m: None)
+    assert len(made) == 1 and not os.path.exists(made[0])
+
+
+def test_a_successful_run_removes_its_temp_work_dir_too(tmp_path, chart, monkeypatch):
+    made = []
+    real = db.tempfile.mkdtemp
+    monkeypatch.setattr(db.tempfile, 'mkdtemp',
+                        lambda *a, **k: made.append(real(*a, dir=str(tmp_path), **k)) or made[-1])
+    network, _, _ = _network(tmp_path)
+    _build(tmp_path, chart, network)
+    assert len(made) == 1 and not os.path.exists(made[0])
+
+
+def test_outputs_are_world_readable_and_leave_no_stray_files(tmp_path, chart):
+    network, _, _ = _network(tmp_path)
+    out, _, _ = _build(tmp_path, chart, network)
+    for path in (out, out + '.provenance.json'):
+        assert stat.S_IMODE(os.stat(path).st_mode) == 0o644
+    assert sorted(os.listdir(os.path.dirname(out))) == ['demo.tif', 'demo.tif.provenance.json']
+
+
+def test_too_many_tiles_or_cells_are_refused(tmp_path, chart, monkeypatch):
+    network, _, _ = _network(tmp_path)
+    monkeypatch.setattr(db, 'MAX_TILES', 3)
+    with pytest.raises(db.DemoBathyError, match='tiles requested'):
+        db.build(bbox=BBOX, out=str(tmp_path / 'a.tif'), chart_grid=chart, opener=network,
+                 resolution=4.0, tile_px=50, log=lambda m: None)
+    monkeypatch.setattr(db, 'MAX_OUTPUT_CELLS', 1000)
+    with pytest.raises(db.DemoBathyError, match='cells'):
+        db.build(bbox=BBOX, out=str(tmp_path / 'b.tif'), chart_grid=chart, opener=network,
+                 resolution=4.0, log=lambda m: None)
+
+
+def test_the_output_is_georeferenced_to_the_position_not_just_shifted_consistently(tmp_path):
+    """A tile whose value is its own 3857 easting must come back as the cell's easting."""
+    grid = db.output_grid(BBOX, 4.0)
+
+    def easting(x, y):
+        return x + 7_875_000.0
+
+    path = _tile_file(tmp_path / 'ramp.tif', easting, NODATA4, True)
+    depth = db.warp_to_grid([path], grid, NODATA4, negate=False)
+    xmin, ymin, xmax, ymax = grid['bounds']
+    to_3857 = osr.CoordinateTransformation(_srs(32619), _srs(3857))
+    for fx, fy in ((0.3, 0.3), (0.5, 0.5), (0.7, 0.6)):
+        col, row = int(fx * grid['width']), int(fy * grid['height'])
+        x = xmin + (col + 0.5) * 4.0
+        y = ymax - (row + 0.5) * 4.0
+        expected = to_3857.TransformPoint(x, y)[0] + 7_875_000.0
+        assert depth[row, col] == pytest.approx(expected, abs=0.25)
 
 
 # --- network ------------------------------------------------------------------------------------

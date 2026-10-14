@@ -21,13 +21,13 @@ provenance) so they can be tested without a network.  See
 import argparse
 import datetime
 import hashlib
+import http.client
 import json
 import math
 import os
 import pathlib
 import random
 import shutil
-import socket
 import sys
 import tempfile
 import time
@@ -80,6 +80,11 @@ PLAUSIBLE_ELEVATION_M = 1.0e4
 CACHE_MAX_AGE_S = 24 * 3600
 # Service pixels fetched beyond the output box so the warp has data at its edges.
 MARGIN_PIXELS = 4
+# Sanity bounds on what a server may tell us and send us.
+MAX_BODY_BYTES = 128 * 1024 * 1024
+MAX_SERVICE_STEP_M = 1000.0
+MAX_TILES = 2000
+MAX_OUTPUT_CELLS = 50_000_000
 
 SOURCE_2M = '2m_compilation'
 SOURCE_4M = '4m_compilation'
@@ -201,7 +206,10 @@ def urllib_opener(url: str, timeout: float) -> bytes:
     """Fetch a URL with the tool's User-Agent; the default ``Opener``."""
     request = urllib.request.Request(url, headers={'User-Agent': USER_AGENT})
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310
-        return response.read()
+        body = response.read(MAX_BODY_BYTES + 1)
+    if len(body) > MAX_BODY_BYTES:
+        raise DemoBathyError('response from %s is larger than %d bytes' % (url, MAX_BODY_BYTES))
+    return body
 
 
 def is_tiff(body: bytes) -> bool:
@@ -232,7 +240,7 @@ def fetch_with_retry(url: str, opener: Opener, validate: Callable[[bytes], bool]
                 raise DemoBathyError('HTTP %d from %s' % (error.code, url)) from error
             last = 'HTTP %d' % error.code
             continue
-        except (urllib.error.URLError, socket.timeout, TimeoutError, ConnectionError) as error:
+        except (http.client.HTTPException, OSError) as error:
             last = '%s: %s' % (type(error).__name__, error)
             continue
         if validate(body):
@@ -258,13 +266,20 @@ def service_info(service: str, opener: Opener) -> Dict:
         result = {'xmin': float(extent['xmin']), 'ymax': float(extent['ymax']),
                   'xmax': float(extent['xmax']), 'ymin': float(extent['ymin']),
                   'step': float(info['pixelSizeX']), 'nodata': float(info['noDataValue'])}
+        step_y = float(info['pixelSizeY'])
         wkid = extent['spatialReference'].get('latestWkid', extent['spatialReference']['wkid'])
-    except (KeyError, TypeError, ValueError) as error:
+    except (KeyError, TypeError, ValueError, AttributeError) as error:
         raise DemoBathyError('%s: unexpected service description (%s)' % (service, error))
     if wkid not in (3857, 102100, 102113):
         raise DemoBathyError('%s: service CRS %r is not Web Mercator' % (service, wkid))
-    if abs(float(info['pixelSizeY']) - result['step']) > 1e-9:
-        raise DemoBathyError('%s: service pixels are not square' % service)
+    values = list(result.values())
+    if not all(math.isfinite(v) for v in values + [step_y]):
+        raise DemoBathyError('%s: service description holds a non-finite number' % service)
+    if not 0 < result['step'] <= MAX_SERVICE_STEP_M or abs(step_y - result['step']) > 1e-9:
+        raise DemoBathyError('%s: service pixel size %r x %r is not a square size in (0, %g] m'
+                             % (service, result['step'], step_y, MAX_SERVICE_STEP_M))
+    if not (result['xmin'] < result['xmax'] and result['ymin'] < result['ymax']):
+        raise DemoBathyError('%s: service extent is empty' % service)
     return result
 
 
@@ -287,8 +302,15 @@ def _cache_name(service: str, box: Tuple[float, float, float, float], ncols: int
 
 def check_tile(path: str, box: Tuple[float, float, float, float], ncols: int, nrows: int,
                step: float) -> None:
-    """Fail unless a tile file's size and geotransform are what was requested."""
-    dataset = gdal.Open(path)
+    """Fail unless a tile file is the Float32 raster that was requested, readable end to end."""
+    try:
+        dataset = gdal.Open(path)
+        band = dataset.GetRasterBand(1)
+        data_type = band.DataType
+        band.ReadAsArray()  # a body cut short opens fine and only fails when read
+    except RuntimeError as error:
+        raise DemoBathyError('tile %s is not a readable raster: %s'
+                             % (os.path.basename(path), error)) from error
     gt = dataset.GetGeoTransform()
     tolerance = 1e-6 * step
     expected = (box[0], step, 0.0, box[3], 0.0, -step)
@@ -300,6 +322,8 @@ def check_tile(path: str, box: Tuple[float, float, float, float], ncols: int, nr
         problems.append('geotransform %r, requested %r' % (gt, expected))
     if dataset.RasterCount != 1:
         problems.append('%d bands' % dataset.RasterCount)
+    if data_type != gdal.GDT_Float32:
+        problems.append('data type %s, requested Float32' % gdal.GetDataTypeName(data_type))
     dataset = None
     if problems:
         raise DemoBathyError('tile %s does not match its request: %s'
@@ -316,7 +340,11 @@ def fetch_tiles(service: str, info: Dict, pixels: Tuple[int, int, int, int], til
     ``check_tile``, so one product never mixes fetch dates.
     """
     records = []
-    for tile in plan_tiles(pixels, tile_px):
+    tiles = plan_tiles(pixels, tile_px)
+    if len(tiles) > MAX_TILES:
+        raise DemoBathyError('%d tiles requested from %s; check the bbox and --tile-px'
+                             % (len(tiles), service))
+    for tile in tiles:
         box = tile_box(tile, info['xmin'], info['ymax'], info['step'])
         ncols, nrows = tile[2], tile[3]
         path = os.path.join(work_dir, _cache_name(service, box, ncols, nrows))
@@ -325,19 +353,20 @@ def fetch_tiles(service: str, info: Dict, pixels: Tuple[int, int, int, int], til
             try:
                 check_tile(path, box, ncols, nrows, info['step'])
                 cached = True
-            except (DemoBathyError, RuntimeError):
+            except DemoBathyError:
                 cached = False
         if not cached:
             body = fetch_with_retry(export_url(service, box, ncols, nrows), opener, is_tiff)
-            partial = path + '.partial'
-            with open(partial, 'wb') as handle:
-                handle.write(body)
+            handle, partial = tempfile.mkstemp(dir=work_dir, suffix='.partial')
+            os.chmod(partial, 0o644)
             try:
+                with os.fdopen(handle, 'wb') as stream:
+                    stream.write(body)
                 check_tile(partial, box, ncols, nrows, info['step'])
-            except (DemoBathyError, RuntimeError):
-                os.unlink(partial)
-                raise
-            os.replace(partial, path)
+                os.replace(partial, path)
+            finally:
+                if os.path.exists(partial):
+                    os.unlink(partial)
         records.append({'file': path, 'box_3857': list(box), 'size_px': [ncols, nrows],
                         'cached': cached})
     return records
@@ -530,65 +559,79 @@ def build(*, bbox: Sequence[float], out: str, resolution: float = DEFAULT_RESOLU
         raise DemoBathyError('chart grid %s is not a file' % chart_grid)
     grid = output_grid(bbox, resolution)
     cells = grid['width'] * grid['height']
-    if cells > 400_000_000:
+    if cells > MAX_OUTPUT_CELLS:
         raise DemoBathyError('%d cells is far more than a demo box; check the bbox' % cells)
 
     own_work_dir = work_dir is None
     work_dir = work_dir or tempfile.mkdtemp(prefix='build_demo_bathy_')
-    os.makedirs(work_dir, exist_ok=True)
-    fetched = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
-    wanted = [(SOURCE_2M, service_2m, True), (SOURCE_4M, service_4m, True)]
-    if regional:
-        wanted.append((SOURCE_16M, service_16m, True))
-    need_3857 = transform_bounds(grid['bounds'], OUTPUT_EPSG, 3857)
-    layers, services, tiles = [], {}, {}
-    for name, service, negate in wanted:
-        info = service_info(service, opener)
-        margin = MARGIN_PIXELS * info['step']
-        box = (need_3857[0] - margin, need_3857[1] - margin,
-               need_3857[2] + margin, need_3857[3] + margin)
-        if not (info['xmin'] <= box[0] and box[2] <= info['xmax']
-                and info['ymin'] <= box[1] and box[3] <= info['ymax']):
-            raise DemoBathyError('the bbox is not inside the extent of %s' % service)
-        pixels = snap_to_service_grid(box, info['xmin'], info['ymax'], info['step'])
-        log('%s: %d tile(s) of up to %d px' % (name, len(plan_tiles(pixels, tile_px)), tile_px))
-        records = fetch_tiles(service, info, pixels, tile_px, work_dir, opener)
-        layers.append((name, warp_to_grid([r['file'] for r in records], grid, info['nodata'],
-                                          negate)))
-        services[name] = {'url': service, 'pixel_size_m': info['step'],
-                          'nodata': info['nodata'], 'extent_3857': [
-                              info['xmin'], info['ymin'], info['xmax'], info['ymax']],
-                          'values': 'elevation, metres; negated to depth'}
-        tiles[name] = [{k: v for k, v in r.items() if k != 'file'} for r in records]
-    chart = warp_to_grid([chart_grid], grid, None, negate=False)
-    layers.append((SOURCE_CHART, chart))
-
-    depth, source, names = fill_layers(layers)
-    coverage = coverage_summary(depth, source, names)
-    compilation, _, _ = fill_layers(layers[:2])
-    seam = seam_statistics(compilation, chart)
-
-    os.makedirs(os.path.dirname(out), exist_ok=True)
-    partial, partial_provenance = out + '.partial', provenance_path + '.partial'
     try:
-        write_grid(partial, depth, grid)
-        verify_grid(partial, depth, grid)
-        provenance = build_provenance(
-            args={'bbox': list(bbox), 'resolution': resolution, 'regional': regional,
-                  'tile_px': tile_px, 'out': out}, grid=grid, services=services, tiles=tiles,
-            chart_path=os.path.abspath(chart_grid), output_sha256=sha256_of(partial),
-            coverage=coverage, seam=seam, fetched=fetched)
-        with open(partial_provenance, 'w') as handle:
-            json.dump(provenance, handle, indent=1)
-            handle.write('\n')
-        os.replace(partial_provenance, provenance_path)
-        os.replace(partial, out)
+        os.makedirs(work_dir, exist_ok=True)
+        fetched = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
+        wanted = [(SOURCE_2M, service_2m, True), (SOURCE_4M, service_4m, True)]
+        if regional:
+            wanted.append((SOURCE_16M, service_16m, True))
+        need_3857 = transform_bounds(grid['bounds'], OUTPUT_EPSG, 3857)
+        layers, services, tiles = [], {}, {}
+        for name, service, negate in wanted:
+            info = service_info(service, opener)
+            margin = MARGIN_PIXELS * info['step']
+            box = (need_3857[0] - margin, need_3857[1] - margin,
+                   need_3857[2] + margin, need_3857[3] + margin)
+            if not (info['xmin'] <= box[0] and box[2] <= info['xmax']
+                    and info['ymin'] <= box[1] and box[3] <= info['ymax']):
+                raise DemoBathyError('the bbox is not inside the extent of %s' % service)
+            pixels = snap_to_service_grid(box, info['xmin'], info['ymax'], info['step'])
+            count = len(plan_tiles(pixels, tile_px))
+            log('%s: %d tile(s) of up to %d px' % (name, count, tile_px))
+            records = fetch_tiles(service, info, pixels, tile_px, work_dir, opener)
+            layers.append((name, warp_to_grid([r['file'] for r in records], grid, info['nodata'],
+                                              negate)))
+            services[name] = {'url': service, 'pixel_size_m': info['step'],
+                              'nodata': info['nodata'], 'extent_3857': [
+                                  info['xmin'], info['ymin'], info['xmax'], info['ymax']],
+                              'values': 'elevation, metres; negated to depth'}
+            tiles[name] = [{k: v for k, v in r.items() if k != 'file'} for r in records]
+        chart = warp_to_grid([chart_grid], grid, None, negate=False)
+        layers.append((SOURCE_CHART, chart))
+
+        depth, source, names = fill_layers(layers)
+        coverage = coverage_summary(depth, source, names)
+        compilation, _, _ = fill_layers(layers[:2])
+        seam = seam_statistics(compilation, chart)
+
+        out_dir = os.path.dirname(out)
+        os.makedirs(out_dir, exist_ok=True)
+        # Unique names, so two builds into one directory never share a half-written file.
+        partials = []
+        for suffix in ('.partial', '.provenance.partial'):
+            handle, name = tempfile.mkstemp(dir=out_dir, prefix='.build_demo_bathy_',
+                                            suffix=suffix)
+            os.close(handle)
+            os.chmod(name, 0o644)  # mkstemp makes it 0600; the product is for everyone
+            partials.append(name)
+        partial, partial_provenance = partials
+        try:
+            write_grid(partial, depth, grid)
+            verify_grid(partial, depth, grid)
+            provenance = build_provenance(
+                args={'bbox': list(bbox), 'resolution': resolution, 'regional': regional,
+                      'tile_px': tile_px, 'out': out}, grid=grid, services=services, tiles=tiles,
+                chart_path=os.path.abspath(chart_grid), output_sha256=sha256_of(partial),
+                coverage=coverage, seam=seam, fetched=fetched)
+            with open(partial_provenance, 'w') as handle:
+                json.dump(provenance, handle, indent=1)
+                handle.write('\n')
+            # The grid goes first: provenance records the grid's SHA-256, so a torn pair
+            # (killed between the two renames) is detectable by that checksum.
+            os.replace(partial, out)
+            os.replace(partial_provenance, provenance_path)
+        finally:
+            for leftover in partials:
+                if os.path.exists(leftover):
+                    os.unlink(leftover)
     finally:
-        for leftover in (partial, partial_provenance):
-            if os.path.exists(leftover):
-                os.unlink(leftover)
-    if own_work_dir:
-        shutil.rmtree(work_dir, ignore_errors=True)
+        if own_work_dir:
+            shutil.rmtree(work_dir, ignore_errors=True)
     log(format_summary(coverage, seam))
     log('wrote %s' % out)
     log('wrote %s' % provenance_path)
