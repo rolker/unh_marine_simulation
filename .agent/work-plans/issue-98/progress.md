@@ -117,3 +117,21 @@ depth range: -3.30 .. 24.74 m (positive down)
 negative-depth (land or drying) cells: 4064815
 compilation minus chart where both exist (2660823 cells): median 0.89 m, 5th -0.23 m, 95th 3.41 m, mean 1.16 m
 ```
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 13:38 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-98 at `b83bd26`
+**Mode**: pre-push
+**Depth**: Deep (reason: about 1900 changed lines; round 2 was one fresh adversarial pass covering both lenses; cross-model off because network use is limited to the CCOM GIS service and the GitHub API)
+**Must-fix**: 0 | **Suggestions**: 1
+**Round**: 2 | **Ship**: recommended — no must-fix; the three round-1 must-fix items verified fixed
+
+### Findings
+- [ ] (suggestion) Request timeout is per socket operation, not a wall-clock deadline for a tile — `mbes_sim/mbes_sim/demo_bathy.py:207` (deferred: a dev tool run by hand; a stuck run can be interrupted and resumes from the tile cache)
+- [x] (suggestion) Ping-centre gate ignored the tide while the beam loop did not — fixed at `b83bd26`, `mbes_sim/mbes_sim/mbes_sim.py:160`
+- [x] (suggestion) Partial files created outside the cleanup scope — fixed at `b83bd26`, `demo_bathy.py`
+- [x] (suggestion) spatialReference with only latestWkid raised KeyError — fixed at `b83bd26`, `demo_bathy.py`
