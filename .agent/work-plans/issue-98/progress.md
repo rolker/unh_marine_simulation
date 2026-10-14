@@ -54,3 +54,29 @@ Independence uncertain: the same session authored the plan and no dispatch heade
 - [x] (must-fix) Approach 7 carried a garbled `.gitignore` sentence; replaced with the real policy — `plan.md` Approach 7 (folded in)
 - [x] (suggestion) Tile cache keyed by service/box/size/type and expired at 24 h so one product never mixes fetch dates — `plan.md` Approach 3 (folded in)
 - [ ] (suggestion) Resolve the six Open Questions with the owner before implementation; the demo box and grid location gate the README command
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 13:34 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-98 at `c0127b9`
+**Mode**: pre-push
+**Depth**: Deep (reason: about 1700 changed lines, new tool plus launch change; two disjoint-lens Claude adversarial passes, governance and plan drift read by the lead; cross-model 5e off because the task limits network use to the CCOM GIS service and the GitHub API; static analysis = the repo flake8 hook, clean)
+**Must-fix**: 3 | **Suggestions**: 9
+**Round**: 1 | **Ship**: continue — three real defects (leaked temp dir, unretried read errors, header-only tile validation) need a second read after the fix
+
+### Findings
+- [ ] (must-fix) Temp work dir leaks on every failed run (cross-confirmed Lens A + B) — `mbes_sim/mbes_sim/demo_bathy.py:build`
+- [ ] (must-fix) fetch_with_retry misses IncompleteRead/HTTPException/SSLError/OSError and service_info reads pixelSizeY outside its try; a short read is a traceback, not a retry (cross-confirmed) — `demo_bathy.py:fetch_with_retry, service_info`
+- [ ] (must-fix) check_tile validates only the header: a truncated tile is cached for 24 h and later fails with an uncaught RuntimeError; data type never checked — `demo_bathy.py:check_tile`
+- [ ] (suggestion) Validate server-supplied step/extent, cap body size and tile count — `demo_bathy.py:service_info, fetch_tiles`
+- [ ] (suggestion) 400M-cell cap lets a typo bbox ask for 10-15 GB of memory — `demo_bathy.py:build`
+- [ ] (suggestion) Fixed partial file names and world-writable work dirs: use unique partials — `demo_bathy.py:build, fetch_tiles`
+- [ ] (suggestion) Provenance renamed before the grid; rename the grid first — `demo_bathy.py:build`
+- [ ] (suggestion) Launch silently uses an unreadable/unprojected or wrong grid and prints the chart fallback only on stdout — `marine_simulation/launch/demo_boats_launch.py:resolve_mbes_grid`
+- [ ] (suggestion) nodata compare must be float32-safe and a NaN position must not raise — `mbes_sim/mbes_sim/bathy_grid.py:getDepth`
+- [ ] (suggestion) Beams over dry cells give zero or negative ranges; skip them — `mbes_sim/mbes_sim/mbes_sim.py:191`
+- [ ] (suggestion) Tests do not pin absolute georeferencing (half-pixel shift would pass) — `mbes_sim/test/test_demo_bathy.py`
+- [ ] (suggestion) Copyright header absent on new mbes_sim files (matches the package's existing files; deferred) — `mbes_sim/mbes_sim/demo_bathy.py`
