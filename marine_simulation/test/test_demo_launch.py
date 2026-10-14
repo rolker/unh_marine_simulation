@@ -40,10 +40,12 @@ import importlib.util
 import os
 import pathlib
 import random
+import time
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
-from launch import LaunchContext
-from launch.actions import EmitEvent, IncludeLaunchDescription, RegisterEventHandler
+from launch import LaunchContext, LaunchDescription, LaunchService
+from launch.actions import EmitEvent, ExecuteProcess, IncludeLaunchDescription
+from launch.actions import RegisterEventHandler
 from launch.events import Shutdown
 from launch.events.process import ProcessExited
 import pytest
@@ -769,3 +771,16 @@ def test_a_failed_placement_is_announced_and_a_good_one_is_quiet():
     assert demo.placement_exit(Event(0), None) == []
     banner = demo.placement_exit(Event(1), None)
     assert len(banner) == 1 and 'NOT IN PLACE' in _perform(banner[0].msg)
+
+
+def test_the_handler_really_stops_a_running_launch_when_camp_exits():
+    # A real LaunchService run: a short-lived process stands in for the CAMP window
+    # being closed, a long one for the boats. The launch must end well before it.
+    camp = ExecuteProcess(cmd=['sleep', '1'])
+    boats = ExecuteProcess(cmd=['sleep', '60'])
+    service = LaunchService()
+    service.include_launch_description(
+        LaunchDescription([boats, camp, *demo.camp_exit_handlers(camp)]))
+    started = time.monotonic()
+    assert service.run() == 0
+    assert time.monotonic() - started < 30
