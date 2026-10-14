@@ -21,6 +21,7 @@ import pytest
 gdal.UseExceptions()
 
 BBOX = (-70.705, 43.070, -70.695, 43.078)
+STEP2 = 2.0
 STEP4 = 4.0
 STEP16 = 16.0
 NODATA4 = -99999.0
@@ -45,6 +46,11 @@ def _to_3857(x, y):
 def _elevation_4m(x, y):
     """East of the cut: 10 m deep (elevation -10). West of it: no data."""
     return np.where(x > X_CUT, -10.0, NODATA4)
+
+
+def _elevation_2m(x, y):
+    """East of the second cut: 12 m deep (elevation -12). West of it: 3.4e38 nodata."""
+    return np.where(x > X_CUT2, -12.0, NODATA16)
 
 
 def _elevation_16m(x, y):
@@ -137,17 +143,20 @@ def chart(tmp_path):
 def _cuts():
     """Put the data boundaries inside the box, as 3857 positions."""
     xmin, ymin, xmax, ymax = db.output_grid(BBOX, 4.0)['bounds']
-    global X_CUT, Y_CUT
+    global X_CUT, X_CUT2, Y_CUT
+    X_CUT2 = _to_3857(xmin + 0.7 * (xmax - xmin), ymin)[0]
     X_CUT = _to_3857(xmin + 0.4 * (xmax - xmin), ymin)[0]
     Y_CUT = _to_3857(xmin, ymin + 0.3 * (ymax - ymin))[1]
 
 
 def _network(tmp_path, **kwargs):
+    two = FakeService(str(tmp_path), db.SERVICE_2M, STEP2, NODATA16, _elevation_2m, False,
+                      shift=kwargs.get('shift', 0.0))
     four = FakeService(str(tmp_path), db.SERVICE_4M, STEP4, NODATA4, _elevation_4m, True,
                        shift=kwargs.pop('shift', 0.0))
     sixteen = FakeService(str(tmp_path), db.SERVICE_16M, STEP16, NODATA16, _elevation_16m,
                           False)
-    return FakeNetwork(four, sixteen, **kwargs), four, sixteen
+    return FakeNetwork(two, four, sixteen, **kwargs), four, sixteen
 
 
 def _cell(path_or_array, grid, fx, fy):
@@ -166,6 +175,7 @@ def _read(path):
 def _build(tmp_path, chart, network, **kwargs):
     out = str(tmp_path / 'out' / 'demo.tif')
     messages = []
+    kwargs.setdefault('resolution', 4.0)
     provenance = db.build(bbox=BBOX, out=out, chart_grid=chart, opener=network,
                           log=messages.append, **kwargs)
     return out, provenance, messages
@@ -409,8 +419,10 @@ def test_build_fills_in_precedence_order_and_keeps_land(tmp_path, chart):
     grid = db.output_grid(BBOX, 4.0)
     assert dataset.RasterXSize == grid['width'] and dataset.RasterYSize == grid['height']
     assert osr.SpatialReference(wkt=dataset.GetProjection()).GetAuthorityCode(None) == '32619'
-    # East: the compilation (elevation -10 becomes depth 10), whatever else says.
-    assert _cell(array, grid, 0.85, 0.5) == pytest.approx(10.0, abs=1e-3)
+    # Far east: the 2 m compilation (elevation -12 becomes depth 12) beats the 4 m one.
+    assert _cell(array, grid, 0.9, 0.5) == pytest.approx(12.0, abs=1e-3)
+    # Middle: no 2 m data (3.4e38 by value), so the 4 m compilation (depth 10).
+    assert _cell(array, grid, 0.55, 0.5) == pytest.approx(10.0, abs=1e-3)
     # West, south of the land strip: the chart (regional is off).
     assert _cell(array, grid, 0.25, 0.3) == pytest.approx(5.0, abs=1e-3)
     # West, north: the chart's land stays a negative depth, not nodata.
@@ -429,12 +441,29 @@ def test_regional_fills_between_the_compilation_and_the_chart(tmp_path, chart):
     array, _ = _read(out)
     grid = db.output_grid(BBOX, 4.0)
     assert sixteen.exports >= 1
-    assert _cell(array, grid, 0.85, 0.5) == pytest.approx(10.0, abs=1e-3)
+    assert _cell(array, grid, 0.9, 0.5) == pytest.approx(12.0, abs=1e-3)
+    assert _cell(array, grid, 0.55, 0.5) == pytest.approx(10.0, abs=1e-3)
     # West, north of the 16 m nodata strip: 16 m beats the chart.
     assert _cell(array, grid, 0.25, 0.6) == pytest.approx(20.0, abs=1e-3)
     # West, in the 16 m nodata strip: the chart.
     assert _cell(array, grid, 0.25, 0.1) == pytest.approx(5.0, abs=1e-3)
     assert provenance['coverage']['cells_by_source']['16m_regional'] > 0
+
+
+def test_the_default_resolution_is_two_metres(tmp_path, chart):
+    assert db.parse_args(['--bbox', '0', '0', '1', '1', '--out', 'x']).resolution == 2.0
+    network, _, _ = _network(tmp_path)
+    out, provenance, _ = _build(tmp_path, chart, network, resolution=db.DEFAULT_RESOLUTION_M)
+    assert gdal.Open(out).GetGeoTransform()[1] == 2.0
+    assert provenance['output_grid']['resolution_m'] == 2.0
+
+
+def test_the_four_metre_service_is_still_the_second_source(tmp_path, chart):
+    network, four, _ = _network(tmp_path)
+    _, provenance, _ = _build(tmp_path, chart, network)
+    by_source = provenance['coverage']['cells_by_source']
+    assert by_source['2m_compilation'] > 0 and by_source['4m_compilation'] > 0
+    assert four.exports >= 1
 
 
 def test_provenance_records_requests_services_and_checksums(tmp_path, chart):
@@ -445,11 +474,14 @@ def test_provenance_records_requests_services_and_checksums(tmp_path, chart):
     assert on_disk['output_sha256'] == db.sha256_of(out)
     assert on_disk['chart_grid']['sha256'] == db.sha256_of(chart)
     assert on_disk['services']['4m_compilation']['url'] == db.SERVICE_4M
+    assert on_disk['services']['2m_compilation']['url'] == db.SERVICE_2M
+    assert on_disk['services']['2m_compilation']['nodata'] == NODATA16
     assert on_disk['services']['4m_compilation']['nodata'] == NODATA4
     tiles = on_disk['tiles']['4m_compilation']
     assert len(tiles) > 1 and all(len(t['box_3857']) == 4 for t in tiles)
     assert on_disk['fetched'].endswith('+00:00')
     assert 'not stated' in on_disk['vertical_datum'] and 'WGOM' in on_disk['attribution']
+    assert '2m_WMAS' in on_disk['attribution'] and '0.5 to 2 m' in on_disk['attribution']
     assert on_disk['compilation_minus_chart']['cells'] > 0
     assert on_disk['output_grid']['nodata'] == -9999.0
 
@@ -573,6 +605,8 @@ def _service_reachable():
 def test_one_real_tile_matches_its_request_and_warps(tmp_path):
     info = db.service_info(db.SERVICE_4M, db.urllib_opener)
     assert info['step'] == 4.0 and info['nodata'] == NODATA4
+    two = db.service_info(db.SERVICE_2M, db.urllib_opener)
+    assert two['step'] == 2.0 and two['nodata'] > 1e30
     # A 200 x 200 pixel window in the Portsmouth demo area.
     x, y = _to_3857_from_lonlat(-70.705, 43.0737)
     pixels = db.snap_to_service_grid((x, y - 800, x + 800, y), info['xmin'], info['ymax'], 4.0)

@@ -3,15 +3,15 @@
 Build the demo truth bathymetry grid sampled by ``mbes_sim``.
 
 The CCOM GIS "WGOM, LI, SNE Bathymetry and Backscatter Compilation" is a public
-ArcGIS image service (4 m, elevations, EPSG:3857).  This tool fetches the part of
-it that covers a latitude/longitude box, in tiles under the server limits, and
-turns it into a grid ``BathyGrid`` can read: positive depth, UTM zone 19N, one
-band, with the gaps filled from lower precedence sources.
+ArcGIS image service (2 m and 4 m versions, elevations, EPSG:3857).  This tool
+fetches the part of it that covers a latitude/longitude box, in tiles under the
+server limits, and turns it into a grid ``BathyGrid`` can read: positive depth,
+UTM zone 19N, one band, with the gaps filled from lower precedence sources.
 
-Fill precedence per cell: the 4 m compilation, then the 16 m regional service
-(only with ``--regional``), then the packaged chart grid.  The chart grid has no
-nodata value (land and drying cells are negative depths), so the output carries
-its nodata value (-9999) only outside the chart extent.
+Fill precedence per cell: the 2 m compilation, then the 4 m compilation, then the
+16 m regional service (only with ``--regional``), then the packaged chart grid.  The
+chart grid has no nodata value (land and drying cells are negative depths), so the
+output carries its nodata value (-9999) only outside the chart extent.
 
 The numeric steps are plain functions (tiling, retry, fill, coverage,
 provenance) so they can be tested without a network.  See
@@ -44,15 +44,17 @@ from osgeo import osr
 gdal.UseExceptions()
 
 SERVICE_ROOT = 'https://gis.ccom.unh.edu/server/rest/services/WGOM-LI-SNE/'
+SERVICE_2M = SERVICE_ROOT + 'WGOM_LI_SNE_Bathymetry_2m_WMAS/ImageServer'
 SERVICE_4M = SERVICE_ROOT + 'WGOM_LI_SNE_BTY_4m_20230922_WMAS_IS/ImageServer'
 SERVICE_16M = SERVICE_ROOT + 'WGOM_LI_SNE_Regional_Bathymetry_16m_WMAS_IS/ImageServer'
 
 ATTRIBUTION = (
     'Bathymetry: WGOM, LI, SNE Bathymetry and Backscatter Compilation, UNH Center for '
-    'Coastal and Ocean Mapping / Joint Hydrographic Center, via the CCOM GIS image service '
-    'WGOM_LI_SNE_BTY_4m_20230922_WMAS_IS ' '(' + SERVICE_4M + '). The service and its portal '
-    'item state no licence or copyright terms (checked 2026-10-14); contributing surveys are '
-    'named by the WGOM_LI_SNE_Footprints map service.')
+    'Coastal and Ocean Mapping / Joint Hydrographic Center, via the CCOM GIS image services '
+    'WGOM_LI_SNE_Bathymetry_2m_WMAS (' + SERVICE_2M + ') and WGOM_LI_SNE_BTY_4m_20230922_WMAS_IS '
+    '(' + SERVICE_4M + '). The services and their portal items state no licence or copyright '
+    'terms (checked 2026-10-14); contributing surveys are named by the WGOM_LI_SNE_Footprints '
+    "map service. The 2 m cell size is the product's, not the source surveys' (0.5 to 2 m).")
 DATUM_CAVEAT = (
     'The vertical datum of the CCOM compilation is not stated in the service metadata or its '
     'portal item. It is treated as comparable to the chart grid (MLLW) so the simulated tide '
@@ -68,16 +70,18 @@ USER_AGENT = 'mbes_sim-build_demo_bathy/1 (UNH CCOM; roland@ccom.unh.edu)'
 # ArcGIS image service limits (both services report these).
 MAX_REQUEST_WIDTH = 15000
 MAX_REQUEST_HEIGHT = 4100
+DEFAULT_RESOLUTION_M = 2.0
 DEFAULT_TILE_PX = 2048
 REQUEST_TIMEOUT_S = 60.0
 RETRY_ATTEMPTS = 5
 RETRY_BASE_DELAY_S = 1.0
-# Rows and columns beyond this are service nodata (-99999 and 3.4e38), never a sounding.
+# Values beyond this are service nodata (-99999 and 3.4e38), never a sounding.
 PLAUSIBLE_ELEVATION_M = 1.0e4
 CACHE_MAX_AGE_S = 24 * 3600
 # Service pixels fetched beyond the output box so the warp has data at its edges.
 MARGIN_PIXELS = 4
 
+SOURCE_2M = '2m_compilation'
 SOURCE_4M = '4m_compilation'
 SOURCE_16M = '16m_regional'
 SOURCE_CHART = 'chart_grid'
@@ -509,10 +513,12 @@ def default_chart_grid() -> str:
     return str(pathlib.Path(get_package_share_directory('mbes_sim')) / 'data' / 'US5NH02M.tiff')
 
 
-def build(*, bbox: Sequence[float], out: str, resolution: float = 4.0, regional: bool = False,
+def build(*, bbox: Sequence[float], out: str, resolution: float = DEFAULT_RESOLUTION_M,
+          regional: bool = False,
           chart_grid: Optional[str] = None, tile_px: int = DEFAULT_TILE_PX,
           work_dir: Optional[str] = None, force: bool = False, opener: Opener = urllib_opener,
-          service_4m: str = SERVICE_4M, service_16m: str = SERVICE_16M,
+          service_2m: str = SERVICE_2M, service_4m: str = SERVICE_4M,
+          service_16m: str = SERVICE_16M,
           log: Callable[[str], None] = print) -> Dict:
     """Fetch, mosaic, fill and write the grid; returns the provenance record."""
     out = os.path.abspath(out)
@@ -531,8 +537,9 @@ def build(*, bbox: Sequence[float], out: str, resolution: float = 4.0, regional:
     work_dir = work_dir or tempfile.mkdtemp(prefix='build_demo_bathy_')
     os.makedirs(work_dir, exist_ok=True)
     fetched = datetime.datetime.now(datetime.timezone.utc).isoformat(timespec='seconds')
-    wanted = [(SOURCE_4M, service_4m, True)] + ([(SOURCE_16M, service_16m, True)]
-                                                if regional else [])
+    wanted = [(SOURCE_2M, service_2m, True), (SOURCE_4M, service_4m, True)]
+    if regional:
+        wanted.append((SOURCE_16M, service_16m, True))
     need_3857 = transform_bounds(grid['bounds'], OUTPUT_EPSG, 3857)
     layers, services, tiles = [], {}, {}
     for name, service, negate in wanted:
@@ -558,7 +565,8 @@ def build(*, bbox: Sequence[float], out: str, resolution: float = 4.0, regional:
 
     depth, source, names = fill_layers(layers)
     coverage = coverage_summary(depth, source, names)
-    seam = seam_statistics(layers[0][1], chart)
+    compilation, _, _ = fill_layers(layers[:2])
+    seam = seam_statistics(compilation, chart)
 
     os.makedirs(os.path.dirname(out), exist_ok=True)
     partial, partial_provenance = out + '.partial', provenance_path + '.partial'
@@ -592,13 +600,14 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog='build_demo_bathy',
         description='Build the demo truth bathymetry grid for mbes_sim from the CCOM GIS '
-                    '4 m compilation (negated to depth, UTM 19N, filled from the chart grid).')
+                    '2 m and 4 m compilations (negated to depth, UTM 19N, filled from the '
+                    'chart grid).')
     parser.add_argument('--bbox', nargs=4, type=float, required=True,
                         metavar=('WEST', 'SOUTH', 'EAST', 'NORTH'),
                         help='longitude/latitude box in degrees')
     parser.add_argument('--out', required=True, help='output GeoTIFF path')
-    parser.add_argument('--resolution', type=float, default=4.0,
-                        help='output cell size in metres (default 4)')
+    parser.add_argument('--resolution', type=float, default=DEFAULT_RESOLUTION_M,
+                        help='output cell size in metres (default 2)')
     parser.add_argument('--regional', action='store_true',
                         help='also fill from the 16 m regional service before the chart grid')
     parser.add_argument('--chart-grid', default=None,
