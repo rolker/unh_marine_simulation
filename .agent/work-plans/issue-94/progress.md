@@ -129,13 +129,13 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 **Round**: 2 | **Ship**: recommended after the fixes — all four must-fix items are small and mechanical; two Claude lenses found no must-fix, Codex and Gemini found these (one Gemini must-fix, package.xml camp, is false: exec_depend camp is at package.xml:27)
 
 ### Findings
-- [ ] (must-fix) run_demo.sh copied to ~/bin (as the README says) cannot find place_windows.py; resolve it from the installed package when not beside the script (Codex, Gemini) — `marine_simulation/scripts/run_demo.sh:61`
-- [ ] (must-fix) timeout_seconds accepts .nan and .inf, so placement can wait forever; require a finite number (Codex) — `marine_simulation/scripts/place_windows.py:166`
-- [ ] (must-fix) run_demo.sh demands and checks the default layout.yaml/joysticks.yaml even when joystick_config:= or layout_config:= is given on the command line (Codex, Claude A) — `marine_simulation/scripts/run_demo.sh:41`
-- [ ] (must-fix) settle(): a window that vanishes between listing and the wmctrl call raises LayoutError out of place_all and aborts the remaining windows (Gemini) — `marine_simulation/scripts/place_windows.py:356`
-- [ ] (suggestion) switched_off matches only lowercase values; the launch accepts any case (Gemini, Claude A) — `marine_simulation/scripts/run_demo.sh:46`
-- [ ] (suggestion) place_all promises one more look after the deadline but breaks without listing again (Claude A) — `marine_simulation/scripts/place_windows.py:323`
-- [ ] (suggestion) state and run directories use the umask default, not 0o700 (Claude B) — `marine_simulation/launch/demo_launch.py:acquire_demo_lock`
-- [ ] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29`
-- [ ] (suggestion) tilde paths in layout_config/camp_profile/camp_view_config are not expanded (Gemini) — `marine_simulation/launch/demo_launch.py:529`
-- [ ] (suggestion) view_center divides by len(boats) without an empty check (Gemini) — `marine_simulation/launch/demo_launch.py:243`
+- [x] (must-fix) run_demo.sh copied to ~/bin (as the README says) cannot find place_windows.py; resolve it from the installed package when not beside the script (Codex, Gemini) — `marine_simulation/scripts/run_demo.sh:61` (fixed 5852025)
+- [x] (must-fix) timeout_seconds accepts .nan and .inf, so placement can wait forever; require a finite number (Codex) — `marine_simulation/scripts/place_windows.py:166` (fixed 8a939c4)
+- [x] (must-fix) run_demo.sh demands and checks the default layout.yaml/joysticks.yaml even when joystick_config:= or layout_config:= is given on the command line (Codex, Claude A) — `marine_simulation/scripts/run_demo.sh:41` (fixed 5852025)
+- [x] (must-fix) settle(): a window that vanishes between listing and the wmctrl call raises LayoutError out of place_all and aborts the remaining windows (Gemini) — `marine_simulation/scripts/place_windows.py:356` (fixed 8a939c4)
+- [x] (suggestion) switched_off matches only lowercase values; the launch accepts any case (Gemini, Claude A) — `marine_simulation/scripts/run_demo.sh:46` (fixed 5852025)
+- [x] (suggestion) place_all promises one more look after the deadline but breaks without listing again (Claude A) — `marine_simulation/scripts/place_windows.py:323` (fixed 8a939c4)
+- [x] (suggestion) state and run directories use the umask default, not 0o700 (Claude B) — `marine_simulation/launch/demo_launch.py:acquire_demo_lock` (fixed, see the commit "private state directories")
+- [x] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29` (deferred: a private domain per user needs a design decision on the shared lab host; the override variable exists and the README names it)
+- [x] (suggestion) tilde paths in layout_config/camp_profile/camp_view_config are not expanded (Gemini) — `marine_simulation/launch/demo_launch.py:529` (deferred: run_demo.sh now expands ~ for the files it checks; the launch gets absolute paths from it, direct ros2 launch users type full paths)
+- [x] (suggestion) view_center divides by len(boats) without an empty check (Gemini) — `marine_simulation/launch/demo_launch.py:243` (fixed, see the commit "private state directories")
