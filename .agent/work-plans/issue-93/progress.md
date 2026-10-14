@@ -99,3 +99,23 @@ Independence uncertain: same context that authored the plan; no fresh dispatch.
 - [x] test hardening: graph QoS assert, per-process domain, sim-time stamp, vacuous install test replaced — `marine_simulation/test/test_publish_survey_area.py`
 - [x] README: namespace caveat, stamp, limits; CAMP File > Open verified in camp mainwindow.cpp — `marine_simulation/README.md`
 - [x] GeoPolygon import source (gemini) — `marine_simulation/scripts/publish_survey_area.py:204` (deferred: false positive, SurveyArea.msg uses marine_interfaces/GeoPolygon)
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 10:46 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-93 at `860a5dd`
+**Mode**: pre-push
+**Depth**: Standard (reason: new node, script and tests)
+**Must-fix**: 0 | **Suggestions**: 4
+**Round**: 2 | **Ship**: recommended — the round-2 must-fixes (huge-integer OverflowError, unhashable label TypeError; 2 to 4 readers each) were fixed in `860a5dd`, no must-fix remains
+
+### Findings
+- [x] (must-fix, fixed in 860a5dd) huge JSON integer coordinate raised OverflowError; unhashable label raised TypeError — `marine_simulation/scripts/publish_survey_area.py:109`
+- [ ] (suggestion) closing vertex is not stripped from the polygon (deferred: SurveyArea.msg accepts a repeated first point; CAMP does not write one) — `marine_simulation/scripts/publish_survey_area.py:147`
+- [ ] (suggestion) per-area CAMP priority discarded, one global priority parameter (deferred: the demo has one area; the issue asks for a priority parameter) — `marine_simulation/scripts/publish_survey_area.py:140`
+- [ ] (suggestion) test domain 1+pid%100 can collide with a demo on the same host (deferred: low-probability flake, the demo runs on a private id of the operator's choosing) — `marine_simulation/test/test_publish_survey_area.py:267`
+- [ ] (suggestion) volatile-subscriber test is only meaningful beside the positive test (deferred: both run in the same module and the publisher QoS is also asserted on the graph) — `marine_simulation/test/test_publish_survey_area.py:306`
+- [x] (false positive, dropped) config/ is not installed — CMakeLists.txt installs it (gemini); GeoPolygon import source — SurveyArea.msg uses marine_interfaces/GeoPolygon (gemini)
