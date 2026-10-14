@@ -158,3 +158,38 @@ Dismissed after checking: Gemini's shared-environment race between groups (the l
 ### Verification
 - `./simulation_ws/test.sh launch_manager_proto marine_simulation`: 357 tests, 0 errors, 8 failures, 2 skipped. The same 8 pre-existing marine_simulation lint failures in files this work does not touch; every launch_manager_proto test passes.
 - Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 70.40s. Plain launch with the guard, `demo_boats_selftest.py --start-launch --boats bluefin,clownfish` on 176: exit 0, 12 PASS.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 14:37 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-97 at `3741e5a`
+**Mode**: pre-push
+**Depth**: Deep (reason: whole diff still 6000+ lines; this round re-read the fix delta of 20 files)
+**Must-fix**: 3 (all fixed in `3741e5a`) | **Suggestions**: 14 (10 fixed, 4 deferred with reasons)
+**Round**: 2 | **Ship**: recommended — must-fix fell from 9 to 3, all mechanical and fixed; the remaining open items are visible-by-design deferrals
+
+Specialists: Claude adversarial Lens A and Lens B on the fix delta (fresh subagents), Gemini on the whole diff. Codex was unavailable (usage limit reached); noted, not retried. The findings below were fixed before this entry was written, so the boxes are checked against `3741e5a`. A third independent read was not run.
+
+### Findings
+- [x] (must-fix) G1 START or SET_PROFILE during the stop grace released a group whose launch was still spawning, then launched it a second time — `manager_core.py` _step STOPPING branch (Lens A)
+- [x] (must-fix) G2 with a runner that cannot stop one group, a stop-everything during the grace never issued `stop_all` once the late process appeared (state was already STOPPING) — `manager_core.py` _step_stopped (Lens A)
+- [x] (must-fix) G3 the SIGTERM/SIGHUP handler called `shutdown()`, which holds a lock while waiting for the loop the handler runs on: deadlock against a shutdown from the manager thread — `manager.py` (Lens B)
+- [x] (suggestion) G4 the grace path did not suspend the converger — `manager_core.py` (Lens A)
+- [x] (suggestion) G5 a signal before the loop starts was swallowed — `manager.py` (Lens B)
+- [x] (suggestion) G6 the signal comment overstated an orderly stop; launch's own SIGTERM handler cancels the run — `manager.py` (Lens B)
+- [x] (suggestion) G7 the core was not told about a shutdown on the cancel path — `manager.py` (Lens B)
+- [x] (suggestion) G8 the /proc tag check matched a substring and not the attributed group — `manager.py` (Lens B)
+- [x] (suggestion) G9 close() could stall five seconds per stuck holder thread — `manager.py` (Lens B)
+- [x] (suggestion) G10 `converge.settle` accepted nan and inf — `config.py` (Lens A, Lens B)
+- [x] (suggestion) G11 a vacuous assertion; the property the holder threads rely on (leaving a group session never shuts the service down) is now tested on the real class — `test_launch_runner.py` (Lens B)
+- [x] (suggestion) G12 `_hold_open` never lapsed or cleared by STOP — `manager_core.py`, README (Lens A, Gemini)
+- [x] (suggestion) G13 a late-spawned process after the grace is stopped but its launch_ros handlers stay registered until the next stop — `manager_core.py` (Lens B) (deferred: acceptable for a prototype; the processes are stopped, only handlers linger; no code)
+- [x] (suggestion) G14 a node seen before and now silent leaves the group DEGRADED with "no answer to get_state", never FAILED — `lifecycle_core.py` (Gemini) (deferred: a dead process fails or respawns through the exit events; a visible but unresponsive one is shown with its reason)
+- [x] (suggestion) G15 a followed group that crashes does not stop its followers (Gemini) (deferred: the documented rule, only a clean close cascades)
+- [x] (suggestion) G16 `will_respawn` reads launch's private fields (Gemini, Lens B) (deferred: failing safe, pinned by a test against the installed launch)
+- [x] (suggestion) G17 a single missed `node_visible` tick degrades a group (Gemini) (deferred: only `ready.nodes` is affected and the demo does not use it)
+
+Dismissed after checking: Gemini's claim that stopping one group shuts the shared LaunchService down (`_GroupSession` keeps no process collectors, so the exit path never calls shutdown; now a test), the shared-environment race (the launch loop visits one description at a time) and non-thread-safe `emit_event` (launch documents it as thread-safe).
