@@ -199,6 +199,7 @@ def cmd_converge(args) -> int:
     known = set()
     end = time.monotonic() + args.timeout
     last_print = 0.0
+    last_new = time.monotonic()
     try:
         while time.monotonic() < end:
             rclpy.spin_once(node, timeout_sec=0.05)
@@ -209,9 +210,11 @@ def cmd_converge(args) -> int:
                 for name in discover_lifecycle_nodes(node, args.match):
                     if name not in known:
                         known.add(name)
+                        last_new = now
                         converger.add_node(name)
             converger.tick()
-            if len(known) >= args.expect and converger.all_on_target():
+            quiet = time.monotonic() - last_new >= args.quiet_period
+            if len(known) >= args.expect and quiet and converger.all_on_target():
                 print('[launch_manager_proto] %d lifecycle node(s) on target %s' % (
                     len(known), args.target), flush=True)
                 return 0
@@ -264,6 +267,9 @@ def build_parser() -> argparse.ArgumentParser:
                           help='nodes that must be seen before success counts')
     converge.add_argument('--timeout', type=float, default=120.0)
     converge.add_argument('--settle', type=float, default=2.0)
+    converge.add_argument('--quiet-period', type=float, default=0.0,
+                          help='succeed only after no new node has appeared for this long '
+                               '(a launch that is still starting more nodes)')
     converge.set_defaults(run=cmd_converge)
     return parser
 

@@ -297,3 +297,59 @@ def test_late_reply_after_giving_up_is_ignored():
     # the stale REPLY_TIMEOUT callback arrives long after: must not raise or regress
     run(conv, backend, 10)
     assert conv.all_on_target()
+
+
+def test_a_request_is_never_sent_from_a_stale_read():
+    # rclpy lifecycle nodes die on an invalid request, so the loop re-reads right before
+    # sending: here another writer gets in between the decision read and the confirming one.
+    node = FakeNode(core.UNCONFIGURED, duration=0.2)
+    nodes = {'/a': node}
+    conv, backend = make(nodes, settle=0.0)
+    reads = []
+    original = backend.get_state
+
+    def spy(name, callback):
+        reads.append(backend.clock.now)
+        if len(reads) == 2:
+            node.request('configure', backend.clock.now)     # the other writer
+        original(name, callback)
+
+    backend.get_state = spy
+    run(conv, backend, 30, until=conv.all_on_target)
+    assert conv.all_on_target()
+    assert ('/a', 'configure') not in backend.sent
+    assert node.received == ['configure', 'activate']        # one configure, not two
+
+
+def test_settle_starts_over_whenever_the_state_changes():
+    node = FakeNode(core.UNCONFIGURED, duration=0.1)
+    nodes = {'/a': node}
+    conv, backend = make(nodes, settle=2.0)
+    start = backend.clock.now
+    run(conv, backend, 1.8)
+    node.request('configure', backend.clock.now)             # autostart gets in just in time
+    changed = backend.clock.now
+    run(conv, backend, 30, until=conv.all_on_target)
+    assert conv.all_on_target()
+    assert node.received == ['configure', 'activate']
+    assert backend.sent[0] == ('/a', 'activate')
+    assert changed > start
+    # nothing was sent until a full settle after the node last changed
+    assert backend.clock.now >= changed + 2.0
+
+
+def test_every_transition_sent_is_logged_with_the_attempt_number():
+    node = FakeNode(core.UNCONFIGURED, ignore_request_on=(1,))
+    nodes = {'/a': node}
+    clock = FakeClock()
+    backend = FakeBackend(clock, nodes)
+    lines = []
+    conv = core.LifecycleConverger(
+        backend, clock, core.ConvergeConfig(settle=0.0, backoff=(0.2,), reply_timeout=1.0),
+        log=lines.append)
+    conv.add_node('/a')
+    run(conv, backend, 60, until=conv.all_on_target)
+    sent = [line for line in lines if 'sending' in line]
+    assert sent[0].endswith('sending configure from unconfigured (attempt 1)')
+    assert sent[1].endswith('sending configure from unconfigured (attempt 2)')
+    assert sent[2].endswith('sending activate from inactive (attempt 1)')

@@ -88,6 +88,14 @@ def test_placeholders_are_substituted_and_unknown_ones_rejected():
                                       'description': '${missing}'}}})
 
 
+def test_expect_may_arrive_as_text_from_a_placeholder():
+    data = good()
+    data['groups']['boats']['lifecycle']['expect'] = '${n}'
+    assert config.parse_config(data, {'n': '7'}).groups['boats'].lifecycle.expect == 7
+    data['groups']['boats']['lifecycle']['expect'] = '${n}'
+    assert 'expect must be' in problems(data, n='many')
+
+
 def test_regex_quantifier_braces_are_not_placeholders():
     data = good()
     data['groups']['boats']['lifecycle']['match'] = '^/a{2}/'

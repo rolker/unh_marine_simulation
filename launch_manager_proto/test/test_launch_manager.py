@@ -263,6 +263,38 @@ def test_scoped_stop_and_restart_of_one_group(tmp_path):
         harness.cleanup()
 
 
+def test_interrupting_the_manager_alone_stops_every_group(tmp_path):
+    """Ctrl-C on the manager (not its process group) must still bring everything down."""
+    harness = Harness(tmp_path, 'a6', closer_seconds=600)
+    watcher = Watcher('lmp_a6')
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            harness.text()
+        assert len(harness.leftovers()) == 3
+        os.kill(harness.proc.pid, signal.SIGINT)
+        harness.proc.wait(timeout=60)
+        assert harness.leftovers() == [], harness.text()
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
+def test_terminating_the_manager_alone_stops_every_group(tmp_path):
+    harness = Harness(tmp_path, 'a7', closer_seconds=600)
+    watcher = Watcher('lmp_a7')
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            harness.text()
+        os.kill(harness.proc.pid, signal.SIGTERM)
+        harness.proc.wait(timeout=60)
+        assert harness.leftovers() == [], harness.text()
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
 def test_guard_converges_a_launch_that_loses_replies(tmp_path):
     """The standalone guard fixes the same race for a launch nobody manages."""
     token = 'a3'

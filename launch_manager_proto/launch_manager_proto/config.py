@@ -212,6 +212,8 @@ def _parse_lifecycle(raw, where, problems) -> Optional[LifecycleSpec]:
         problems.append('%s needs either match or nodes' % where)
     default_expect = len(spec.nodes) if spec.nodes else 1
     expect = raw.get('expect', default_expect)
+    if isinstance(expect, str) and expect.isdigit():
+        expect = int(expect)      # a ${placeholder} arrives as text
     if isinstance(expect, bool) or not isinstance(expect, int) or expect < 1:
         problems.append('%s.expect must be an integer >= 1' % where)
     else:

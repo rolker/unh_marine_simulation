@@ -43,6 +43,14 @@ The rules, from the launch manager design ("converge, do not command"):
 * ``unknown`` (no answer) never causes a command, because nothing can be compared.
 * A bounded retry ladder: a failed attempt waits a backoff, re-reads, and re-sends only if
   the node is still off target; ``max_attempts`` per from-state, then the node is ``FAILED``.
+
+Why a request is never sent from a stale read: ``rclpy.lifecycle`` nodes do not answer a
+transition that is invalid for their current state with ``success=false``; the exception
+escapes the service callback and the process dies (seen live: ``Transition is not registered``).
+So a redundant request, from this loop racing a launch file's ``autostart``, kills a Python
+node. The loop therefore (1) leaves a node alone until its state has been unchanged for
+``settle`` seconds, which lets an autostart chain in progress finish, and (2) re-reads
+immediately before every request and sends only if the node is still where it was.
 """
 
 from dataclasses import dataclass, field
@@ -153,6 +161,8 @@ class _Node:
     reply_at: Optional[float] = None
     attempts: Dict[str, int] = field(default_factory=dict)
     backoff_until: float = 0.0
+    confirm_state: str = ''
+    confirm_at: float = 0.0
     failed: bool = False
     status: str = UNKNOWN_STATUS
     last_result: str = ''
@@ -225,6 +235,7 @@ class LifecycleConverger:
         node.reply = None
         node.reply_at = None
         node.backoff_until = 0.0
+        node.confirm_state = ''
         node.reason = ''
         node.last_result = ''
         node.created = now
@@ -307,15 +318,26 @@ class LifecycleConverger:
             node.status = WAITING
             node.reason = 'retry in %.1f s' % (node.backoff_until - now)
             return
-        if now - node.first_seen < self.config.settle:
+        quiet_since = max(node.first_seen, node.state_since)
+        if now - quiet_since < self.config.settle:
+            node.confirm_state = ''
             node.status = WAITING
-            node.reason = 'settling (autostart gets the first move)'
+            node.reason = "settling (a launch file's autostart gets the first move)"
             return
         transition = next_transition(self._target, state)
         if transition is None:
             node.status = WAITING
             node.reason = 'no transition from %s toward %s' % (state, self._target)
             return
+        if node.confirm_state != state or issued < node.confirm_at:
+            # Look again right now; send only if the node is still exactly here.
+            node.confirm_state = state
+            node.confirm_at = now
+            node.next_query = now
+            node.status = WAITING
+            node.reason = 'confirming %s before %s' % (state, transition)
+            return
+        node.confirm_state = ''
         self._send(node, transition, state, now)
 
     def _on_target(self, node: _Node) -> None:
@@ -380,6 +402,8 @@ class LifecycleConverger:
         node.status = CONVERGING
         node.reason = 'sent %s from %s' % (transition, state)
         sent_at = node.sent_at
+        self._log('%s: sending %s from %s (attempt %d)' % (
+            node.name, transition, state, node.attempts.get(state, 0) + 1))
 
         def replied(result: str) -> None:
             current = self._nodes.get(node.name)

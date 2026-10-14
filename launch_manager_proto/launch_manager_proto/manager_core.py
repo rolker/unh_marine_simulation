@@ -106,6 +106,9 @@ class Services:
     def pump(self) -> None:
         """Run any periodic housekeeping (expire overdue service calls)."""
 
+    def forget(self, names: List[str]) -> None:
+        """Drop what is cached for lifecycle nodes that belong to a group that stopped."""
+
 
 class _Group:
     """Runtime state of one group."""
@@ -196,7 +199,7 @@ class ManagerCore:
                 g.desired = DESIRED_STOPPED
                 g.left_by_exit = True
                 self._set(g, STOPPED, 'exited(0): closed by the operator', now)
-                self._suspend(g)
+                self._drop_converger(g)
                 self._log('group %s exited cleanly; treating it as closed' % group)
             elif returncode == 0:
                 self._fail(g, 'every process exited cleanly but the group should keep running '
@@ -323,6 +326,7 @@ class ManagerCore:
             return
         if g.state == STOPPING:
             if not g.alive:
+                self._drop_converger(g)
                 self._set(g, STOPPED, '', now)
             elif self._runner.supports_scoped_stop:
                 self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
@@ -339,7 +343,7 @@ class ManagerCore:
             elif self._runner.supports_scoped_stop:
                 self._runner.stop(g.spec.name, g.spec.shutdown_timeout)
         elif g.state != STOPPED:
-            self._suspend(g)
+            self._drop_converger(g)
             self._set(g, STOPPED, '', now)
             if all(x.desired == DESIRED_STOPPED and not x.alive for x in self._groups.values()):
                 self._stop_all_issued = False
@@ -442,6 +446,12 @@ class ManagerCore:
     def _suspend(self, g: _Group) -> None:
         if g.converger is not None:
             g.converger.suspend()
+
+    def _drop_converger(self, g: _Group) -> None:
+        """Forget the last run's lifecycle nodes: a stopped group has none to report."""
+        if g.converger is not None:
+            self._services.forget(g.converger.node_names())
+            g.converger = None
 
     def _fail(self, g: _Group, detail: str, now: float) -> None:
         if g.state != FAILED:

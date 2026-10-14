@@ -44,6 +44,7 @@ held open by a dedicated thread until the manager itself exits.
 from collections import deque
 import json
 import os
+import signal
 import threading
 import time
 from typing import Callable, Deque, Dict, List, Optional, Set, Tuple
@@ -63,11 +64,28 @@ from launch_manager_proto.lifecycle_rclpy import discover_lifecycle_nodes, Rclpy
 import rclpy
 from rclpy.executors import SingleThreadedExecutor
 from rclpy.node import Node
+from rclpy.signals import SignalHandlerOptions
 from ros2launch_session import LaunchSession
 from std_msgs.msg import String
 
 GROUP_ENV = 'LAUNCH_MANAGER_GROUP'
 TICK_PERIOD = 0.1
+
+
+def _is_running(pid: int) -> bool:
+    """Return whether ``pid`` is still a live process (a child that exited is reaped)."""
+    try:
+        done, _ = os.waitpid(pid, os.WNOHANG)
+        return done == 0
+    except ChildProcessError:
+        pass            # not our child, or already reaped
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
 
 
 def launch_file_path(package: str, file: str) -> str:
@@ -108,27 +126,27 @@ class LaunchRunner(mc.Runner):
         self._targeted: Set[int] = set()
         self.supports_scoped_stop = True
 
+    def _on_started(self, event, context) -> None:
+        group = (event.env or {}).get(GROUP_ENV)
+        if group:
+            with self._lock:
+                self._pids.setdefault(group, set()).add(event.pid)
+            self.events.append(('started', group, event.pid, event.process_name, None))
+
+    def _on_exited(self, event, context) -> None:
+        group = (event.env or {}).get(GROUP_ENV)
+        if group:
+            with self._lock:
+                self._pids.get(group, set()).discard(event.pid)
+                self._targeted.discard(event.pid)
+            self.events.append(
+                ('exited', group, event.pid, event.process_name, event.returncode))
+
     def base_description(self) -> launch.LaunchDescription:
         """Return the handlers that watch every process of every group."""
-        def started(event, context):
-            group = (event.env or {}).get(GROUP_ENV)
-            if group:
-                with self._lock:
-                    self._pids.setdefault(group, set()).add(event.pid)
-                self.events.append(('started', group, event.pid, event.process_name, None))
-
-        def exited(event, context):
-            group = (event.env or {}).get(GROUP_ENV)
-            if group:
-                with self._lock:
-                    self._pids.get(group, set()).discard(event.pid)
-                    self._targeted.discard(event.pid)
-                self.events.append(
-                    ('exited', group, event.pid, event.process_name, event.returncode))
-
         return launch.LaunchDescription([
-            RegisterEventHandler(OnProcessStart(on_start=started)),
-            RegisterEventHandler(OnProcessExit(on_exit=exited)),
+            RegisterEventHandler(OnProcessStart(on_start=self._on_started)),
+            RegisterEventHandler(OnProcessExit(on_exit=self._on_exited)),
         ])
 
     def start(self, spec: GroupSpec) -> None:
@@ -160,10 +178,39 @@ class LaunchRunner(mc.Runner):
         self._service.shutdown()
 
     def close(self) -> None:
-        """Let the group threads leave their contexts (the service is going down anyway)."""
+        """Let the group threads leave their contexts and make sure no process outlives us."""
         self._release.set()
         for thread in self._threads:
             thread.join(timeout=5.0)
+        self.terminate_leftovers()
+
+    def terminate_leftovers(self, patience=((signal.SIGINT, 8.0), (signal.SIGTERM, 4.0),
+                                            (signal.SIGKILL, 2.0))) -> List[int]:
+        """
+        Stop any group process still running; return the pids that needed a signal.
+
+        ``launch`` answers SIGTERM by cancelling its run and orphaning every process ("using
+        SIGTERM can result in orphaned processes"), and systemd stops a unit with SIGTERM. The
+        runner knows which pids it attributed to groups, so it finishes the job itself, in
+        launch's own order: SIGINT, then SIGTERM, then SIGKILL.
+        """
+        with self._lock:
+            pids = sorted(set().union(*self._pids.values())) if self._pids else []
+        remaining = [p for p in pids if _is_running(p)]
+        signalled = list(remaining)
+        for sig, wait in patience:
+            for pid in remaining:
+                try:
+                    os.kill(pid, sig)
+                except ProcessLookupError:
+                    pass
+            end = time.monotonic() + wait
+            while remaining and time.monotonic() < end:
+                time.sleep(0.1)
+                remaining = [p for p in remaining if _is_running(p)]
+            if not remaining:
+                break
+        return signalled
 
 
 class RclpyServices(mc.Services):
@@ -192,6 +239,10 @@ class RclpyServices(mc.Services):
 
     def pump(self) -> None:
         self._backend.expire()
+
+    def forget(self, names: List[str]) -> None:
+        for name in names:
+            self._backend.forget(name)
 
 
 class ManagerNode(Node):
@@ -269,12 +320,18 @@ def run_manager(spec: ManagerSpec) -> int:
     service = launch.LaunchService(noninteractive=True)
     runner = LaunchRunner(service)
     service.include_launch_description(runner.base_description())
-    rclpy.init()
+    # rclpy's own SIGINT handler would replace launch's, and ctrl-c would then stop nothing.
+    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = ManagerNode(spec, runner, on_finished=service.shutdown)
     executor = SingleThreadedExecutor()
     executor.add_node(node)
     spinner = threading.Thread(target=executor.spin, name='rclpy', daemon=True)
     spinner.start()
+    # launch records a SIGTERM handler but leaves the OS disposition at its default, so a
+    # plain `kill` (what systemd sends) ends the process at once and orphans every group.
+    # A Python-level handler makes the signal arrive; it shuts down like ctrl-c does.
+    signal.signal(signal.SIGTERM,
+                  lambda signum, frame: service.shutdown(force_sync=True))
     try:
         return service.run(shutdown_when_idle=False)
     finally:

@@ -112,6 +112,9 @@ class FakeServices(mc.Services):
     def pump(self):
         self.backend.pump()
 
+    def forget(self, names):
+        self.forgotten = getattr(self, 'forgotten', []) + list(names)
+
 
 class World:
     """A manager core wired to the fakes, with helpers to move virtual time."""
@@ -444,3 +447,15 @@ def test_a_launch_that_cannot_be_injected_fails_the_group_with_the_reason():
     w.run(1)
     assert w.state('boats') == mc.FAILED
     assert 'cannot start: boats has no launch file' in w.core.status()['groups'][0]['detail']
+
+
+def test_a_stopped_group_reports_no_lifecycle_nodes_and_its_clients_are_forgotten():
+    w = World()
+    w.boot()
+    w.core.handle_command({'request_id': 'q', 'type': 'STOP', 'groups': ['boats']})
+    w.run(0.5)
+    w.runner.finish_stop('boats')
+    w.run(0.5)
+    entry = [g for g in w.core.status()['groups'] if g['name'] == 'boats'][0]
+    assert entry['state'] == mc.STOPPED and entry['lifecycle']['nodes'] == {}
+    assert sorted(w.services.forgotten) == ['/b1/x', '/b2/x']
