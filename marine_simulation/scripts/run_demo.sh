@@ -42,9 +42,10 @@ switched_off() { # switched_off <switch> <args...>; the last one wins and any le
     local switch=$1 arg off=1
     shift
     for arg in "$@"; do
+        [[ "$arg" == "$switch:="* ]] || continue
         case "${arg,,}" in
-            "$switch:=false" | "$switch:=0" | "$switch:=no" | "$switch:=off") off=0 ;;
-            "$switch:="*) off=1 ;;
+            *":=false" | *":=0" | *":=no" | *":=off") off=0 ;;
+            *) off=1 ;;
         esac
     done
     return "$off"
@@ -60,7 +61,11 @@ given() { # given <name> <args...>: print the last <name>:=value, ~ expanded; fa
         fi
     done
     [ "$found" -eq 0 ] || return 1
-    printf '%s\n' "${value/#\~/$HOME}"
+    case "$value" in
+        "~") value=$HOME ;;
+        "~/"*) value=$HOME/${value#"~/"} ;;
+    esac
+    printf '%s\n' "$value"
 }
 
 place_windows_tool() { # where the checker is: beside this script, else in the installed package
