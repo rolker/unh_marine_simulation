@@ -126,6 +126,15 @@ def test_default_profile_must_exist():
     assert 'default_profile' in problems(data)
 
 
+def test_launch_by_path_is_accepted_and_bad_launch_forms_are_not():
+    data = good()
+    data['groups']['camp']['launch'] = {'path': '/tmp/x_launch.py'}
+    spec = config.parse_config(data)
+    assert spec.groups['camp'].package is None and spec.groups['camp'].file == '/tmp/x_launch.py'
+    data['groups']['camp']['launch'] = {'path': 'a', 'file': 'b'}
+    assert 'launch must be' in problems(data)
+
+
 def test_exec_groups_and_unknown_keys_are_rejected():
     data = good()
     data['groups']['camp']['exec'] = ['ls']

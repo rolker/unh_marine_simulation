@@ -380,7 +380,10 @@ class ManagerCore:
             for node_name in g.spec.lifecycle.nodes:
                 g.converger.add_node(node_name)
         self._set(g, STARTING, 'launch injected', now)
-        self._runner.start(g.spec)
+        try:
+            self._runner.start(g.spec)
+        except Exception as error:  # noqa: B902  any failure to start is the group's failure
+            self._fail(g, 'cannot start: %s' % error, now)
 
     def _step_running(self, g: _Group, now: float) -> None:
         self._tick_converger(g, discover=True)

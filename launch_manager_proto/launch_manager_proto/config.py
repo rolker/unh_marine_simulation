@@ -73,7 +73,7 @@ class GroupSpec:
     """One launch file run as a unit."""
 
     name: str
-    package: str
+    package: Optional[str]    # None: ``file`` is a path
     file: str
     arguments: Dict[str, ArgumentSpec] = field(default_factory=dict)
     requires: List[str] = field(default_factory=list)
@@ -236,11 +236,16 @@ def _parse_group(name, raw, problems) -> Optional[GroupSpec]:
         problems.append('%s.exec is not supported in this prototype (launch files only)'
                         % where)
     launch = raw.get('launch')
-    if not isinstance(launch, dict) or set(launch) != {'package', 'file'} or \
-            not all(isinstance(v, str) and v for v in launch.values()):
-        problems.append('%s.launch must be {package: <str>, file: <str>}' % where)
+    if isinstance(launch, dict) and set(launch) == {'path'} and isinstance(
+            launch['path'], str) and launch['path']:
+        group = GroupSpec(name=str(name), package=None, file=launch['path'])
+    elif isinstance(launch, dict) and set(launch) == {'package', 'file'} and all(
+            isinstance(v, str) and v for v in launch.values()):
+        group = GroupSpec(name=str(name), package=launch['package'], file=launch['file'])
+    else:
+        problems.append('%s.launch must be {package: <str>, file: <str>} or {path: <str>}'
+                        % where)
         return None
-    group = GroupSpec(name=str(name), package=launch['package'], file=launch['file'])
     group.arguments = _parse_arguments(raw.get('arguments'), where + '.arguments', problems)
     group.requires = _string_list(raw.get('requires'), where + '.requires', problems)
     group.follows = _string_list(raw.get('follows'), where + '.follows', problems)

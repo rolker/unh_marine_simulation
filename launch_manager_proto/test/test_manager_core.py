@@ -427,3 +427,18 @@ def test_restarting_a_group_uses_a_fresh_converger():
     w.run(0.5)
     assert w.state('boats') == mc.STARTING
     assert w.core._groups['boats'].converger is not first
+
+
+def test_a_launch_that_cannot_be_injected_fails_the_group_with_the_reason():
+    w = World()
+    original = w.runner.start
+
+    def refuse(spec):
+        if spec.name == 'boats':
+            raise FileNotFoundError('boats has no launch file b.py')
+        original(spec)
+    w.runner.start = refuse
+    w.core.begin()
+    w.run(1)
+    assert w.state('boats') == mc.FAILED
+    assert 'cannot start: boats has no launch file' in w.core.status()['groups'][0]['detail']
