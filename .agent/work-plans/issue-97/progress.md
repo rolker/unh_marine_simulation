@@ -84,3 +84,49 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [ ] The `demo` profile (with CAMP) was not run: no GUI on the owner's desktop. `follows` is covered by the process test with a stand-in group and the unit tests.
 - [ ] Reconcile `demo_manager.py` with the #94 whole-display launch when that lands (scorer parameter generation overlaps).
 - [ ] rolker/unh_marine_autonomy#410 carries the design-document updates.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-14 14:17 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-97 at `0c34207`
+**Mode**: pre-push
+**Depth**: Deep (reason: 6079 lines changed in 41 files, new package with concurrency and signal handling)
+**Must-fix**: 9 | **Suggestions**: 19
+**Round**: 1 | **Ship**: continue — several must-fix are real defects in shutdown and command handling (two independent confirmations each)
+
+Specialists: static analysis (flake8 via pre-commit, clean), governance and plan drift (lead), Claude adversarial Lens A and Lens B (fresh subagents), cross-model Gemini and Codex (both ran). Raw cross-model findings kept in the main workspace scratchpad (.agent/scratchpad/launch_manager_97/review_round1/).
+
+### Findings
+- [ ] (must-fix) F1 A malformed `~/command` (non-string `profile`) raises TypeError out of the subscription callback and silently ends the rclpy thread; the manager keeps running unmanaged. Also guard `_tick`/`_on_command`, make spinner death fatal — `manager_core.py:259`, `manager.py` (4 sources)
+- [ ] (must-fix) F2 `CLEAR_FAILURE` in a profile with no other running group makes every group STOPPED, so `exit_when_all_stopped` ends the manager before the operator can START — `manager_core.py` finished (Gemini; matches the README retry advice)
+- [ ] (must-fix) F3 Every start leaks a holder thread and a `LaunchSession` whose output/process collectors keep every line of every process forever (unbounded memory in a persistent manager) — `manager.py` LaunchRunner.start (Gemini, Codex)
+- [ ] (must-fix) F4 Convergence keeps sending transitions while the launch service shuts down, and groups can still start; suspend everything on shutdown — `manager_core.py` on_shutdown (Codex repro, Lens B)
+- [ ] (must-fix) F5 `demo_manager.py --roster` is never forwarded to the boats launch (`roster_file`), so names/poses disagree with the expected nodes and the scorer — `demo_manager.py`, `demo_manager.yaml` (Codex)
+- [ ] (must-fix) F6 `ament_index_python` is imported but not declared in package.xml — `launch_manager_proto/package.xml` (Gemini)
+- [ ] (must-fix) F7 `on_finished` (`service.shutdown`) is a silent no-op when it fires before the launch loop runs, but `_finished` is set, so an empty-profile manager never exits — `manager.py` _tick (Lens B)
+- [ ] (must-fix) F8 `_drop_converger` does not suspend, so a read in flight can still send transitions for a stopped group — `manager_core.py` (Gemini)
+- [ ] (must-fix) F9 A node never seen within `appear_timeout` (30 s) fails the group immediately, ignoring the group's `ready.timeout` (the scorer group has 60 s) — `manager_core.py` _BAD_NODE_STATUS (Lens A)
+- [ ] (suggestion) F10 STOP while the launch is still spawning processes marks the group STOPPED at once and drops its handlers; give a starting group a short grace — `manager_core.py` (Codex)
+- [ ] (suggestion) F11 `confirm_state` is not cleared on reaching target or on a state change; a later request can skip the confirming re-read — `lifecycle_core.py` (Lens A)
+- [ ] (suggestion) F12 A read in flight across `suspend()`/`resume()` is accepted as the new run's first observation (generation counter) — `lifecycle_core.py` (Lens A)
+- [ ] (suggestion) F13 Status is republished at the poll rate because reasons embed changing numbers (`retry in 0.4 s`) — `lifecycle_core.py`, `manager.py` _publish (Lens A, Gemini)
+- [ ] (suggestion) F14 Config accepts what can never become ready: `expect` greater than an explicit node list, empty `match`, duplicate `nodes`, `ready.nodes` without a leading slash — `config.py` (Lens A, Gemini)
+- [ ] (suggestion) F15 `${KEY}` placeholders only work for `expect`; numeric and boolean fields reject the text — `config.py` (Gemini)
+- [ ] (suggestion) F16 `converge` CLI: misleading defaults/help for `--expect`/`--quiet-period`, and the early-failure break ignores MISSING nodes — `cli.py` (Lens A, Gemini)
+- [ ] (suggestion) F17 `status`/`command` CLIs crash with KeyError on a snapshot without `acks` — `cli.py` (Lens B, Gemini)
+- [ ] (suggestion) F18 SIGHUP is unhandled (closing the terminal orphans the groups) — `manager.py` (Lens B)
+- [ ] (suggestion) F19 `terminate_leftovers` can signal a recycled pid; verify the group tag in /proc/<pid>/environ first — `manager.py` (Lens B, Gemini)
+- [ ] (suggestion) F20 `stop()`/`group_stopped()` can raise on a closing loop and kill the rclpy thread; wrap them — `manager.py` (Lens B)
+- [ ] (suggestion) F21 The live test's CTest registration has the default 60 s timeout — `marine_simulation/CMakeLists.txt` (Lens B)
+- [ ] (suggestion) F22 `demo_manager.py` leaks a /tmp directory per run and per refused run — `demo_manager.py` (Lens B)
+- [ ] (suggestion) F23 Reject `..` and absolute paths in `launch: {package, file}`; state in the README that the config and command topic are trusted — `config.py`, README (Lens B)
+- [ ] (suggestion) F24 `_stop_all_issued` is never reset when a group is started again after a stop-everything (non-scoped runner only) — `manager_core.py` (Lens A)
+- [ ] (suggestion) F25 `destroy_node()` may run while the spinner thread is still alive after the join timeout — `manager.py` run_manager (Gemini)
+- [ ] (suggestion) F26 A guard that cannot fix the boats is only visible as a process exit line; document, no code (deferred) — `demo_boats_launch.py` (Lens B)
+- [ ] (suggestion) F27 `follows` with a runner that cannot stop one group fails the followers (non-scoped runner only; the shipped runner is scoped) — `manager_core.py` (Lens A) (deferred)
+- [ ] (suggestion) F28 A node stuck in a transition after READY leaves the group DEGRADED, never FAILED (visible in status; by design) (Gemini) (deferred)
+
+Dismissed after checking: Gemini's shared-environment race between groups (the launch loop visits one description at a time, on one thread); Gemini's `ChangeState` probe only matching transition 1 (launch_ros's handler matches every `ChangeState` event); command-topic flooding and authentication (the manager is a trusted-network design like udp_bridge; stated in the README).
