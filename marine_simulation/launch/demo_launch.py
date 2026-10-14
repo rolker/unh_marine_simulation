@@ -44,6 +44,7 @@ coverage layers are generated from it at launch, so no boat name is copied into 
 second file.
 """
 
+import fcntl
 import importlib.util
 import math
 import os
@@ -55,10 +56,14 @@ from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.actions import EmitEvent
 from launch.actions import ExecuteProcess
 from launch.actions import IncludeLaunchDescription
 from launch.actions import LogInfo
 from launch.actions import OpaqueFunction
+from launch.actions import RegisterEventHandler
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
@@ -83,6 +88,7 @@ boats_launch = _load_boats_launch()
 # start so a previous session can never leave the next one in a different state.
 STATE_PARTS = ('.local', 'state', 'marine_simulation_demo')
 SETTINGS_ROOT_NAME = 'xdg_config'
+CACHE_DIR_NAME = 'live_tile_cache'
 # QSettings names CAMP sets in main.cpp: <root>/<organisation>/<application>.conf.
 CAMP_ORGANISATION = 'UNH-CCOMJHC'
 CAMP_APPLICATION = 'CCOMAutonomousMissionPlanner'
@@ -152,6 +158,14 @@ def qt_point_variant(x: float, y: float) -> str:
     return text
 
 
+def qt_ini_string(text: str) -> str:
+    """Return ``text`` as QSettings writes a string value into an INI file."""
+    escaped = text.replace('\\', '\\\\').replace('"', '\\"')
+    if any(c in text for c in ',;=') or text != text.strip() or not text:
+        return '"%s"' % escaped
+    return escaped
+
+
 def parse_profile(text: str) -> Dict[str, List[str]]:
     """Split a CAMP settings file into ``{section: [raw "key=value" lines]}``."""
     sections: Dict[str, List[str]] = {}
@@ -183,7 +197,7 @@ def live_layer_key(boat: str) -> str:
 
 
 def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: float,
-                  view_scale: float) -> str:
+                  view_scale: float, tile_cache_dir: Optional[str] = None) -> str:
     """
     Return the settings file CAMP starts from.
 
@@ -195,7 +209,7 @@ def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: flo
     if not view_scale > 0.0 or not math.isfinite(view_scale):
         raise ValueError('view_scale must be a positive number, got %r' % view_scale)
     sections = parse_profile(template)
-    for forbidden in ('MainWindow', 'MapView'):
+    for forbidden in ('MainWindow', 'MapView', 'LiveTileCache'):
         if forbidden in sections:
             raise ValueError('the profile template must not set [%s]: the view is '
                              'generated from the view settings' % forbidden)
@@ -205,6 +219,10 @@ def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: flo
     # and wins; both are set to the same view so neither can disagree.
     sections['MainWindow'] = ['mapCenter=' + center, 'mapScale=' + scale]
     sections['MapView'] = [r'mapView\center=' + center, r'mapView\scale=' + scale]
+    if tile_cache_dir:
+        # Keep the live tile cache where the launch can empty it, so tiles from an
+        # earlier session are not warm-loaded into this one.
+        sections['LiveTileCache'] = ['cache_dir=' + qt_ini_string(tile_cache_dir)]
     items = sections.setdefault('MapItem', [])
     for boat in boats:
         key = live_layer_key(boat.name)
@@ -225,7 +243,7 @@ def view_center(boats: Sequence) -> Tuple[float, float]:
 
 
 def load_view(path: str) -> dict:
-    """Read the optional CAMP view settings (``scale``, and ``lat``/``lon`` to override)."""
+    """Read and validate the CAMP view settings (``scale``, and ``lat``/``lon`` to override)."""
     with open(path) as f:
         data = yaml.safe_load(f)
     view = data.get('camp_view') if isinstance(data, dict) else None
@@ -238,6 +256,25 @@ def load_view(path: str) -> dict:
         raise ValueError("%s: camp_view needs 'scale'" % path)
     if ('lat' in view) != ('lon' in view):
         raise ValueError("%s: camp_view needs both 'lat' and 'lon' or neither" % path)
+
+    def number(key, low, high):
+        value = view[key]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) \
+                or not math.isfinite(value):
+            raise ValueError('%s: camp_view %s must be a finite number, got %r'
+                             % (path, key, value))
+        if value < low or value > high:
+            raise ValueError('%s: camp_view %s = %s is outside [%s, %s]'
+                             % (path, key, value, low, high))
+        return float(value)
+
+    view['scale'] = number('scale', 0.0, 1e9)
+    if view['scale'] <= 0.0:
+        raise ValueError('%s: camp_view scale must be greater than zero' % path)
+    if 'lat' in view:
+        # Web Mercator stops being finite at the poles.
+        view['lat'] = number('lat', -85.0, 85.0)
+        view['lon'] = number('lon', -180.0, 180.0)
     return view
 
 
@@ -251,19 +288,18 @@ def settings_root(home: Optional[str] = None) -> str:
     return os.path.join(state_dir(home), SETTINGS_ROOT_NAME)
 
 
-def reset_settings_root(root: str, home: Optional[str] = None) -> str:
+def reset_state_dir(root: str, name: str, home: Optional[str] = None) -> str:
     """
-    Empty and re-create the settings root; return it.
+    Empty and re-create the demo's state directory ``name``; return it.
 
-    Deleting is guarded: the path must be exactly the demo's own directory under the
-    home directory, must not be a symlink, and an existing one must carry the marker
-    this function leaves in it (an empty directory is also accepted). Anything else
-    raises and nothing is removed.
+    Deleting is guarded: the path must be exactly ``<state dir>/<name>`` under the
+    home directory, must not be a symlink, and an existing one must carry the
+    marker this function leaves in it (an empty directory is also accepted).
+    Anything else raises and nothing is removed.
     """
-    expected = os.path.abspath(settings_root(home))
+    expected = os.path.abspath(os.path.join(state_dir(home), name))
     if os.path.abspath(root) != expected:
-        raise ValueError('refusing to reset %r: the demo settings directory is %r'
-                         % (root, expected))
+        raise ValueError('refusing to reset %r: the demo directory is %r' % (root, expected))
     if os.path.islink(root):
         raise ValueError('refusing to reset %r: it is a symlink' % root)
     if os.path.exists(root):
@@ -273,10 +309,20 @@ def reset_settings_root(root: str, home: Optional[str] = None) -> str:
             raise ValueError('refusing to reset %r: it has files in it that this launch '
                              'did not create (no %s marker)' % (root, ROOT_MARKER))
         shutil.rmtree(root)
-    os.makedirs(root)
+    os.makedirs(root, mode=0o700)
     with open(os.path.join(root, ROOT_MARKER), 'w') as f:
-        f.write('Recreated from config/demo_camp_profile.conf on every demo start.\n')
+        f.write('Recreated by marine_simulation demo_launch.py on every demo start.\n')
     return root
+
+
+def reset_settings_root(root: str, home: Optional[str] = None) -> str:
+    """Empty and re-create the settings directory CAMP gets as ``XDG_CONFIG_HOME``."""
+    return reset_state_dir(root, SETTINGS_ROOT_NAME, home)
+
+
+def cache_dir(home: Optional[str] = None) -> str:
+    """Return the directory CAMP keeps its live coverage tile cache in during the demo."""
+    return os.path.join(state_dir(home), CACHE_DIR_NAME)
 
 
 def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> str:
@@ -288,6 +334,61 @@ def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> s
     with open(path, 'w') as f:
         f.write(profile)
     return path
+
+
+# --- one demo at a time -----------------------------------------------------------
+
+_LOCKS: Dict[str, object] = {}
+CAMP_EXECUTABLE = 'CCOMAutonomousMissionPlanner'
+
+
+def acquire_demo_lock(directory: str) -> None:
+    """
+    Take the lock that keeps two demos from sharing the state directory.
+
+    Held until this process exits. A second launch would otherwise delete the first
+    one's CAMP settings from under it and overwrite its scorer parameters.
+    """
+    os.makedirs(directory, exist_ok=True)
+    path = os.path.join(directory, 'lock')
+    handle = open(path, 'w')
+    try:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        handle.close()
+        raise ValueError('another demo is already running on this computer (lock %s); '
+                         'close its map window first' % path) from None
+    _LOCKS[path] = handle
+
+
+def release_demo_locks() -> None:
+    """Release every lock this process holds (tests; a real launch exits instead)."""
+    while _LOCKS:
+        _LOCKS.popitem()[1].close()
+
+
+def running_camp_pids(proc_root: str = '/proc') -> List[int]:
+    """Return the process ids of CAMP instances already running on this computer."""
+    found = []
+    for entry in os.listdir(proc_root):
+        if not entry.isdigit():
+            continue
+        try:
+            with open(os.path.join(proc_root, entry, 'cmdline'), 'rb') as f:
+                argv0 = f.read().split(b'\0')[0]
+        except OSError:
+            continue  # the process ended while we looked
+        if os.path.basename(argv0.decode(errors='replace')) == CAMP_EXECUTABLE:
+            found.append(int(entry))
+    return sorted(found)
+
+
+def refuse_running_camp(proc_root: str = '/proc') -> None:
+    """Raise when a CAMP is already running: window placement could pick the wrong one."""
+    pids = running_camp_pids(proc_root)
+    if pids:
+        raise ValueError('CAMP is already running (process %s); close it first so the demo '
+                         'places its own CAMP window' % ', '.join(map(str, pids)))
 
 
 # --- scorer -----------------------------------------------------------------------
@@ -382,6 +483,22 @@ def placement_process(layout_config: str) -> ExecuteProcess:
                           name='place_windows')
 
 
+def placement_exit(event, context):
+    """Return a conspicuous message when the window placement did not succeed."""
+    if event.returncode == 0:
+        return []
+    return [LogInfo(msg='*** THE WINDOWS ARE NOT IN PLACE (place_windows exited with %s; see '
+                        'above). Close the map window and start the demo again. ***'
+                        % event.returncode)]
+
+
+def camp_exit_handlers(camp: Node) -> list:
+    """Return the handler that shuts the whole launch down when the CAMP window closes."""
+    return [RegisterEventHandler(OnProcessExit(target_action=camp, on_exit=[
+        LogInfo(msg='CAMP was closed: stopping the whole demo.'),
+        EmitEvent(event=Shutdown(reason='the CAMP window was closed'))]))]
+
+
 def load_place_windows():
     """Load ``place_windows.py`` from the source tree or the installed package."""
     here = os.path.dirname(os.path.abspath(__file__))
@@ -398,7 +515,6 @@ def load_place_windows():
 
 
 def check_placement_prerequisites(layout_path: str, windows=None,
-                                  find: Callable[[str], Optional[str]] = shutil.which,
                                   environ=os.environ) -> None:
     """
     Refuse window placement on a session, host or layout that cannot do it.
@@ -409,15 +525,8 @@ def check_placement_prerequisites(layout_path: str, windows=None,
     """
     windows = windows or load_place_windows()
     try:
-        windows.check_session(environ)
-        if not find('wmctrl'):
-            raise windows.LayoutError('window placement needs wmctrl: sudo apt install '
-                                      'wmctrl (or run with enable_window_layout:=false)')
-        placements, _timeout = windows.load_layout(layout_path)
-        monitors = windows.parse_monitors(windows.run(['xrandr', '--listmonitors']))
-        for placement in placements:
-            windows.target_geometry(placement, monitors)
-    except (windows.LayoutError, OSError, yaml.YAMLError) as error:
+        windows.check_layout(layout_path, environ)
+    except windows.LayoutError as error:
         raise ValueError('layout_config %s: %s' % (layout_path, error)) from None
 
 
@@ -444,6 +553,15 @@ def launch_setup(context, *args, **kwargs):
     roster = boats_launch.load_roster(arg('roster_file'))
     boats = boats_launch.select_boats(roster, arg('boats'))
     actions: List = []
+    target_file = arg('target_area_file')
+    if target_file:
+        # CAMP opens it whether or not the publisher runs, so check it either way.
+        target_file = os.path.abspath(os.path.expanduser(target_file))
+        require_file(target_file, 'target_area_file')
+    if enable['camp'] or enable['scorer']:
+        acquire_demo_lock(state_dir())
+    if enable['camp']:
+        refuse_running_camp()
 
     if enable['window_layout']:
         require_file(arg('layout_config'), 'layout_config')
@@ -464,7 +582,6 @@ def launch_setup(context, *args, **kwargs):
             get_package_share_directory('coverage_assessment'), 'launch',
             'coverage_assessment_launch.py')), launch_arguments={'params_file': params}.items()))
 
-    target_file = arg('target_area_file')
     actions.extend(target_area_actions(
         enable['target_area'], target_file, target_script_installed))
 
@@ -473,14 +590,18 @@ def launch_setup(context, *args, **kwargs):
         view = load_view(arg('camp_view_config'))
         lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
         with open(arg('camp_profile')) as f:
-            profile = build_profile(f.read(), boats, lat, lon, view['scale'])
+            profile = build_profile(f.read(), boats, lat, lon, view['scale'], cache_dir())
         root = settings_root()
         seed_camp_settings(root, profile)
-        actions.append(LogInfo(msg='CAMP settings: %s' % root))
-        actions.append(camp_node(root, target_file))
+        reset_state_dir(cache_dir(), CACHE_DIR_NAME)
+        camp = camp_node(root, target_file)
+        actions.extend([LogInfo(msg='CAMP settings: %s' % root), camp])
+        actions.extend(camp_exit_handlers(camp))
 
     if enable['window_layout']:
-        actions.append(placement_process(arg('layout_config')))
+        placement = placement_process(arg('layout_config'))
+        actions.extend([placement, RegisterEventHandler(
+            OnProcessExit(target_action=placement, on_exit=placement_exit))])
     return actions
 
 

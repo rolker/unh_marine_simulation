@@ -43,7 +43,9 @@ import random
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchContext
-from launch.actions import IncludeLaunchDescription
+from launch.actions import EmitEvent, IncludeLaunchDescription, RegisterEventHandler
+from launch.events import Shutdown
+from launch.events.process import ProcessExited
 import pytest
 import yaml
 
@@ -365,59 +367,64 @@ def test_target_area_becomes_one_node_with_the_file_parameter(tmp_path):
 # --- window placement preflight -----------------------------------------------------
 
 class FakeWindows:
-    """Stand-in for place_windows with the pieces check_placement_prerequisites uses."""
+    """Stand-in for place_windows whose check_layout uses a fake wmctrl and xrandr."""
 
-    def __init__(self, real, xrandr):
+    def __init__(self, real, xrandr, wmctrl_ok=True):
         self._real = real
         self._xrandr = xrandr
+        self._wmctrl_ok = wmctrl_ok
 
     def __getattr__(self, name):
         return getattr(self._real, name)
 
-    def run(self, command):
-        return self._xrandr
+    def check_layout(self, path, environ):
+        def runner(command):
+            if command[0] == 'wmctrl':
+                if not self._wmctrl_ok:
+                    raise self._real.LayoutError(
+                        'wmctrl is not installed (sudo apt install wmctrl)')
+                return ''
+            return self._xrandr
+        return self._real.check_layout(path, environ, runner)
 
 
 XRANDR = ' 0: +*HDMI-0 3840/800x2160/450+0+240  HDMI-0\n'
 X11 = {'XDG_SESSION_TYPE': 'x11', 'DISPLAY': ':0'}
 
 
-def _fake(xrandr=XRANDR):
-    return FakeWindows(demo.load_place_windows(), xrandr)
+def _fake(xrandr=XRANDR, wmctrl_ok=True):
+    return FakeWindows(demo.load_place_windows(), xrandr, wmctrl_ok)
 
 
 def test_placement_preflight_passes_for_the_shipped_layout():
-    demo.check_placement_prerequisites(str(CONFIG / 'demo_layout.yaml'), _fake(),
-                                       find=lambda name: '/usr/bin/' + name, environ=X11)
+    demo.check_placement_prerequisites(str(CONFIG / 'demo_layout.yaml'), _fake(), X11)
 
 
 def test_placement_preflight_refuses_wayland():
     with pytest.raises(ValueError, match='X11'):
         demo.check_placement_prerequisites(
             str(CONFIG / 'demo_layout.yaml'), _fake(),
-            find=lambda name: '/usr/bin/' + name,
-            environ={'XDG_SESSION_TYPE': 'wayland', 'DISPLAY': ':0'})
+            {'XDG_SESSION_TYPE': 'wayland', 'DISPLAY': ':0'})
 
 
 def test_placement_preflight_names_the_package_when_wmctrl_is_missing():
     with pytest.raises(ValueError, match='apt install wmctrl'):
-        demo.check_placement_prerequisites(str(CONFIG / 'demo_layout.yaml'), _fake(),
-                                           find=lambda name: None, environ=X11)
+        demo.check_placement_prerequisites(str(CONFIG / 'demo_layout.yaml'),
+                                           _fake(wmctrl_ok=False), X11)
 
 
 def test_placement_preflight_refuses_a_monitor_that_is_not_connected():
     with pytest.raises(ValueError, match='HDMI-0'):
         demo.check_placement_prerequisites(
-            str(CONFIG / 'demo_layout.yaml'), _fake(' 0: +*DP-2 1920/1x1080/1+0+0  DP-2\n'),
-            find=lambda name: '/usr/bin/' + name, environ=X11)
+            str(CONFIG / 'demo_layout.yaml'),
+            _fake(' 0: +*DP-2 1920/1x1080/1+0+0  DP-2\n'), X11)
 
 
 def test_placement_preflight_refuses_a_malformed_layout(tmp_path):
     path = tmp_path / 'layout.yaml'
     path.write_text('windows: []\n')
     with pytest.raises(ValueError, match='layout_config'):
-        demo.check_placement_prerequisites(str(path), _fake(),
-                                           find=lambda name: '/usr/bin/' + name, environ=X11)
+        demo.check_placement_prerequisites(str(path), _fake(), X11)
 
 
 # --- the launch description ---------------------------------------------------------
@@ -433,8 +440,18 @@ DEFAULTS = {
 }
 
 
+@pytest.fixture(autouse=True)
+def _release_locks():
+    demo.release_demo_locks()
+    yield
+    demo.release_demo_locks()
+
+
 def _setup(monkeypatch, tmp_path, **overrides):
     monkeypatch.setenv('HOME', str(tmp_path))
+    # The machine running the tests may have its own CAMP open.
+    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
+    demo.release_demo_locks()
     context = LaunchContext()
     for name, value in {**DEFAULTS, **overrides}.items():
         context.launch_configurations[name] = value
@@ -561,3 +578,194 @@ def test_window_layout_on_wayland_is_refused_before_anything_starts(monkeypatch,
     monkeypatch.setenv('XDG_SESSION_TYPE', 'wayland')
     with pytest.raises(ValueError, match='X11'):
         _setup(monkeypatch, tmp_path, enable_window_layout='true')
+
+
+# --- review round 1: target file, running CAMP, lock, cache, shutdown ---------------
+
+def test_a_target_file_that_does_not_exist_is_refused_even_with_the_publisher_off(
+        monkeypatch, tmp_path):
+    with pytest.raises(ValueError, match='target_area_file'):
+        _setup(monkeypatch, tmp_path, target_area_file=str(tmp_path / 'typo.json'),
+               enable_boats='false', enable_camp='false', enable_scorer='false')
+
+
+@needs_camp
+def test_the_target_file_reaches_camp_as_an_absolute_path(monkeypatch, tmp_path):
+    (tmp_path / 'target.json').write_text('{}')
+    monkeypatch.chdir(tmp_path)
+    camp = _camp(_setup(monkeypatch, tmp_path, target_area_file='target.json',
+                        enable_boats='false', enable_scorer='false'))[0]
+    assert str(tmp_path / 'target.json') in _arguments(camp)
+
+
+def _fake_proc(tmp_path, commands):
+    root = tmp_path / 'proc'
+    root.mkdir()
+    for pid, argv in commands.items():
+        (root / str(pid)).mkdir()
+        (root / str(pid) / 'cmdline').write_bytes(b'\0'.join(a.encode() for a in argv) + b'\0')
+    (root / 'self').mkdir()  # not a process id
+    return str(root)
+
+
+def test_a_running_camp_is_found_by_its_executable_name(tmp_path):
+    proc = _fake_proc(tmp_path, {
+        10: ['/opt/ros/lib/camp/CCOMAutonomousMissionPlanner', '/ws/'],
+        11: ['/usr/bin/python3', 'CCOMAutonomousMissionPlanner.py'],
+        12: ['bash', '-c', 'echo CCOMAutonomousMissionPlanner']})
+    assert demo.running_camp_pids(proc) == [10]
+    with pytest.raises(ValueError, match='already running.*10'):
+        demo.refuse_running_camp(proc)
+
+
+def test_no_camp_running_is_fine(tmp_path):
+    proc = _fake_proc(tmp_path, {5: ['bash']})
+    assert demo.running_camp_pids(proc) == []
+    demo.refuse_running_camp(proc)
+
+
+@needs_camp
+def test_the_launch_refuses_to_start_next_to_a_running_camp(monkeypatch, tmp_path):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [4242])
+    context = LaunchContext()
+    for name, value in {**DEFAULTS, 'enable_boats': 'false', 'enable_scorer': 'false'}.items():
+        context.launch_configurations[name] = value
+    with pytest.raises(ValueError, match='4242'):
+        demo.launch_setup(context)
+
+
+def test_a_second_demo_is_refused_while_the_first_holds_the_lock(tmp_path):
+    demo.acquire_demo_lock(str(tmp_path))
+    with pytest.raises(ValueError, match='already running'):
+        demo.acquire_demo_lock(str(tmp_path))
+    demo.release_demo_locks()
+    demo.acquire_demo_lock(str(tmp_path))  # free again
+
+
+@needs_scorer
+def test_launch_setup_takes_the_lock_before_touching_the_state(monkeypatch, tmp_path):
+    _setup(monkeypatch, tmp_path, enable_boats='false', enable_camp='false')
+    state = pathlib.Path(demo.state_dir(str(tmp_path)))
+    marker = state / 'run' / 'coverage_assessment.yaml'
+    assert marker.is_file()
+    with pytest.raises(ValueError, match='already running'):
+        demo.acquire_demo_lock(str(state))  # the launch holds it
+    assert marker.is_file()  # and the failed second launch deleted nothing
+
+
+def test_qt_strings_match_what_qt_writes(tmp_path):
+    qtcore = pytest.importorskip('PyQt5.QtCore')
+    for number, text in enumerate([
+            '/home/roland/.local/state/x', '/with space/and,comma', '/semi;colon', 'a=b',
+            ' lead', 'trail ', 'say "hi"', 'back\\slash', 'plain']):
+        path = str(tmp_path / ('q%d.conf' % number))
+        settings = qtcore.QSettings(path, qtcore.QSettings.IniFormat)
+        settings.setValue('LiveTileCache/cache_dir', text)
+        settings.sync()
+        line = [row for row in open(path).read().splitlines()
+                if row.startswith('cache_dir=')][0]
+        assert line == 'cache_dir=' + demo.qt_ini_string(text), text
+        reread = qtcore.QSettings(path, qtcore.QSettings.IniFormat)
+        assert reread.value('LiveTileCache/cache_dir') == text
+
+
+def test_the_profile_points_camps_tile_cache_at_the_demo_directory(tmp_path):
+    template = (CONFIG / 'demo_camp_profile.conf').read_text()
+    text = demo.build_profile(template, [_boat('one')], 43.0, -70.0, 1.0,
+                              str(tmp_path / 'cache dir'))
+    cache = str(tmp_path / 'cache dir')
+    assert demo.parse_profile(text)['LiveTileCache'] == ['cache_dir=' + cache]
+    with pytest.raises(ValueError, match='LiveTileCache'):
+        demo.build_profile('[LiveTileCache]\nx=1\n', [_boat('one')], 43.0, -70.0, 1.0)
+
+
+@needs_camp
+def test_the_tile_cache_is_emptied_on_every_start(monkeypatch, tmp_path):
+    kwargs = {'enable_boats': 'false', 'enable_scorer': 'false'}
+    _setup(monkeypatch, tmp_path, **kwargs)
+    cache = pathlib.Path(demo.cache_dir(str(tmp_path)))
+    (cache / 'old_tile.bin').write_text('x')
+    _setup(monkeypatch, tmp_path, **kwargs)
+    assert not (cache / 'old_tile.bin').exists() and (cache / demo.ROOT_MARKER).is_file()
+
+
+def test_state_directories_other_than_the_demos_are_never_reset(tmp_path):
+    other = tmp_path / 'elsewhere'
+    other.mkdir()
+    with pytest.raises(ValueError, match='refusing'):
+        demo.reset_state_dir(str(other), demo.CACHE_DIR_NAME, str(tmp_path))
+    with pytest.raises(ValueError, match='refusing'):  # the cache path is not the config one
+        demo.reset_state_dir(demo.cache_dir(str(tmp_path)), demo.SETTINGS_ROOT_NAME,
+                             str(tmp_path))
+
+
+@pytest.mark.parametrize('body, message', [
+    ('camp_view: {scale: "1"}\n', 'finite number'),
+    ('camp_view: {scale: true}\n', 'finite number'),
+    ('camp_view: {scale: 0}\n', 'greater than zero'),
+    ('camp_view: {scale: -2}\n', 'outside'),
+    ('camp_view: {scale: .nan}\n', 'finite'),
+    ('camp_view: {scale: 1, lat: 90, lon: 0}\n', 'outside'),
+    ('camp_view: {scale: 1, lat: 43, lon: 181}\n', 'outside'),
+    ('camp_view: {scale: 1, lat: "43", lon: 0}\n', 'finite number'),
+])
+def test_view_config_checks_types_and_ranges(tmp_path, body, message):
+    path = tmp_path / 'view.yaml'
+    path.write_text(body)
+    with pytest.raises(ValueError, match=message):
+        demo.load_view(str(path))
+
+
+def test_view_config_accepts_an_explicit_centre(tmp_path):
+    path = tmp_path / 'view.yaml'
+    path.write_text('camp_view: {scale: 2, lat: 43.07, lon: -70.71}\n')
+    assert demo.load_view(str(path)) == {'scale': 2.0, 'lat': 43.07, 'lon': -70.71}
+
+
+# --- closing the CAMP window stops the whole demo (owner requirement, 2026-10-14) -----
+
+def _handlers(actions):
+    return [a.event_handler for a in actions if isinstance(a, RegisterEventHandler)]
+
+
+def _exited(action, returncode=0):
+    return ProcessExited(action=action, name='x', cmd=[], cwd=None, env=None,
+                         returncode=returncode, pid=1)
+
+
+@needs_camp
+def test_closing_camp_shuts_the_whole_launch_down(monkeypatch, tmp_path):
+    actions = _setup(monkeypatch, tmp_path, enable_boats='false', enable_scorer='false')
+    camp = _camp(actions)[0]
+    handlers = [h for h in _handlers(actions) if h.matches(_exited(camp))]
+    assert len(handlers) == 1
+    entities = handlers[0].handle(_exited(camp), LaunchContext())
+    shutdowns = [e for e in entities if isinstance(e, EmitEvent)
+                 and isinstance(e.event, Shutdown)]
+    assert len(shutdowns) == 1 and 'CAMP' in shutdowns[0].event.reason
+
+
+@needs_camp
+def test_camp_crashing_also_stops_the_demo_and_other_exits_do_not(monkeypatch, tmp_path):
+    actions = _setup(monkeypatch, tmp_path, enable_boats='false', enable_scorer='false')
+    camp = _camp(actions)[0]
+    assert any(h.matches(_exited(camp, returncode=-11)) for h in _handlers(actions))
+    other = demo.placement_process('/x.yaml')
+    assert not any(h.matches(_exited(other)) for h in _handlers(actions))
+
+
+def test_without_camp_nothing_shuts_the_demo_down(monkeypatch, tmp_path):
+    actions = _setup(monkeypatch, tmp_path, enable_boats='false', enable_camp='false',
+                     enable_scorer='false')
+    assert _handlers(actions) == []
+
+
+def test_a_failed_placement_is_announced_and_a_good_one_is_quiet():
+    class Event:
+        def __init__(self, returncode):
+            self.returncode = returncode
+
+    assert demo.placement_exit(Event(0), None) == []
+    banner = demo.placement_exit(Event(1), None)
+    assert len(banner) == 1 and 'NOT IN PLACE' in _perform(banner[0].msg)

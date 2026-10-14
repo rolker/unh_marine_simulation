@@ -392,7 +392,7 @@ def check_session(environ=os.environ) -> None:
         raise LayoutError('DISPLAY is not set')
 
 
-def check_layout(path: str, environ=os.environ, runner=run):
+def check_layout(path: str, environ=os.environ, runner=None):
     """
     Check everything placement needs; return ``(placements, timeout, monitors)``.
 
@@ -400,6 +400,7 @@ def check_layout(path: str, environ=os.environ, runner=run):
     is installed), the layout file is well formed and every monitor it names is
     connected. Raises LayoutError with the reason otherwise.
     """
+    runner = runner or run
     check_session(environ)
     placements, timeout = load_layout(os.path.expanduser(path))
     runner(['wmctrl', '-m'])
