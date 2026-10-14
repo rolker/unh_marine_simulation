@@ -27,12 +27,15 @@ TO START THE DEMO
      as it was.
   4. A controller that does not steer its boat: unplug it, plug it back
      in, wait five seconds. If it still does not work, call the number below.
-  5. Anything else strange (a message starting THE DEMO DID NOT START, a
-     window in the wrong place, a frozen map): close the terminal window,
-     open a new one, UP ARROW, ENTER once more. Still wrong: call.
+  5. A message starting THE DEMO DID NOT START says in a sentence what is
+     wrong (a map window is already open: close it; a cable is unplugged: plug
+     it in). Fix that and press UP ARROW, ENTER again. Anything else strange
+     (a window in the wrong place, a frozen map): close the map window, wait
+     for the prompt, UP ARROW, ENTER. Still wrong: call.
 
-TO STOP: click the terminal and press CTRL and C together; wait until
-the prompt comes back.
+TO STOP EVERYTHING: close the map window (the big one). Everything else
+shuts down by itself; wait until the terminal prompt comes back. (If that does
+not work: click the terminal and press CTRL and C together.)
 
 WHO TO CALL:  <NAME - OWNER TO FILL IN>   <PHONE - OWNER TO FILL IN>
 ```
@@ -61,7 +64,7 @@ The up-arrow command is the one typed last, so type it once yourself first:
 ### What the one launch does
 
 ```bash
-export ROS_DOMAIN_ID=42   # run_demo.sh sets this itself unless it is already set
+export ROS_DOMAIN_ID=42   # run_demo.sh always sets 42 (DEMO_ROS_DOMAIN_ID overrides)
 ros2 launch marine_simulation demo_launch.py \
     joystick_config:=$HOME/.config/marine_simulation_demo/joysticks.yaml \
     layout_config:=$HOME/.config/marine_simulation_demo/layout.yaml
@@ -80,10 +83,19 @@ also works here: arguments given on the command line reach the included launch.
 | `enable_boats`, `enable_camp`, `enable_scorer`, `enable_window_layout` | `true` | Switch a part off (testing, or an emergency subset). |
 | `enable_target_area` | `false` | Start the target-area publisher of issue #93. Refused with the reason until `publish_survey_area.py` is installed with this package. |
 
+**Closing the CAMP window (or CAMP dying) shuts the whole launch down**
+(whenever `enable_camp` is true), so the helper stops everything by closing the
+map window.
+
 The launch refuses to start, before anything else runs, when: a boolean argument
 is not a clear yes or no; the layout file is malformed; a monitor it names is not
-connected; the session is not X11; `wmctrl` is missing; `target_area_file` is not
-a file. Boats and scorer start in parallel. The scorer is configured as soon as it
+connected; the session is not X11; `wmctrl` is missing; `target_area_file` is
+given and is not a file; a CAMP is already running (window placement could pick
+the wrong window); another demo already holds the lock in
+`~/.local/state/marine_simulation_demo`. `run_demo.sh` checks the layout, the
+session and a running CAMP itself first and prints the reason as one sentence;
+the launch's own checks show as a Python error message. Boats and scorer start in
+parallel. The scorer is configured as soon as it
 is up and activated once, by the scorer package's own launch file; its parameters
 are generated from the roster (so `boats:=a,b` scores exactly those boats) into
 `~/.local/state/marine_simulation_demo/run/coverage_assessment.yaml`.
@@ -94,7 +106,11 @@ CAMP keeps its view, layer lists and layer settings in a Qt settings file.
 `demo_launch.py` gives CAMP its own settings directory
 (`XDG_CONFIG_HOME=~/.local/state/marine_simulation_demo/xdg_config`) and writes
 that file fresh on every start, so the operator's own CAMP settings are never read
-or changed, and a previous demo session cannot leave anything behind. The file is
+or changed. The live coverage tile cache, which CAMP keeps outside its settings
+file, is moved to `~/.local/state/marine_simulation_demo/live_tile_cache` and emptied
+on every start too, so a previous session's tiles are not warm-loaded. Both
+directories are guarded: they are only deleted at those exact paths, never through a
+symlink, and only when they hold the marker file the launch writes. The file is
 `config/demo_camp_profile.conf` (OpenStreetMap as the only background map) plus,
 generated at launch:
 
@@ -102,7 +118,10 @@ generated at launch:
   `MapView/mapView/*` keys. The centre is the middle of the boats' start
   positions (or `lat`/`lon` in `config/demo_camp_view.yaml`), converted with
   CAMP's own Web Mercator formula; the scale is `scale` in that file. CAMP stores
-  the centre in map units, so the value is exact and the same on every start.
+  the centre in map units, so the value in the settings file is exact and the same
+  on every start. What the helper sees can differ: CAMP applies the centre at its
+  first window size and the window is then made full screen, which may shift the
+  map (rolker/camp#242). Check the view at the rehearsal.
 - one live coverage layer per roster boat, switched on (`live_enabled` and
   `visible`), keyed by `/<boat>/sensors/mbes/cube_bathymetry`.
 
@@ -116,6 +135,9 @@ range of the live layers are CAMP's defaults.
 Known limits of this approach:
 
 - OpenStreetMap tiles need internet. Without it the background is blank.
+- `XDG_CONFIG_HOME` is changed for the whole CAMP process, not only its settings, so
+  anything else CAMP or Qt reads from `~/.config` (platform theme, fonts) is not
+  seen; look and feel can differ from the operator's CAMP. Check at the rehearsal.
 - The first scale in `config/demo_camp_view.yaml` is a starting value; tune it at
   the rehearsal (see the file).
 - The live layer key pattern was read from a real CAMP settings file; the
@@ -132,10 +154,15 @@ and/or title), a monitor (as `xrandr --listmonitors` names it) and either
 `fullscreen: true` or a `rect` in pixels from that monitor's top left corner. The
 example puts CAMP full screen on the big display and leaves the second display
 for the scoreboard (not built yet); it also shows the one-display variant.
-`scripts/place_windows.py` waits for each window (60 s by default), clears its
-maximised state, moves it with `wmctrl`, checks the geometry and moves it once
-more if the application resized itself, and exits non-zero naming any window it
-could not place.
+`scripts/place_windows.py` waits for the windows (90 s by default, one deadline for
+all), takes the newest window that matches, clears its full screen and maximised
+state, moves it with `wmctrl`, checks the geometry and moves it once more if the
+application resized itself, and exits non-zero naming any window it could not
+place; the launch then prints a banner saying the windows are not in place.
+`place_windows.py --check --layout FILE` only checks the session, tools, layout
+and monitors. Placement runs once at start: a CAMP window that is closed and
+reopened by hand is not placed again (close the map window to stop and start the
+demo again instead).
 
 ### Target area
 
@@ -158,7 +185,10 @@ ros2 run marine_simulation demo_boats_selftest.py --start-launch --demo --boats 
 enable_window_layout:=false`, then checks the boats as usual and that
 `coverage_assessment` becomes active and assesses a target area the self-test
 publishes itself. Not covered by any test: CAMP's real window class, the
-`wmctrl` calls on a live desktop, and the cold-boot rehearsal.
+`wmctrl` calls on a live desktop, the view after the window is made full screen,
+and the cold-boot rehearsal. `~/.local/state/marine_simulation_demo` stays after the
+demo ends (settings, tile cache, scorer parameters, lock); it is small and reset on
+every start, so there is no need to delete it.
 
 ## Demo boats
 
