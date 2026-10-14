@@ -29,6 +29,7 @@
   <exec_depend>ben_description</exec_depend>
   <exec_depend>helm_manager</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
+  <exec_depend>geographic_msgs</exec_depend>
   <exec_depend>joy_linux</exec_depend>
   <exec_depend>joy_to_helm</exec_depend>
   <exec_depend>robot_state_publisher</exec_depend>
