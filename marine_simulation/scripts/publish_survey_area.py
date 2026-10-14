@@ -62,6 +62,12 @@ DEFAULT_STANDARD_B = 0.013
 # The scorer's survey_area subscription (coverage_assessment README): reliable,
 # transient_local, depth 100.
 QOS_DEPTH = 100
+# More areas than the latched history holds would silently evict the oldest ones for a
+# scorer that starts late. The vertex cap is the scorer's own max_area_vertices default.
+MAX_AREAS = QOS_DEPTH
+MAX_VERTICES = 10000
+# A CAMP project of a few areas is kilobytes; refuse anything that is plainly not one.
+MAX_FILE_BYTES = 16 * 1024 * 1024
 
 
 class SurveyAreaFileError(Exception):
@@ -71,12 +77,29 @@ class SurveyAreaFileError(Exception):
 Area = Tuple[str, List[Tuple[float, float]]]
 
 
-def _items(node: Any) -> Iterator[Dict[str, Any]]:
-    """Yield every dict item of a CAMP tree, depth first, the node itself first."""
-    if isinstance(node, dict):
-        yield node
-        for child in node.get('children') or []:
-            yield from _items(child)
+def _children(node: Dict[str, Any]) -> List[Any]:
+    children = node.get('children')
+    if children is None:
+        return []
+    if not isinstance(children, list):
+        raise SurveyAreaFileError(
+            'item %r has "children" of type %s, not a list' % (
+                node.get('label'), type(children).__name__))
+    return children
+
+
+def _items(root: Any) -> Iterator[Dict[str, Any]]:
+    """
+    Yield every dict item of a CAMP tree, depth first in file order, parents first.
+
+    Iterative, so a deeply nested file cannot overflow the stack.
+    """
+    stack = [root]
+    while stack:
+        node = stack.pop()
+        if isinstance(node, dict):
+            yield node
+            stack.extend(reversed(_children(node)))
 
 
 def _coordinate(value: Any, low: float, high: float, what: str, where: str) -> float:
@@ -97,21 +120,26 @@ def parse_survey_areas(project: Any) -> List[Area]:
     ``project`` is the decoded JSON. A ``SurveyArea`` may sit inside nested groups; only
     its direct ``Waypoint`` children are its vertices, in order. Raises
     ``SurveyAreaFileError`` when there is no ``SurveyArea``, when one has fewer than
-    three vertices or a vertex without a finite latitude in [-90, 90] and longitude in
-    [-180, 180], or when two areas have the same label.
+    three distinct vertices, more than ``MAX_VERTICES``, or a vertex without a finite
+    latitude in [-90, 90] and longitude in [-180, 180], when two areas have the same label,
+    or when there are more than ``MAX_AREAS`` areas.
     """
     areas: List[Area] = []
     seen = set()
+    labels = {i.get('label') for i in _items(project) if i.get('type') == 'SurveyArea'}
     for index, item in enumerate(i for i in _items(project) if i.get('type') == 'SurveyArea'):
         label = item.get('label')
         if not isinstance(label, str) or not label:
             label = 'area%04d' % index
+            while label in labels:
+                label += '_'
+            labels.add(label)
         where = 'SurveyArea %r' % label
         if label in seen:
             raise SurveyAreaFileError('%s: the label appears more than once' % where)
         seen.add(label)
         vertices = []
-        for child in item.get('children') or []:
+        for child in _children(item):
             if not isinstance(child, dict) or child.get('type') != 'Waypoint':
                 continue
             here = '%s waypoint %d (%r)' % (where, len(vertices), child.get('label'))
@@ -121,12 +149,22 @@ def parse_survey_areas(project: Any) -> List[Area]:
             vertices.append((
                 _coordinate(child['latitude'], -90.0, 90.0, 'latitude', here),
                 _coordinate(child['longitude'], -180.0, 180.0, 'longitude', here)))
-        if len(vertices) < 3:
+        distinct = len(set(vertices))
+        if distinct < 3:
             raise SurveyAreaFileError(
-                '%s has %d vertices; a polygon needs at least 3' % (where, len(vertices)))
+                '%s has %d distinct vertices (%d listed); a polygon needs at least 3'
+                % (where, distinct, len(vertices)))
+        if len(vertices) > MAX_VERTICES:
+            raise SurveyAreaFileError(
+                '%s has %d vertices; the scorer accepts at most %d' % (
+                    where, len(vertices), MAX_VERTICES))
         areas.append((label, vertices))
     if not areas:
         raise SurveyAreaFileError('no SurveyArea item in the file')
+    if len(areas) > MAX_AREAS:
+        raise SurveyAreaFileError(
+            'the file holds %d areas; the latched history keeps %d, so a scorer that starts '
+            'late would lose the rest' % (len(areas), MAX_AREAS))
     return areas
 
 
@@ -134,19 +172,31 @@ def load_survey_areas(path: str) -> List[Area]:
     """Read a CAMP project file and return its areas (see ``parse_survey_areas``)."""
     if not path:
         raise SurveyAreaFileError("the 'file' parameter is empty")
+    path = os.path.expanduser(path)
     try:
+        if os.path.getsize(path) > MAX_FILE_BYTES:
+            raise SurveyAreaFileError(
+                '%s is larger than %d bytes; not a CAMP project file' % (path, MAX_FILE_BYTES))
         with open(path, encoding='utf-8') as stream:
             project = json.load(stream)
     except FileNotFoundError:
         raise SurveyAreaFileError('file not found: %s' % path)
     except (OSError, UnicodeDecodeError) as error:
         raise SurveyAreaFileError('cannot read %s: %s' % (path, error))
+    except RecursionError:
+        raise SurveyAreaFileError('%s is nested too deeply to be a CAMP project file' % path)
     except ValueError as error:
         raise SurveyAreaFileError('%s is not valid JSON: %s' % (path, error))
     try:
         return parse_survey_areas(project)
     except SurveyAreaFileError as error:
         raise SurveyAreaFileError('%s: %s' % (path, error))
+
+
+def _number(value: Any, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise SurveyAreaFileError('%s must be a number, got %r' % (name, value))
+    return float(value)
 
 
 def validate_standard(a: float, b: float) -> None:
@@ -230,6 +280,8 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
     from marine_interfaces.msg import SurveyArea
     import rclpy
     from rclpy.clock import Clock, ClockType
+    from rcl_interfaces.msg import ParameterDescriptor
+    from rclpy.exceptions import ParameterException
     from rclpy.node import Node
 
     if not rclpy.ok():
@@ -241,8 +293,12 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
         area_id = node.declare_parameter('area_id', '').value
         priority = node.declare_parameter('priority', 0).value
         standard_name = node.declare_parameter('standard_name', DEFAULT_STANDARD_NAME).value
-        standard_a = node.declare_parameter('standard_a', DEFAULT_STANDARD_A).value
-        standard_b = node.declare_parameter('standard_b', DEFAULT_STANDARD_B).value
+        # Dynamic typing so `-p standard_a:=1` (an integer) is accepted as 1.0.
+        loose = ParameterDescriptor(dynamic_typing=True)
+        standard_a = _number(
+            node.declare_parameter('standard_a', DEFAULT_STANDARD_A, loose).value, 'standard_a')
+        standard_b = _number(
+            node.declare_parameter('standard_b', DEFAULT_STANDARD_B, loose).value, 'standard_b')
         if not -32768 <= priority <= 32767:
             raise SurveyAreaFileError('priority %r does not fit an int16' % priority)
         validate_standard(standard_a, standard_b)
@@ -261,6 +317,9 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
                 len(ids), ids, file_path, publisher.topic_name))
         # Keep a reference: a destroyed publisher takes its latched samples with it.
         node.publisher_ = publisher
+    except ParameterException as error:
+        node.destroy_node()
+        raise SurveyAreaFileError('bad parameter: %s' % error)
     except BaseException:
         node.destroy_node()
         raise
@@ -270,6 +329,7 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
 def main(args: Optional[Sequence[str]] = None) -> int:
     """Run the node; return a non-zero exit status when the inputs are refused."""
     import rclpy
+    from rclpy.executors import ExternalShutdownException
 
     try:
         node = make_node(args)
@@ -280,7 +340,7 @@ def main(args: Optional[Sequence[str]] = None) -> int:
         return 1
     try:
         rclpy.spin(node)
-    except KeyboardInterrupt:
+    except (KeyboardInterrupt, ExternalShutdownException):
         pass
     finally:
         node.destroy_node()
