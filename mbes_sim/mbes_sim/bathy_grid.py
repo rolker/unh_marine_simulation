@@ -2,6 +2,7 @@
 
 import math
 
+import numpy as np
 from osgeo import gdal
 
 
@@ -14,7 +15,9 @@ class BathyGrid:
         self.band = self.dataset.GetRasterBand(1)
         self.geoTransform = self.dataset.GetGeoTransform()
         self.inverseGeoTransform = gdal.InvGeoTransform(self.geoTransform)
-        self.nodata = self.band.GetNoDataValue()
+        nodata = self.band.GetNoDataValue()
+        # Compared against float32 cells, so round the value the same way.
+        self.nodata = None if nodata is None else np.float32(nodata)
         self.data = self.band.ReadAsArray()
 
         sourceSR = gdal.osr.SpatialReference()
@@ -34,6 +37,8 @@ class BathyGrid:
 
     def getDepth(self, x, y):
         """Return the depth at a grid-CRS position, or None off the grid or on a nodata cell."""
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return None
         gt = self.inverseGeoTransform
         col = math.floor(gt[0] + x * gt[1] + y * gt[2])
         row = math.floor(gt[3] + x * gt[4] + y * gt[5])
@@ -44,3 +49,11 @@ class BathyGrid:
         if math.isnan(value) or (self.nodata is not None and value == self.nodata):
             return None
         return value
+
+    def getWaterDepth(self, x, y, tide_level=0.0):
+        """Return depth plus tide at a grid-CRS position, or None where there is no water."""
+        depth = self.getDepth(x, y)
+        if depth is None:
+            return None
+        water = float(depth) + tide_level
+        return water if water > 0.0 else None

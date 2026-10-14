@@ -102,3 +102,27 @@ def _utm():
     srs.ImportFromEPSG(32619)
     srs.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
     return srs
+
+
+def test_water_depth_adds_the_tide_and_is_none_when_dry(tmp_path):
+    data = np.array([[10.0, 1.0, -2.0]], dtype=np.float32)
+    plain = BathyGrid(_write(tmp_path / 'w.tif', data))
+    assert plain.getWaterDepth(*_centre(0, 0), tide_level=1.5) == 11.5
+    assert plain.getWaterDepth(*_centre(1, 0), tide_level=-1.0) is None
+    assert plain.getWaterDepth(*_centre(1, 0), tide_level=-0.5) == 0.5
+    assert plain.getWaterDepth(*_centre(2, 0), tide_level=1.0) is None
+    assert plain.getWaterDepth(*_centre(2, 0), tide_level=3.0) == 1.0
+    assert plain.getWaterDepth(ORIGIN_X - 100.0, ORIGIN_Y) is None
+
+
+def test_a_nodata_value_that_float32_cannot_hold_exactly_still_matches(tmp_path):
+    data = np.array([[-99999.9, 4.0]], dtype=np.float32)
+    odd = BathyGrid(_write(tmp_path / 'odd.tif', data, nodata=-99999.9))
+    assert odd.getDepth(*_centre(0, 0)) is None
+    assert odd.getDepth(*_centre(1, 0)) == 4.0
+
+
+@pytest.mark.parametrize('x, y', [(float('nan'), 1.0), (1.0, float('inf')),
+                                  (float('-inf'), float('nan'))])
+def test_a_non_finite_position_is_none_not_an_exception(grid, x, y):
+    assert grid.getDepth(x, y) is None

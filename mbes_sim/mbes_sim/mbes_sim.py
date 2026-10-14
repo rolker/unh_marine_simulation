@@ -189,9 +189,9 @@ class SonarSim(Node):
                 for i in range(beam_count):
                     x = port_outer_beam_location_xy[0] + dx*i
                     y = port_outer_beam_location_xy[1] + dy*i
-                    z = self.bathy.getDepth(x,y)
+                    # None for no data, off the grid, and dry (land or drying) cells.
+                    z = self.bathy.getWaterDepth(x, y, self.tide_level)
                     if z is not None:
-                        z = z + self.tide_level
                         soundings.append((0.0, -swath_half_width+i*sounding_spacing, z))
                         y2 = soundings[-1][1]*soundings[-1][1]
                         z2 = z*z
