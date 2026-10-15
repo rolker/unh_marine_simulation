@@ -202,3 +202,91 @@ def test_boats_regex_escapes():
 def test_script_is_executable_and_installed():
     assert SCRIPT.stat().st_mode & 0o111
     assert 'scripts/demo_manager.py' in (PACKAGE / 'CMakeLists.txt').read_text()
+
+
+# -- the manager's CAMP starts on the demo's own settings and tile cache ----------------------
+
+def _camp_launch_module():
+    path = PACKAGE / 'launch' / 'demo_camp_launch.py'
+    spec = importlib.util.spec_from_file_location('demo_camp_launch', str(path))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _camp_start(monkeypatch, tmp_path, **arguments):
+    from launch import LaunchContext
+    module = _camp_launch_module()
+    demo = module.demo_launch
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
+    started = []
+    monkeypatch.setattr(demo, 'camp_node',
+                        lambda settings_home, project_file='': started.append(
+                            (settings_home, project_file)) or 'camp-node')
+    demo.release_demo_locks()
+    context = LaunchContext()
+    values = {'boats': '', 'roster_file': str(ROSTER),
+              'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
+              'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
+              'target_area_file': ''}
+    values.update(arguments)
+    context.launch_configurations.update(values)
+    try:
+        actions = module.launch_setup(context)
+    finally:
+        demo.release_demo_locks()
+    return demo, actions, started
+
+
+def test_the_camp_group_runs_the_demo_camp_launch(spec):
+    camp = spec.groups['camp']
+    assert (camp.package, camp.file) == ('marine_simulation', 'demo_camp_launch.py')
+    assert camp.arguments['roster_file'].default == str(ROSTER)
+
+
+def test_manager_camp_gets_the_private_settings_directory(monkeypatch, tmp_path):
+    demo, actions, started = _camp_start(monkeypatch, tmp_path)
+    assert started == [(demo.settings_root(str(tmp_path)), '')]
+    assert actions[-1] == 'camp-node'
+    conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
+                        'CCOMAutonomousMissionPlanner.conf')
+    text = conf.read_text()
+    assert 'cache_dir=' in text and demo.cache_dir(str(tmp_path)) in text
+    for name in roster_names():
+        assert demo.live_layer_key(name) + '\\live_enabled=true' in text
+
+
+def test_manager_camp_start_empties_the_tile_cache(monkeypatch, tmp_path):
+    module = _camp_launch_module()
+    demo = module.demo_launch
+    cache = pathlib.Path(demo.cache_dir(str(tmp_path)))
+    cache.mkdir(parents=True)
+    (cache / demo.ROOT_MARKER).write_text('x')
+    stale = cache / '_boat_sensors_mbes_cube_bathymetry'
+    stale.mkdir()
+    (stale / 'tile').write_text('old session')
+    _camp_start(monkeypatch, tmp_path)
+    assert not stale.exists()
+    assert (cache / demo.ROOT_MARKER).is_file()
+
+
+def test_manager_camp_can_start_again_in_the_same_process(monkeypatch, tmp_path):
+    module = _camp_launch_module()
+    demo = module.demo_launch
+    from launch import LaunchContext
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
+    monkeypatch.setattr(demo, 'camp_node', lambda *a, **k: 'camp-node')
+    context = LaunchContext()
+    context.launch_configurations.update({
+        'boats': '', 'roster_file': str(ROSTER),
+        'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
+        'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
+        'target_area_file': ''})
+    demo.release_demo_locks()
+    try:
+        module.launch_setup(context)
+        module.launch_setup(context)    # the demo lock is held by this process already
+    finally:
+        demo.release_demo_locks()

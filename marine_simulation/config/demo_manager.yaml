@@ -39,7 +39,12 @@ groups:
 
   camp:
     description: CAMP, the operator display; closing it stops the demo
-    launch: {package: camp, file: camp_launch.py}
+    # Not CAMP's own camp_launch.py: that runs on the operator's settings and the shared live
+    # tile cache. demo_camp_launch.py starts CAMP on the demo profile, like demo_launch.py.
+    launch: {package: marine_simulation, file: demo_camp_launch.py}
+    arguments:
+      boats: {type: string, default: '${boats}'}
+      roster_file: {type: string, default: '${roster_file}'}
     requires: [boats]
     # Closing the window is an operator decision, not a crash: never restarted, and the
     # groups that follow it are stopped.

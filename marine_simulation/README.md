@@ -520,8 +520,8 @@ ros2 run launch_manager_proto launch_manager_proto status       # what is it doi
 | Group | Launch file | Rule |
 |---|---|---|
 | `boats` | `demo_boats_launch.py` (with `lifecycle_guard:=false`) | READY when every boat's nine lifecycle nodes are `active` |
-| `camp` | `camp` package's `camp_launch.py` | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
-| `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster | `requires: [boats]`, lifecycle node `/coverage_assessment` to `active` |
+| `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, the same code as `demo_launch.py`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
+| `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_launch.scorer_parameters` (map frame = the first boat's) | `requires: [boats]`, lifecycle node `/coverage_assessment` to `active` |
 
 Profiles: `demo` (all three), `headless` (boats and scorer), `boats` (boats only). The
 boats and the scorer **follow** CAMP: closing CAMP's window stops them and ends the manager,

@@ -48,7 +48,7 @@ unh_marine_simulation/
 │   ├── launch_manager_proto/          #   lifecycle_core, lifecycle_rclpy, config, manager_core, manager, cli
 │   └── test/                          #   fakes + fake lifecycle node, core/config/process tests
 └── marine_simulation/                 # Scenario launch files
-    ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, demo_launch.py (whole display), ...
+    ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, demo_launch.py (whole display), demo_camp_launch.py (CAMP for the manager), ...
     ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout/manager.yaml, demo_camp_profile.conf, demo_camp_view.yaml, demo_target_polygon_camp.json
     ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, demo_manager.py, place_windows.py, run_demo.sh, publish_survey_area.py
     ├── test/                          #   pytest: demo launch fail-fast checks, graph check, demo manager, survey-area publisher
