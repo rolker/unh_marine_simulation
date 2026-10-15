@@ -115,10 +115,34 @@ def test_a_boat_subset_narrows_regex_and_expectation():
 def test_scorer_is_one_lifecycle_node_at_a_fixed_name(spec):
     scorer = spec.groups['scorer']
     assert scorer.lifecycle.nodes == ['/coverage_assessment']
-    params = demo_manager.scorer_parameters(roster_names())['/**/coverage_assessment']
+    params = _scorer_params()
     assert params['ros__parameters']['source_names'] == roster_names()
     assert params['ros__parameters']['grid_topics'] == [
         '/%s/sensors/mbes/grid' % n for n in roster_names()]
+
+
+def _scorer_params(names=None):
+    launch = importlib.util.module_from_spec(importlib.util.spec_from_file_location(
+        'boats_for_test', str(PACKAGE / 'launch' / 'demo_boats_launch.py')))
+    launch.__spec__.loader.exec_module(launch)
+    boats = launch.select_boats(launch.load_roster(str(ROSTER)), ','.join(names or []))
+    return demo_manager.scorer_parameters(boats, str(PACKAGE))['/**/coverage_assessment']
+
+
+def test_scorer_map_frame_is_the_first_boats_map_frame():
+    """Boats publish earth -> <boat>/map; a plain 'map' left the scorer never assessing."""
+    p = _scorer_params()['ros__parameters']
+    first = roster_names()[0]
+    assert p['map_frame'] == first + '/map'
+    assert p['water_surface_frame'] == first + '/map_tide'
+    assert p['water_surface_boat_frame'] == first + '/base_link'
+
+
+def test_scorer_map_frame_follows_the_selected_boats():
+    second = roster_names()[1]
+    p = _scorer_params([second])['ros__parameters']
+    assert p['map_frame'] == second + '/map'
+    assert p['source_names'] == [second]
 
 
 def test_every_placeholder_in_the_file_is_provided():

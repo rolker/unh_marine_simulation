@@ -73,15 +73,34 @@ def boats_regex(names: Sequence[str]) -> str:
     return '|'.join(re.escape(n) for n in names)
 
 
-def scorer_parameters(names: Sequence[str]) -> dict:
-    """Return the coverage_assessment parameters scoring these boats' CUBE grids."""
-    return {'/**/coverage_assessment': {'ros__parameters': {
-        'grid_topics': ['/%s/sensors/mbes/grid' % n for n in names],
-        'source_names': list(names),
-        'survey_area_topic': '/survey_area',
-        'cell_size': 1.0,
-        'assessment_period': 1.0,
-    }}}
+def _load_demo_launch(share: str):
+    """Load ``demo_launch.py``, the one place that knows how the scorer is configured."""
+    path = os.path.join(share, 'launch', 'demo_launch.py')
+    spec = importlib.util.spec_from_file_location('demo_launch', path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def scorer_template_path() -> str:
+    """Return the scorer package's example parameter file, the template of the real ones."""
+    return os.path.join(get_package_share_directory('coverage_assessment'),
+                        'config', 'coverage_assessment.yaml')
+
+
+def scorer_parameters(boats: Sequence, share: str = None, template: dict = None) -> dict:
+    """
+    Return the coverage_assessment parameters scoring these boats' CUBE grids.
+
+    The content is ``demo_launch.scorer_parameters`` (also used by the one-launch demo), so
+    the scorer's ``map_frame`` is the first boat's map frame (the boats publish
+    ``earth -> <boat>/map``, never a plain ``map``) and its tide frames are that boat's too.
+    """
+    demo_launch = _load_demo_launch(share or get_package_share_directory('marine_simulation'))
+    if template is None:
+        with open(scorer_template_path()) as f:
+            template = yaml.safe_load(f)
+    return demo_launch.scorer_parameters(template, boats)
 
 
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
@@ -128,7 +147,7 @@ def main(argv: List[str] = None) -> int:
     try:
         scorer_path = os.path.join(state_dir, 'scorer_params.yaml')
         with open(scorer_path, 'w') as f:
-            yaml.safe_dump(scorer_parameters(names), f)
+            yaml.safe_dump(scorer_parameters(boats, share), f)
         try:
             spec = load_config(
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
