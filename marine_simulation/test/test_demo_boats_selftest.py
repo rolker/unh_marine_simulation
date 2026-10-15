@@ -147,3 +147,44 @@ def test_main_refuses_overriding_launch_args_before_starting_anything(capsys):
         selftest.main(['--roster', str(ROSTER), '--start-launch', 'boats:=a'])
     assert exit_info.value.code == 2
     assert 'boats:=a' in capsys.readouterr().err
+
+
+# --- --demo: the whole display's launch, and the scorer check ---------------------------
+
+def test_demo_launch_command_switches_off_what_needs_a_display():
+    cmd = selftest.launch_command(['a'], None, False, ['tide_speed_factor:=1'], demo=True)
+    assert cmd[:4] == ['ros2', 'launch', 'marine_simulation', 'demo_launch.py']
+    assert 'enable_camp:=false' in cmd and 'enable_window_layout:=false' in cmd
+    assert cmd[-1] == 'tide_speed_factor:=1' and 'boats:=a' in cmd
+
+
+def test_the_plain_command_is_unchanged_without_demo():
+    cmd = selftest.launch_command(None, None, False, [])
+    assert 'demo_launch.py' not in cmd and 'enable_camp:=false' not in cmd
+
+
+def test_demo_fixes_which_parts_of_the_display_run():
+    extra = ['enable_camp:=true', 'enable_scorer:=false', 'enable_window_layout:=true',
+             'enable_boats:=false', 'tide_speed_factor:=1']
+    assert selftest.overridden_launch_args(extra, demo=True) == extra[:4]
+    assert selftest.overridden_launch_args(extra) == []
+
+
+def test_survey_area_corners_surround_the_centre():
+    corners = selftest.survey_area_corners(43.0, -70.0, 0.01)
+    assert len(corners) == 4 and len(set(corners)) == 4
+    assert min(c[0] for c in corners) < 43.0 < max(c[0] for c in corners)
+    assert min(c[1] for c in corners) < -70.0 < max(c[1] for c in corners)
+
+
+def test_scorer_centre_is_the_mean_start_of_the_chosen_boats(tmp_path):
+    roster = tmp_path / 'roster.yaml'
+    roster.write_text(
+        'boats:\n'
+        '  - {name: a, color: {red: 1, green: 1, blue: 1}, start: {lat: 43.0, lon: -70.0, '
+        'heading: 0}}\n'
+        '  - {name: b, color: {red: 1, green: 1, blue: 1}, start: {lat: 45.0, lon: -72.0, '
+        'heading: 0}}\n'
+        '  - {name: c, color: {red: 1, green: 1, blue: 1}, start: {lat: 0.0, lon: 0.0, '
+        'heading: 0}}\n')
+    assert selftest.scorer_centre(str(roster), ['a', 'b']) == (44.0, -71.0)

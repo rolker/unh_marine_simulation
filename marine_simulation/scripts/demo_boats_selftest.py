@@ -64,6 +64,12 @@ A launch needs the geoid and VDatum grids under ``~/data/world/datum``: without
 them ``chart_datum`` never publishes and this test fails on the missing frames after
 the startup timeout (the launch itself refuses to start without them).
 
+With ``--demo`` the launch is ``demo_launch.py`` (CAMP and the window placement
+switched off, so it runs on a machine with no display) and one more check runs: the
+``coverage_assessment`` scorer reaches the ``active`` state, and, given a target area
+the self-test publishes itself (latched, like the target-area publisher does), answers
+with a ``CoverageAssessment`` for it.
+
 Exit status 0 when every check passes, 1 otherwise. The boats are reset to their
 start poses at the end.
 """
@@ -146,15 +152,34 @@ def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> li
     return problems
 
 
-def launch_command(boats, roster, joysticks, extra) -> list:
+def launch_command(boats, roster, joysticks, extra, demo=False) -> list:
     """Return the ``ros2 launch`` command line for ``--start-launch``."""
-    cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
+    cmd = ['ros2', 'launch', 'marine_simulation',
+           'demo_launch.py' if demo else 'demo_boats_launch.py',
            'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
+    if demo:
+        # No display here: CAMP and the window placement are the owner's rehearsal.
+        cmd += ['enable_camp:=false', 'enable_window_layout:=false']
     if boats:
         cmd.append('boats:=%s' % ','.join(boats))
     if roster:
         cmd.append('roster_file:=%s' % roster)
     return cmd + list(extra)
+
+
+def scorer_centre(roster_path, boats) -> tuple:
+    """Return the mean start position (latitude, longitude) of ``boats`` in the roster."""
+    with open(roster_path) as f:
+        entries = {e['name']: e['start'] for e in yaml.safe_load(f)['boats']}
+    lat = sum(entries[b]['lat'] for b in boats) / len(boats)
+    lon = sum(entries[b]['lon'] for b in boats) / len(boats)
+    return lat, lon
+
+
+def survey_area_corners(lat: float, lon: float, half_side_degrees: float = 0.004) -> list:
+    """Return the four (latitude, longitude) corners of a square around a point."""
+    h = half_side_degrees
+    return [(lat - h, lon - h), (lat - h, lon + h), (lat + h, lon + h), (lat + h, lon - h)]
 
 
 def metres(a, b) -> float:
@@ -373,6 +398,55 @@ class SelfTest:
                         'catalog entries %s, coverage_tiles messages %d'
                         % (self.catalog_entries[b], self.tile_count[b]))
 
+    def check_scorer(self, timeout, centre):
+        """
+        Check that the scorer is active and assesses a target area placed at ``centre``.
+
+        Publishes what the target-area publisher does: a ``SurveyArea`` on
+        ``/survey_area``, reliable and transient_local, so the check does not depend
+        on that node.
+        """
+        from builtin_interfaces.msg import Time
+        from geographic_msgs.msg import GeoPoint
+        from lifecycle_msgs.srv import GetState
+        from marine_interfaces.msg import CoverageAssessment, SurveyArea, SurveyStandard
+        from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+
+        latched = QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                             reliability=ReliabilityPolicy.RELIABLE)
+        client = self.node.create_client(GetState, '/coverage_assessment/get_state')
+        label = None
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and label != 'active':
+            self.spin(0.5)
+            if client.service_is_ready():
+                future = client.call_async(GetState.Request())
+                while not future.done() and time.monotonic() < deadline:
+                    self.spin(0.1)
+                if future.done() and future.result() is not None:
+                    label = future.result().current_state.label
+        self.record('the scorer reaches the active state', label == 'active',
+                    'state %s' % label)
+        if label != 'active':
+            return
+
+        assessed = []
+        self.node.create_subscription(
+            CoverageAssessment, '/coverage_assessment',
+            lambda m: assessed.append(m) if m.area.id == 'selftest' else None, latched)
+        area = SurveyArea(id='selftest', stamp=Time(sec=1, nanosec=0), priority=0,
+                          standard=SurveyStandard(name='selftest', a=0.5, b=0.013))
+        area.polygon.points = [GeoPoint(latitude=la, longitude=lo, altitude=0.0)
+                               for la, lo in survey_area_corners(*centre)]
+        publisher = self.node.create_publisher(SurveyArea, '/survey_area', latched)
+        publisher.publish(area)
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not assessed:
+            self.spin(0.5)
+        self.record('the scorer assesses the target area it is given', bool(assessed),
+                    'area_total %.0f m2' % assessed[-1].area_total if assessed
+                    else 'no CoverageAssessment for it')
+
     def reset(self):
         from std_msgs.msg import Bool
         for b in self.boats:
@@ -422,11 +496,14 @@ def _terminate(signum, frame):
 # a later copy on the command line would override them and make it check the
 # wrong node set.
 OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'boats:=', 'roster_file:=')
+# With --demo it also fixes which parts of the display run.
+OWN_DEMO_LAUNCH_ARGS = OWN_LAUNCH_ARGS + (
+    'enable_boats:=', 'enable_camp:=', 'enable_scorer:=', 'enable_window_layout:=')
 
 
-def overridden_launch_args(extra) -> list:
+def overridden_launch_args(extra, demo=False) -> list:
     """Return the extra launch arguments that would override the self-test's own."""
-    return [a for a in extra if a.startswith(OWN_LAUNCH_ARGS)]
+    return [a for a in extra if a.startswith(OWN_DEMO_LAUNCH_ARGS if demo else OWN_LAUNCH_ARGS)]
 
 
 def main(argv=None):
@@ -435,6 +512,9 @@ def main(argv=None):
     parser.add_argument('--boats', help='comma separated boat names (default: the roster)')
     parser.add_argument('--start-launch', action='store_true',
                         help='start demo_boats_launch.py (joysticks off) and stop it after')
+    parser.add_argument('--demo', action='store_true',
+                        help='start demo_launch.py instead (CAMP and window placement off) '
+                             'and check the coverage scorer too')
     parser.add_argument('--joysticks', action='store_true',
                         help='the launch runs joy_linux drivers: expect a joy_node per boat')
     parser.add_argument('--startup-timeout', type=float, default=90.0)
@@ -450,7 +530,10 @@ def main(argv=None):
     unknown = [b for b in boats if b not in colors]
     if unknown:
         parser.error('boat(s) not in the roster %s: %s' % (roster, ', '.join(unknown)))
-    clashes = overridden_launch_args(args.launch_args) if args.start_launch else []
+    if args.demo and not args.start_launch:
+        parser.error('--demo chooses the launch to start, so it needs --start-launch')
+    clashes = (overridden_launch_args(args.launch_args, args.demo)
+               if args.start_launch else [])
     if clashes:
         parser.error('%s would override what the self-test checks against; use '
                      '--boats, --roster or --joysticks instead' % ', '.join(clashes))
@@ -471,7 +554,7 @@ def main(argv=None):
             if args.start_launch:
                 proc = start_launch(launch_command(
                     boats if args.boats else None, args.roster, args.joysticks,
-                    args.launch_args))
+                    args.launch_args, args.demo))
                 test.launch = proc
             try:
                 test.wait_for_nodes(args.startup_timeout)
@@ -481,6 +564,8 @@ def main(argv=None):
                     test.check_solo(args.drive_seconds)
                     test.check_together(args.drive_seconds + 2.0)
                     test.check_coverage(30.0)
+                    if args.demo:
+                        test.check_scorer(40.0, scorer_centre(roster, boats))
                 test.reset()
             except LaunchExited as error:
                 test.record('the launch keeps running', False, str(error))

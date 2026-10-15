@@ -13,7 +13,7 @@
 | `mbes_sim` | Python | Multibeam echosounder simulator using bathymetry grids |
 | `marine_charts_to_gazebo_world` | Python | Generates Gazebo Harmonic SDF worlds from S57 ENC chart data |
 | `portsmouth_nh_gazebo` | Python | Pre-configured Gazebo world for Portsmouth NH harbor |
-| `marine_simulation` | CMake (config, launch, scripts) | Aggregation package with scenario launch files, configs, and the multi-boat demo (launch, roster, self-test, graph check); see `marine_simulation/README.md` |
+| `marine_simulation` | CMake (config, launch, scripts) | Aggregation package with scenario launch files, configs, and the multi-boat demo (launch, roster, self-test, graph check) plus the whole-display launch (`demo_launch.py`, window placement, helper wrapper); see `marine_simulation/README.md` |
 
 ## Repository Layout
 
@@ -44,9 +44,9 @@ unh_marine_simulation/
 │   ├── config/                        #   portsmouth.yaml, isles_of_shoals.yaml, ...
 │   └── launch/                        #   harbor_launch.py, isles_of_shoals_launch.py, ...
 └── marine_simulation/                 # Scenario launch files
-    ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml, demo_target_polygon_camp.json
-    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, publish_survey_area.py
+    ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, demo_launch.py (whole display), ...
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout.yaml, demo_camp_profile.conf, demo_camp_view.yaml, demo_target_polygon_camp.json
+    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, place_windows.py, run_demo.sh, publish_survey_area.py
     ├── test/                          #   pytest: demo launch fail-fast checks, graph check, survey-area publisher
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes
 ```
@@ -85,6 +85,7 @@ Data flow: `cmd_vel` → helm → `throttle`/`rudder` → `asv_sim` → position
 5. `marine_simulation/launch/sim_robot_launch.py` — Robot simulation launch file (dynamics, helm, sensors)
 6. `mbes_sim/mbes_sim/mbes_sim.py` — Sonar simulator showing lifecycle node pattern
 7. `marine_simulation/launch/demo_boats_launch.py` — Several boats at once: per-boat namespace groups built from `config/demo_roster.yaml`, one shared `asv_sim`
+8. `marine_simulation/launch/demo_launch.py` — The whole demo display in one launch: includes the boats launch and the scorer's own launch, starts CAMP on a settings file generated on every start, and runs `scripts/place_windows.py`
 
 ## Build & Test
 
@@ -113,6 +114,7 @@ Known build issues:
 | `mbes_sim` | `marine_acoustic_msgs` | underlay | `marine_acoustic_msgs/msg/SonarDetections` |
 | `mbes_sim` | `marine_autonomy` | core | `marine_autonomy.nav`, `marine_autonomy.geodesic` |
 | `marine_simulation` | `cube_bathymetry` | sensors | Runtime (rviz plugin) |
+| `marine_simulation` (whole display) | `camp`, `coverage_assessment`, `geographic_msgs`, `wmctrl` (apt) | ui / sensors / system | Runtime: CAMP executable, scorer launch and example config, window placement with `wmctrl` |
 | `marine_simulation` (demo boats) | `ben_description`, `helm_manager`, `joy_to_helm`, `marine_autonomy`, `mru_transform`, `cube_bathymetry` | platforms / core / sensors | Runtime: URDF xacro, per-node launch files, `joy_linux` driver from apt (`ros-jazzy-joy-linux`) |
 
 ## Common Pitfalls
@@ -131,6 +133,13 @@ Known build issues:
 - **A four-boat stack (about 50 processes) is not fully discoverable with `ROS_LOCALHOST_ONLY=1`.** Observed: a second process saw only part of the graph. Use default discovery on a private `ROS_DOMAIN_ID` for the self-test.
 - **Empty string parameters cannot be `-p` overrides** (`Failed to parse global arguments`); put them in a parameter file (the demo's `draft_dir` / `prior_store_dir` for `cube_bathymetry`).
 - **`marine_simulation` lint was already failing** (copyright, flake8 I100, pep257 D213 in `bizzyboat_massabesic_launch.py`, `gazebo_*_launch.py`, `simulator_launch.py`); new files there follow the D213 style (summary on the second line).
+- **CAMP's state in the demo is a generated settings file, not the operator's.** `demo_launch.py` starts CAMP with `XDG_CONFIG_HOME=~/.local/state/marine_simulation_demo/xdg_config` and rewrites `UNH-CCOMJHC/CCOMAutonomousMissionPlanner.conf` there on every start from `config/demo_camp_profile.conf` plus a generated view and one live coverage layer per roster boat. A CAMP setting that is not in that file is not restored (no chart lists, no window geometry). The map centre is a Qt `QPointF` in Web Mercator metres; `qt_point_variant` writes Qt's own INI encoding of it and is pinned against Qt-written samples. Its directory is deleted on every start, so `reset_settings_root` refuses anything but that exact path (no symlink, marker file present).
+- **`camp_launch.py` takes no arguments.** The demo launch therefore starts the `CCOMAutonomousMissionPlanner` executable directly (rolker/camp#240 asks for launch arguments); keep the two in step until that lands.
+- **Window placement needs X11 and `wmctrl`, and cannot be tested here.** `place_windows.py` is tested with a fake `wmctrl`; the real WM_CLASS of CAMP and the `wmctrl -e` behaviour on the owner's window manager are checked at the rehearsal. The launch refuses to start on Wayland or without `wmctrl`.
+- **Arguments typed on the command line reach included launch files even when the outer launch does not declare them** (checked with `ros2 launch`): `demo_launch.py tide_speed_factor:=1` works without redeclaring it.
+- **Scorer parameters are generated from the roster**, from the example `coverage_assessment.yaml` installed by the cube repo, into `~/.local/state/marine_simulation_demo/run/`. Do not copy the example into this repo: its boat names would become a second roster.
+- **Closing the CAMP window stops the whole demo launch** (`OnProcessExit` -> `Shutdown` bound to the CAMP node when `enable_camp` is true). A second demo, or a CAMP already running, is refused at launch (flock on `~/.local/state/marine_simulation_demo/lock`; process scan); CAMP's live tile cache is redirected into the same state directory and emptied each start, because it lives outside the QSettings file.
+- **`wmctrl -b` reads at most two properties after `add`/`remove`/`toggle`.** A four-property clear silently left `maximized_horz` set; the fake `wmctrl` in `test_place_windows.py` now rejects such a call.
 - **The packaged chart grid `US5NH02M.tiff` has no nodata tag and no NaN.** Land and drying cells are negative "depths" (minimum -10), and `mbes_sim` does not ping where `chart_depth < 0`. `build_demo_bathy` keeps that convention: its -9999 nodata appears only outside the chart extent, and `BathyGrid.getDepth` returns `None` there.
 - **CCOM GIS 2 m and 16 m image services mark nodata as 3.4e38 by VALUE** (the exported GeoTIFF carries no nodata tag); the 4 m service uses -99999. `demo_bathy` masks anything beyond +-1e4 m. ArcGIS also answers some errors with HTTP 200 and a JSON body, so the fetch checks for a TIFF header and retries.
 - **The demo truth grid is generated, not committed** (`ros2 run mbes_sim build_demo_bathy`, see `marine_simulation/README.md`); `demo_boats_launch.py` falls back to the chart grid with a printed message when it is absent.
