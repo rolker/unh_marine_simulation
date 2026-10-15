@@ -55,3 +55,21 @@ issue: 102
 - [x] (suggestion) B4 lock does not outlive the manager - README sentence
 - [ ] (suggestion, not done) A4 shell gates layout/CAMP on --profile only, so a custom --config with another default profile is mis-gated; documented here, the manager's own preflight remains authoritative
 - [ ] (note) profile_actual reads `custom` after the layout group finished; cosmetic
+
+## Review Fixes (Round 2)
+**Status**: complete
+**When**: 2026-10-15 14:59 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed)
+
+### Done
+- [x] Owner request: extra `name:=value` boats-launch arguments through `run_demo.sh` / `demo_manager.py`, validated against the arguments `demo_boats_launch.py` declares (read at run time), manager-owned names refused.
+- [x] Scorer-parameter location corrected in `.agents/README.md` (a `demo_manager_*` temp dir, removed on exit).
+- [x] Empty option values (`--roster`, `--joysticks`, `--layout`, `--target`, `--config`, `--profile`) rejected by the manager itself.
+- [x] Target file content checked in preflight (`publish_survey_area.py --check`); a malformed file is refused before anything starts.
+- [x] `DEMO_ROS_DOMAIN_ID=0000` means domain 0.
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation mbes_sim`: 890 tests, 0 errors, 8 failures (baseline lint), 1 skipped (host-only live test).
+- Live headless test, ROS_DOMAIN_ID=174: 1 passed in 75 s; no processes left.
