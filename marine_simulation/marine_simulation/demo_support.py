@@ -371,6 +371,16 @@ def refuse_running_camp(proc_root: str = '/proc') -> None:
 
 # --- scorer -----------------------------------------------------------------------
 
+# The demo scores coverage on a 2 m lattice, not the example's 1 m. The scorer refuses a target
+# area whose bounding box has more than ``max_raster_cells`` lattice cells (1,000,000 in the
+# example), and the demo's polygon (1.77 km2, a box of about 1408 x 1774 m) is 2.5 million cells
+# at 1 m ("Rejecting SurveyArea ... polygon spans 2.49846e+06 lattice cells") and about 625,000
+# at 2 m. CUBE itself keeps mapping at its own cell size (the boats launch's ``cell_size``);
+# this only sets how finely the scorer rasterises the target. A test pins that the shipped
+# polygon fits.
+DEMO_SCORER_CELL_SIZE = 2.0
+
+
 def scorer_parameters(template: dict, boats: Sequence) -> dict:
     """
     Return the scorer's parameter file content for ``boats``.
@@ -394,6 +404,7 @@ def scorer_parameters(template: dict, boats: Sequence) -> dict:
     p['map_frame'] = first.frame('map')
     p['water_surface_frame'] = first.frame('map_tide')
     p['water_surface_boat_frame'] = first.frame('base_link')
+    p['cell_size'] = DEMO_SCORER_CELL_SIZE
     return out
 
 

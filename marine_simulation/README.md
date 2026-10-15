@@ -209,6 +209,16 @@ runs `publish_survey_area.py` on it, which sends it to the scorer on the latched
 target; a file the publisher refuses makes `target_area` `FAILED` and the scorer waits,
 `BLOCKED`, naming it.
 
+**The demo scores on a 2 m lattice.** The scorer refuses a target area whose bounding box has
+more than `max_raster_cells` (1,000,000) lattice cells. The shipped polygon (1.77 km², a box of
+about 1408 x 1774 m) is 2.5 million cells at the example's 1 m and about 625,000 at 2 m, so the
+generated scorer parameters set `cell_size: 2.0` (`demo_support.DEMO_SCORER_CELL_SIZE`). CUBE
+itself keeps mapping at the boats launch's `cell_size` (1 m); this only sets how finely the
+scorer rasterises the target. A test fails if the shipped polygon no longer fits, so a larger
+polygon (or a smaller scoring cell) is caught in CI and not at the event. For your own
+target, check the box: (north-south metres / cell) x (east-west metres / cell) must stay
+under 1,000,000.
+
 ### Checks
 
 ```bash

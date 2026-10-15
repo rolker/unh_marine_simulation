@@ -524,3 +524,52 @@ def test_launch_arguments_are_parsed_to_a_dict():
 def test_bad_launch_arguments_are_refused_with_the_reason(item, message):
     with pytest.raises(ValueError, match=message):
         demo.parse_launch_arguments([item], DECLARED, OWNED)
+
+
+def test_the_demo_scores_on_a_two_metre_lattice_whatever_the_example_says():
+    assert demo.DEMO_SCORER_CELL_SIZE == 2.0
+    out = demo.scorer_parameters(TEMPLATE, [_boat('one')])        # the template says 1.0
+    assert out['/**/coverage_assessment']['ros__parameters']['cell_size'] == 2.0
+    assert TEMPLATE['/**/coverage_assessment']['ros__parameters']['cell_size'] == 1.0
+
+
+def _lattice_cells(points, cell_size):
+    """Return the scorer's bounding-box lattice cell count for (lat, lon) ``points``."""
+    import math
+    lats = [lat for lat, _ in points]
+    lons = [lon for _, lon in points]
+    north = (max(lats) - min(lats)) * 111320.0
+    east = (max(lons) - min(lons)) * 111320.0 * math.cos(math.radians(sum(lats) / len(lats)))
+    return (north / cell_size) * (east / cell_size)
+
+
+def _shipped_polygon():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        'publish_survey_area_for_test', str(PACKAGE / 'scripts' / 'publish_survey_area.py'))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module.load_survey_areas(str(CONFIG / 'demo_target_polygon_camp.json'))
+
+
+@needs_scorer
+def test_the_shipped_target_polygon_fits_the_scorers_raster_limit(tmp_path, roster):
+    """The scorer rejects an area over max_raster_cells: found at the first real CAMP run."""
+    template = os.path.join(get_package_share_directory('coverage_assessment'),
+                            'config', 'coverage_assessment.yaml')
+    params = yaml.safe_load(open(demo.write_scorer_parameters(
+        template, roster, str(tmp_path))))['/**/coverage_assessment']['ros__parameters']
+    areas = _shipped_polygon()
+    assert areas, 'the shipped target has no survey area'
+    for label, points in areas:
+        cells = _lattice_cells(points, params['cell_size'])
+        assert cells < params['max_raster_cells'], (
+            '%s spans about %.0f lattice cells at %s m; the scorer refuses over %s'
+            % (label, cells, params['cell_size'], params['max_raster_cells']))
+
+
+def test_the_limit_check_would_have_caught_the_one_metre_failure():
+    (label, points), = _shipped_polygon()
+    # what the scorer logged at 1 m: 2.49846e+06 cells (the estimate is within 0.1 %)
+    assert abs(_lattice_cells(points, 1.0) - 2.49846e6) < 2.5e3
+    assert _lattice_cells(points, 1.0) > 1000000 > _lattice_cells(points, 2.0)
