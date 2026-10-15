@@ -211,3 +211,28 @@ Dismissed after checking: Gemini's claim that stopping one group shuts the share
 ### Verification
 - `./simulation_ws/test.sh launch_manager_proto marine_simulation`: 364 tests, 0 errors, 8 failures, 2 skipped. The 8 are the pre-existing marine_simulation lint in files this work does not touch; every launch_manager_proto test passes.
 - Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 72.17s. Plain launch with the guard on 176: `demo_boats_selftest.py --start-launch --boats bluefin,clownfish` exit 0, 12 PASS. No process of this worktree was left running afterwards.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-15 13:50 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-97, merged up with `origin/jazzy` (merge commit `466618c`), then two fixes found afterwards
+**Commits**: `466618c` (merge-up), `507e1a4` (scorer map frame), `02881c5` (test fix after the merge), `7e668e2` (CAMP on the demo's own settings)
+
+### Merge-up
+- Brought in #95 (polygon publisher), #99 (truth bathymetry) and #100 (one-launch demo). Conflicts in `.agents/README.md`, `marine_simulation/CMakeLists.txt`, `marine_simulation/README.md`, `launch/demo_boats_launch.py` and `test/test_demo_boats_launch.py`; every one resolved by keeping both sides (registrations, documentation, the guard constants next to the demo grid constants, the guard tests next to the grid tests). The README table rows and layout lines were merged into one each.
+- After the merge the two lifecycle-guard tests failed because the merged launch validates the mbes grid with GDAL and the tests pass a placeholder file; they now stub `check_mbes_grid` like the datum check (`02881c5`).
+
+### Live check of closing CAMP (2026-10-15, about 13:20 to 13:31 local, host run)
+- `ros2 run marine_simulation demo_manager.py --no-joysticks` on `ROS_DOMAIN_ID=171` with the full demo profile (boats, camp, scorer). All groups came up. The owner closed the CAMP window; the manager logged "group camp exited cleanly; treating it as closed", stopped the boats and the scorer as followers, 50 processes finished cleanly with no SIGTERM/SIGKILL escalation, the manager exited 0 with "every group is stopped", and no process was left running. The one non-clean exit was `asv_sim` (exit code -2, its own KeyboardInterrupt on SIGINT; pre-existing, not this branch's).
+- Two defects found in that run, fixed below: the scorer never assessed, and CAMP showed coverage from an earlier session.
+
+### Fixes
+- [x] `507e1a4` Scorer never assessed ("Not assessing: waiting for 'map' <- 'earth'"): the manager's scorer parameters left `map_frame` at `map` while the boats publish `earth -> <boat>/map`. `demo_manager.scorer_parameters` now calls `demo_launch.scorer_parameters` on the scorer package's example file (map frame and tide frames of the first selected boat), so the two paths cannot drift. Tests: the map frame is the first boat's, and follows a boat selection.
+- [x] `7e668e2` Stale coverage in CAMP: the manager's `camp` group ran CAMP's plain `camp_launch.py` (operator's QSettings, shared live tile cache). New `launch/demo_camp_launch.py` starts CAMP through `demo_launch.camp_actions()` (factored out of `demo_launch.launch_setup`: seeds the private `XDG_CONFIG_HOME`, empties the demo tile cache, starts the CAMP node), without the shutdown-on-exit handler since the manager owns that. Tests: private settings directory and profile, cache emptied, second start in the same process.
+- Not ported to the manager (still only in `demo_launch.py`): window placement, the target-area publisher. Not done here.
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation mbes_sim`: Summary: 713 tests, 0 errors, 8 failures, 13 skipped. The 8 failures are the pre-existing marine_simulation lint in files this work does not touch (copyright in bizzyboat_massabesic_launch.py, flake8 I100 in simulator_launch.py, pep257 D213 in three launch files).
+- Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 69.55s after the last commit; no process of this worktree left afterwards.
