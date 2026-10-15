@@ -480,3 +480,23 @@ def test_camp_actions_refuse_a_missing_profile(tmp_path, roster):
     with pytest.raises(ValueError, match='camp_profile'):
         demo.camp_actions(roster, str(tmp_path / 'nope.conf'),
                           str(CONFIG / 'demo_camp_view.yaml'))
+
+
+def test_the_target_area_node_is_the_publisher_script():
+    node = demo.target_area_node('/some/target.json')
+    assert node.node_package == 'marine_simulation'
+    assert node.node_executable == demo.TARGET_AREA_EXECUTABLE == 'publish_survey_area.py'
+    assert _perform(node._Node__node_name) == demo.TARGET_AREA_NODE_NAME
+    assert not demo.target_area_node('')._Node__parameters
+
+
+def test_the_target_area_script_is_installed_with_the_package():
+    from ament_index_python.packages import get_package_prefix
+    assert os.path.isfile(os.path.join(get_package_prefix('marine_simulation'), 'lib',
+                                       'marine_simulation', demo.TARGET_AREA_EXECUTABLE))
+
+
+def test_placement_actions_run_the_process_and_watch_its_exit():
+    from launch.actions import ExecuteProcess, RegisterEventHandler
+    process, handler = demo.placement_actions('/my/layout.yaml')
+    assert isinstance(process, ExecuteProcess) and isinstance(handler, RegisterEventHandler)

@@ -29,13 +29,19 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 """
-Start the demo under the launch manager.
+Start the whole demo under the launch manager: the one command.
 
-``ros2 run marine_simulation demo_manager.py`` runs the ``demo`` profile (the boats, CAMP and
-the scorer); ``--profile headless`` leaves CAMP out. The manager converges every boat's
-lifecycle nodes to active, so a lost ``change_state`` reply (issue #96) no longer leaves a
-boat dead, and closing CAMP stops everything. ``ros2 run launch_manager_proto
-launch_manager_proto status`` shows what it is doing.
+``ros2 run marine_simulation demo_manager.py`` runs the ``demo`` profile: the boats, CAMP on the
+demo's own settings, the target-area publisher, the coverage scorer and, once CAMP is up, the
+window placement. ``--profile headless`` leaves CAMP and the placement out. The manager converges
+every boat's lifecycle nodes to active, so a lost ``change_state`` reply (issue #96) no longer
+leaves a boat dead, and closing CAMP stops everything and ends this process.
+``ros2 run launch_manager_proto launch_manager_proto status`` shows what it is doing.
+``scripts/run_demo.sh`` is the helper's command; it finds this machine's files and calls this.
+
+Everything that would make the display wrong is refused before anything starts, with the
+reason, as ``THE DEMO DID NOT START: ...`` and exit status 2: another demo running, a CAMP
+already open, a missing or unusable file, a session the windows cannot be placed in.
 
 The boat names come from the roster only: the manager configuration
 (``config/demo_manager.yaml``) is written with placeholders that this script fills in.
@@ -45,6 +51,7 @@ import argparse
 import os
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from typing import Dict, List, Sequence
@@ -85,7 +92,8 @@ def scorer_parameters(boats: Sequence, template: dict = None) -> dict:
 
 
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
-                  scorer_params: str, roster_file: str) -> Dict[str, str]:
+                  scorer_params: str, roster_file: str, joystick_config: str,
+                  layout_config: str, target_file: str) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
         'boats': boats_argument,
@@ -94,7 +102,52 @@ def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: b
         'enable_joysticks': 'true' if enable_joysticks else 'false',
         'scorer_params': scorer_params,
         'roster_file': roster_file,
+        'joystick_config': joystick_config,
+        'layout_config': layout_config,
+        'target_file': target_file,
     }
+
+
+def check_layout_tool(layout: str, tool: str = None) -> None:
+    """
+    Raise ``ValueError`` with the reason unless the windows can be placed on this session.
+
+    Runs ``place_windows.py --check`` (X11, ``wmctrl``, a layout that parses, the monitors it
+    names connected), the same check ``run_demo.sh`` makes, from beside this script.
+    """
+    tool = tool or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'place_windows.py')
+    try:
+        result = subprocess.run([tool, '--check', '--layout', layout], capture_output=True,
+                                text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError('cannot run the window placement check %s: %s' % (tool, error)) \
+            from None
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip() or 'exit status %d' % result.returncode
+        raise ValueError('the windows cannot be laid out: %s'
+                         % reason.replace('place_windows: ', '', 1))
+
+
+def preflight(members: Sequence[str], enable_joysticks: bool, joystick_config: str,
+              layout_config: str, target_file: str, check_layout=None, camp_pids=None) -> None:
+    """
+    Refuse, with the reason, what would make the groups of ``members`` start wrong.
+
+    Raises ``ValueError``. Run before any group starts, so a missing file, a running CAMP or
+    a session without X11 stops the demo plainly instead of leaving a half-started display.
+    """
+    if 'boats' in members and enable_joysticks:
+        demo_support.require_file(joystick_config, 'joystick file')
+    if 'camp' in members or 'target_area' in members:
+        demo_support.require_file(target_file, 'target area file')
+    if 'camp' in members:
+        pids = (camp_pids or demo_support.running_camp_pids)()
+        if pids:
+            raise ValueError('CAMP is already running (process %s); close it first so the demo '
+                             'places its own CAMP window' % ', '.join(map(str, pids)))
+    if 'layout' in members:
+        demo_support.require_file(layout_config, 'layout file')
+        (check_layout or check_layout_tool)(layout_config)
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -107,6 +160,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--config', help='manager configuration (default: the installed one)')
     parser.add_argument('--no-joysticks', action='store_true',
                         help='do not start the joy_linux drivers (pads not plugged in)')
+    parser.add_argument('--joysticks', metavar='FILE',
+                        help="this computer's gamepad bindings (default: the installed example)")
+    layout = parser.add_mutually_exclusive_group()
+    layout.add_argument('--layout', metavar='FILE',
+                        help="this computer's window layout (default: the installed example)")
+    layout.add_argument('--no-layout', action='store_true',
+                        help='do not move the windows')
+    parser.add_argument('--target', metavar='FILE',
+                        help='saved CAMP file holding the target survey area (default: the '
+                             'installed demo polygon); CAMP opens it and the scorer uses it')
     return parser
 
 
@@ -123,6 +186,12 @@ def main(argv: List[str] = None) -> int:
         print('roster problem: %s' % error, file=sys.stderr)
         return 2
     names = [b.name for b in boats]
+    joysticks = os.path.abspath(os.path.expanduser(
+        args.joysticks or os.path.join(share, 'config', 'demo_joysticks.yaml')))
+    layout = os.path.abspath(os.path.expanduser(
+        args.layout or os.path.join(share, 'config', 'demo_layout.yaml')))
+    target = os.path.abspath(os.path.expanduser(
+        args.target or os.path.join(share, 'config', 'demo_target_polygon_camp.json')))
     try:
         demo_support.acquire_demo_lock(demo_support.state_dir())
     except ValueError as error:
@@ -143,7 +212,7 @@ def main(argv: List[str] = None) -> int:
             spec = load_config(
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
-                              roster_file))
+                              roster_file, joysticks, layout, target))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2
@@ -153,6 +222,15 @@ def main(argv: List[str] = None) -> int:
                       % (args.profile, ', '.join(sorted(spec.profiles))), file=sys.stderr)
                 return 2
             spec.default_profile = args.profile
+        if args.no_layout:
+            for name, members in spec.profiles.items():
+                spec.profiles[name] = [g for g in members if g != 'layout']
+        try:
+            preflight(spec.profiles[spec.default_profile], not args.no_joysticks, joysticks,
+                      layout, target)
+        except ValueError as error:
+            print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
+            return 2
         return run_manager(spec)
     finally:
         shutil.rmtree(state_dir, ignore_errors=True)

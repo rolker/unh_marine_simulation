@@ -51,6 +51,8 @@ from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
 from launch.actions import ExecuteProcess
 from launch.actions import LogInfo
+from launch.actions import RegisterEventHandler
+from launch.event_handlers import OnProcessExit
 from launch_ros.actions import Node
 import yaml
 
@@ -436,6 +438,21 @@ def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
     return [LogInfo(msg='CAMP settings: %s' % root), camp]
 
 
+def target_area_node(target_file: str = '') -> Node:
+    """
+    Return the node that publishes the target survey area to the scorer.
+
+    ``target_file`` is a saved CAMP project; empty leaves the publisher on its own default,
+    the installed ``config/demo_target_polygon_camp.json``. The publisher is the scorer's
+    source of truth for what is to be surveyed, in the root namespace so the topic is
+    ``/survey_area``.
+    """
+    parameters = [{'file': target_file}] if target_file else []
+    return Node(package='marine_simulation', executable=TARGET_AREA_EXECUTABLE,
+                name=TARGET_AREA_NODE_NAME, emulate_tty=True, output='screen',
+                parameters=parameters)
+
+
 def placement_process(layout_config: str) -> ExecuteProcess:
     """Return the process that moves the windows (``scripts/place_windows.py``)."""
     script = os.path.join(get_package_prefix('marine_simulation'), 'lib',
@@ -451,6 +468,13 @@ def placement_exit(event, context):
     return [LogInfo(msg='*** THE WINDOWS ARE NOT IN PLACE (place_windows exited with %s; see '
                         'above). Close the map window and start the demo again. ***'
                         % event.returncode)]
+
+
+def placement_actions(layout_config: str) -> list:
+    """Return the actions that run the window placement once and announce a failure of it."""
+    placement = placement_process(layout_config)
+    return [placement, RegisterEventHandler(
+        OnProcessExit(target_action=placement, on_exit=placement_exit))]
 
 
 def require_file(path: str, what: str) -> None:
