@@ -50,7 +50,7 @@ import sys
 import tempfile
 from typing import Dict, List, Sequence
 
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 import yaml
 
 # Lifecycle nodes each boat runs (counted from a live run of demo_boats_launch.py). The
@@ -103,6 +103,23 @@ def scorer_parameters(boats: Sequence, share: str = None, template: dict = None)
     return demo_launch.scorer_parameters(template, boats)
 
 
+_HELD = []    # keeps the module that owns the demo lock alive for the process lifetime
+
+
+def take_demo_lock(share: str):
+    """
+    Take the one-demo-at-a-time lock for the life of this process; return its module.
+
+    Taken at manager start, before any group runs, so a second manager or ``demo_launch.py``
+    is refused at once instead of after its boats are up. Raises ``ValueError`` when another
+    process holds it.
+    """
+    demo_launch = _load_demo_launch(share)
+    demo_launch.acquire_demo_lock(demo_launch.state_dir())
+    _HELD.append(demo_launch)
+    return demo_launch
+
+
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
                   scorer_params: str, roster_file: str) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
@@ -143,11 +160,22 @@ def main(argv: List[str] = None) -> int:
         print('roster problem: %s' % error, file=sys.stderr)
         return 2
     names = [b.name for b in boats]
+    try:
+        take_demo_lock(share)
+    except ValueError as error:
+        print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
+        return 2
     state_dir = tempfile.mkdtemp(prefix='demo_manager_')
     try:
         scorer_path = os.path.join(state_dir, 'scorer_params.yaml')
-        with open(scorer_path, 'w') as f:
-            yaml.safe_dump(scorer_parameters(boats, share), f)
+        try:
+            parameters = scorer_parameters(boats, share)
+            with open(scorer_path, 'w') as f:
+                yaml.safe_dump(parameters, f)
+        except (ValueError, OSError, yaml.YAMLError, PackageNotFoundError, ImportError) as error:
+            print('THE DEMO DID NOT START: cannot build the scorer parameters: %s: %s'
+                  % (type(error).__name__, error), file=sys.stderr)
+            return 2
         try:
             spec = load_config(
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),

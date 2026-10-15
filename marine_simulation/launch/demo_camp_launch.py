@@ -36,6 +36,10 @@ session shows). Everything is done by ``demo_launch.camp_actions``, the same cod
 one-launch demo uses, so the two cannot drift. Unlike ``demo_launch.py`` nothing here shuts
 the launch down when CAMP closes: the manager treats that exit as the operator closing the
 demo.
+
+The one-demo-at-a-time lock is NOT taken here: this file is loaded afresh by path on every
+group start, so a lock kept in its module would be lost or refused on a restart. The
+manager (``demo_manager.py``) takes it once for the process lifetime, before any group starts.
 """
 
 import importlib.util
@@ -63,7 +67,7 @@ demo_launch = _load_demo_launch()
 
 
 def launch_setup(context, *args, **kwargs):
-    """Select the boats, take the demo lock and return the CAMP start actions."""
+    """Select the boats and return the CAMP start actions (the demo lock is the manager's)."""
     def arg(name: str) -> str:
         return LaunchConfiguration(name).perform(context)
 
@@ -74,10 +78,6 @@ def launch_setup(context, *args, **kwargs):
     if target_file:
         target_file = os.path.abspath(os.path.expanduser(target_file))
         demo_launch.require_file(target_file, 'target_area_file')
-    state = demo_launch.state_dir()
-    if os.path.join(state, 'lock') not in demo_launch._LOCKS:
-        # A manager starts this group again in the same process; it keeps the lock between.
-        demo_launch.acquire_demo_lock(state)
     demo_launch.refuse_running_camp()
     return demo_launch.camp_actions(boats, arg('camp_profile'), arg('camp_view_config'),
                                     target_file)

@@ -271,22 +271,101 @@ def test_manager_camp_start_empties_the_tile_cache(monkeypatch, tmp_path):
     assert (cache / demo.ROOT_MARKER).is_file()
 
 
-def test_manager_camp_can_start_again_in_the_same_process(monkeypatch, tmp_path):
-    module = _camp_launch_module()
-    demo = module.demo_launch
+@pytest.fixture
+def held_locks():
+    """Release the demo locks the manager code took in this process."""
+    yield
+    for module in demo_manager._HELD:
+        module.release_demo_locks()
+    demo_manager._HELD.clear()
+
+
+def _lock_path(tmp_path):
+    return pathlib.Path(tmp_path, '.local', 'state', 'marine_simulation_demo', 'lock')
+
+
+def _other_process_holding(path):
+    """Start a process that holds the flock on ``path`` until its stdin closes."""
+    import subprocess
+    import sys
+    code = ('import fcntl, os, sys\n'
+            'os.makedirs(os.path.dirname(sys.argv[1]), exist_ok=True)\n'
+            'h = open(sys.argv[1], "w"); fcntl.flock(h, fcntl.LOCK_EX | fcntl.LOCK_NB)\n'
+            'print("held", flush=True); sys.stdin.read()\n')
+    proc = subprocess.Popen([sys.executable, '-c', code, str(path)], stdin=subprocess.PIPE,
+                            stdout=subprocess.PIPE, text=True)
+    assert proc.stdout.readline().strip() == 'held'
+    return proc
+
+
+def _release(proc):
+    proc.stdin.close()
+    proc.wait(timeout=10)
+
+
+def test_manager_camp_restarts_keep_the_manager_lock(monkeypatch, tmp_path, held_locks):
+    """The manager holds the lock; each group start loads demo_camp_launch.py afresh by path."""
+    import fcntl
     from launch import LaunchContext
     monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
-    monkeypatch.setattr(demo, 'camp_node', lambda *a, **k: 'camp-node')
-    context = LaunchContext()
-    context.launch_configurations.update({
-        'boats': '', 'roster_file': str(ROSTER),
-        'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
-        'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
-        'target_area_file': ''})
-    demo.release_demo_locks()
+    demo_manager.take_demo_lock(str(PACKAGE))
+    first = _camp_launch_module()
+    second = _camp_launch_module()    # exactly what AnyLaunchDescriptionSource does per start
+    assert first is not second
+    for module in (first, second):
+        monkeypatch.setattr(module.demo_launch, 'running_camp_pids', lambda *a, **k: [])
+        monkeypatch.setattr(module.demo_launch, 'camp_node', lambda *a, **k: 'camp-node')
+        context = LaunchContext()
+        context.launch_configurations.update({
+            'boats': '', 'roster_file': str(ROSTER),
+            'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
+            'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
+            'target_area_file': ''})
+        assert module.launch_setup(context)[-1] == 'camp-node'
+    del first, second
+    import gc
+    gc.collect()
+    with open(_lock_path(tmp_path), 'w') as other:    # still held: a third party is refused
+        with pytest.raises(BlockingIOError):
+            fcntl.flock(other, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+def test_the_camp_launch_does_not_take_the_lock():
+    module = _camp_launch_module()
+    assert 'demo_launch.acquire_demo_lock(' not in pathlib.Path(module.__file__).read_text()
+
+
+def test_a_lock_held_by_another_process_refuses_the_manager(monkeypatch, tmp_path, held_locks):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    proc = _other_process_holding(_lock_path(tmp_path))
     try:
-        module.launch_setup(context)
-        module.launch_setup(context)    # the demo lock is held by this process already
+        with pytest.raises(ValueError, match='already running'):
+            demo_manager.take_demo_lock(str(PACKAGE))
     finally:
-        demo.release_demo_locks()
+        _release(proc)
+
+
+def test_main_refuses_at_startup_with_a_plain_message(monkeypatch, tmp_path, held_locks, capsys):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    proc = _other_process_holding(_lock_path(tmp_path))
+    try:
+        assert demo_manager.main(['--no-joysticks']) == 2
+    finally:
+        _release(proc)
+    err = capsys.readouterr().err
+    assert err.startswith('THE DEMO DID NOT START:') and 'Traceback' not in err
+
+
+@pytest.mark.parametrize('error', [
+    ValueError('bad'), OSError('disk'), yaml.YAMLError('yaml'),
+    PackageNotFoundError('coverage_assessment'), ImportError('demo_launch')])
+def test_main_reports_scorer_parameter_failures_without_a_traceback(
+        monkeypatch, tmp_path, held_locks, capsys, error):
+    monkeypatch.setenv('HOME', str(tmp_path))
+
+    def fail(*args, **kwargs):
+        raise error
+    monkeypatch.setattr(demo_manager, 'scorer_parameters', fail)
+    assert demo_manager.main(['--no-joysticks']) == 2
+    err = capsys.readouterr().err
+    assert 'THE DEMO DID NOT START' in err and 'scorer parameters' in err
