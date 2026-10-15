@@ -34,7 +34,10 @@ unh_marine_simulation/
 │   └── urdf/                          #   WAM-V URDF model
 ├── mbes_sim/                          # Multibeam sonar simulator
 │   ├── mbes_sim/mbes_sim.py
-│   └── data/US5NH02M.tiff            #   Bathymetry grid (69 MB)
+│   ├── mbes_sim/bathy_grid.py        #   Nearest-cell GDAL lookup (None off the grid / on nodata)
+│   ├── mbes_sim/demo_bathy.py        #   `build_demo_bathy`: CCOM 2 m/4 m compilation -> demo truth grid
+│   ├── test/                         #   pytest: bathy_grid, demo_bathy (fake image service)
+│   └── data/US5NH02M.tiff            #   Chart bathymetry grid (69 MB)
 ├── marine_charts_to_gazebo_world/     # Chart-to-Gazebo converter
 │   └── marine_charts_to_gazebo_world/ #   generate_world, s57_reader, terrain, heightmap, ...
 ├── portsmouth_nh_gazebo/              # Portsmouth NH Gazebo world
@@ -42,9 +45,9 @@ unh_marine_simulation/
 │   └── launch/                        #   harbor_launch.py, isles_of_shoals_launch.py, ...
 └── marine_simulation/                 # Scenario launch files
     ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, demo_launch.py (whole display), ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout.yaml, demo_camp_profile.conf, demo_camp_view.yaml
-    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, place_windows.py, run_demo.sh
-    ├── test/                          #   pytest: demo launch fail-fast checks, graph check
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout.yaml, demo_camp_profile.conf, demo_camp_view.yaml, demo_target_polygon_camp.json
+    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, place_windows.py, run_demo.sh, publish_survey_area.py
+    ├── test/                          #   pytest: demo launch fail-fast checks, graph check, survey-area publisher
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes
 ```
 
@@ -95,7 +98,7 @@ source ../../../.agent/scripts/setup.bash && colcon test --packages-select asv_s
 ```
 
 Known build issues:
-- `mbes_sim` includes a 69 MB bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
+- `mbes_sim` includes a 69 MB chart bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
 - `marine_charts_to_gazebo_world` requires GDAL (`python3-gdal`) and may fail to build if GDAL headers are missing
 - `portsmouth_nh_gazebo` downloads ETOPO data on first launch and caches it in `~/.cache/marine_charts_to_gazebo_world/`
 - `vrx_project11` depends on `marine_interfaces` and `marine_autonomy` from the core layer
@@ -137,3 +140,7 @@ Known build issues:
 - **Scorer parameters are generated from the roster**, from the example `coverage_assessment.yaml` installed by the cube repo, into `~/.local/state/marine_simulation_demo/run/`. Do not copy the example into this repo: its boat names would become a second roster.
 - **Closing the CAMP window stops the whole demo launch** (`OnProcessExit` -> `Shutdown` bound to the CAMP node when `enable_camp` is true). A second demo, or a CAMP already running, is refused at launch (flock on `~/.local/state/marine_simulation_demo/lock`; process scan); CAMP's live tile cache is redirected into the same state directory and emptied each start, because it lives outside the QSettings file.
 - **`wmctrl -b` reads at most two properties after `add`/`remove`/`toggle`.** A four-property clear silently left `maximized_horz` set; the fake `wmctrl` in `test_place_windows.py` now rejects such a call.
+- **The packaged chart grid `US5NH02M.tiff` has no nodata tag and no NaN.** Land and drying cells are negative "depths" (minimum -10), and `mbes_sim` does not ping where `chart_depth < 0`. `build_demo_bathy` keeps that convention: its -9999 nodata appears only outside the chart extent, and `BathyGrid.getDepth` returns `None` there.
+- **CCOM GIS 2 m and 16 m image services mark nodata as 3.4e38 by VALUE** (the exported GeoTIFF carries no nodata tag); the 4 m service uses -99999. `demo_bathy` masks anything beyond +-1e4 m. ArcGIS also answers some errors with HTTP 200 and a JSON body, so the fetch checks for a TIFF header and retries.
+- **The demo truth grid is generated, not committed** (`ros2 run mbes_sim build_demo_bathy`, see `marine_simulation/README.md`); `demo_boats_launch.py` falls back to the chart grid with a printed message when it is absent.
+- **`survey_area` is latched: a publisher must be transient_local, and `ros2 topic echo` needs `--qos-durability transient_local --qos-reliability reliable` to see it.** `publish_survey_area.py` (CAMP project file to `marine_interfaces/SurveyArea`, for the `coverage_assessment` scorer) uses reliable, transient_local, depth 100; a volatile publisher never reaches the scorer. Run it in the root namespace so the topic is `/survey_area`. It reads the file once; restart it to pick up an edit. A standard with `a = b = 0` means "not set" to the scorer (0 % meeting), so the node refuses it.

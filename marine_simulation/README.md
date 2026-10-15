@@ -230,7 +230,9 @@ launch files the real boats use): `robot_state_publisher`, `joint_state_publishe
 `joy_node` (the `joy_linux` driver). There is no `udp_bridge`, `command_bridge`,
 `mission_manager`, nav2 or `s57_grids`.
 
-The venue is Portsmouth Harbour (the packaged `mbes_sim/data/US5NH02M.tiff` grid).
+The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth grid
+(see [Demo truth bathymetry](#demo-truth-bathymetry)) when it has been built, and the packaged
+5 m chart grid `mbes_sim/data/US5NH02M.tiff` otherwise.
 
 ### Launch arguments
 
@@ -243,7 +245,7 @@ The venue is Portsmouth Harbour (the packaged `mbes_sim/data/US5NH02M.tiff` grid
 | `enable_nav` | `false` | Reserved. `true` is refused ("not wired yet"). |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
-| `mbes_grid_file` | `mbes_sim/data/US5NH02M.tiff` | Ground-truth bathymetry the simulated multibeams sample. |
+| `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why, on stderr). An explicit path must be a file. |
 | `cell_size` | `1.0` | CUBE cell size in metres. |
 | `ping_interval` | `0.2` | Seconds between simulated multibeam pings. |
 | `beam_count` | `120` | Beams per ping. |
@@ -255,10 +257,10 @@ device), a configured pad is missing or its link resolves to something other tha
 a `jsN` node (the `-event-joystick` link), `joy_linux` is not installed,
 `deadzone` is outside [0, 1) or `autorepeat_rate` is 2 Hz or less, a boolean
 argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
-`mbes_grid_file` is not a file, `cell_size`, `beam_count` or `ping_interval` is
+an explicit `mbes_grid_file` (or `$MBES_DEMO_GRID`) is not a file, `cell_size`, `beam_count` or `ping_interval` is
 not positive (or not finite), `tide_speed_factor` or `current_speed` is negative
 (or not finite; 0 is allowed for both), the datum grids above are missing, or
-`enable_nav` is true.
+`enable_nav` is true. It also refuses a truth grid GDAL cannot read or whose CRS is not projected in metres, and prints a warning for every boat whose start position has no water in the grid (the sonar publishes nothing there).
 
 ### The roster is the only place boat names live
 
@@ -364,12 +366,114 @@ a subscription to another boat's topic or a wrong topic published by `asv_sim`
 itself is not caught here (the self-test's presence checks cover `asv_sim`'s
 per-boat topics).
 
+### Demo truth bathymetry
+
+The 5 m chart grid is derived from charts. The demo samples the best bathymetry we have: the
+CCOM GIS "WGOM, LI, SNE Bathymetry and Backscatter Compilation", fetched from its public image
+services and mosaicked by `mbes_sim`'s `build_demo_bathy`. The grid is generated, not
+committed. Build it once per machine (about 10 seconds, needs network access to
+`gis.ccom.unh.edu`):
+
+```bash
+ros2 run mbes_sim build_demo_bathy --bbox -70.7405 43.0537 -70.6695 43.0937 \
+    --out ~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif
+```
+
+The box is `WEST SOUTH EAST NORTH` in degrees, about 5.9 km by 4.6 km. The output is a
+UTM 19N GeoTIFF, depth positive down, 2 m cells by default (`--resolution` overrides), tiled
+LZW Float32, with `portsmouth_demo_utm19n.tif.provenance.json` beside it (service URLs, every
+tile request box, fetch time, checksums, coverage, options). It prints a coverage summary and
+the measured difference between the compilation and the chart grid where both exist. An
+existing output is refused without `--force`; a failed run leaves nothing behind. `--work-dir`
+keeps the fetched tiles so a rerun within 24 hours does not fetch again; `--regional` adds the
+16 m regional service as a fill; `--chart-grid` replaces the fill grid.
+
+Fill precedence per cell: 2 m compilation, 4 m compilation, 16 m regional (only with
+`--regional`), then the packaged chart grid. The chart grid has no nodata: land and drying
+cells are negative depths, which `mbes_sim` does not ping, and they stay negative in the demo
+grid. The grid's nodata value (-9999) appears only outside the chart extent, and `mbes_sim`
+returns no sounding for such a cell. Each `mbes_sim` node loads the whole grid (about 27 MB
+for the box above); keep the box to the demo area.
+
+Sources and attribution: Bathymetry: WGOM, LI, SNE Bathymetry and Backscatter Compilation, UNH
+Center for Coastal and Ocean Mapping / Joint Hydrographic Center, via the CCOM GIS image services
+`WGOM_LI_SNE_Bathymetry_2m_WMAS`
+(`https://gis.ccom.unh.edu/server/rest/services/WGOM-LI-SNE/WGOM_LI_SNE_Bathymetry_2m_WMAS/ImageServer`)
+and `WGOM_LI_SNE_BTY_4m_20230922_WMAS_IS`
+(`https://gis.ccom.unh.edu/server/rest/services/WGOM-LI-SNE/WGOM_LI_SNE_BTY_4m_20230922_WMAS_IS/ImageServer`).
+The services and their portal items state no licence or copyright terms (checked 2026-10-14);
+contributing surveys are named by the `WGOM_LI_SNE_Footprints` map service. **Licence statement:
+pending, to be requested from CCOM GIS.** The 2 m cell size is the product's, not the source
+surveys' (0.5 to 2 m per the footprint layer).
+
+**Vertical datum caveat.** The vertical datum of the compilation is not stated in the service
+metadata or its portal item (**confirmation pending from CCOM GIS**). The demo treats it as
+comparable to the chart grid (MLLW) so the simulated tide applies the same way, and applies no
+correction. The coverage summary reports the measured offset between the two where they overlap
+(compilation minus chart; the build on 2026-10-14 gave a median of 0.89 m). It is suitable for
+the demo; do not call it survey truth until CCOM GIS confirms the datum.
+
+### Target survey area for the coverage scorer
+
+`coverage_assessment` (in `cube_bathymetry`) scores coverage against target areas
+it receives as `marine_interfaces/SurveyArea` on a latched `survey_area` topic
+(reliable, transient_local, depth 100). CAMP only sends a survey area out as a mission
+plan, which this demo does not run, so `publish_survey_area.py` reads the area from a
+saved CAMP project file and publishes it:
+
+```bash
+export ROS_DOMAIN_ID=42   # the demo's domain
+# the shipped demo polygon (config/demo_target_polygon_camp.json), S-44 Order 1a
+ros2 run marine_simulation publish_survey_area.py
+# your own file
+ros2 run marine_simulation publish_survey_area.py --ros-args -p file:=$HOME/my_target.json
+```
+
+To draw a new target: in CAMP add a survey area (its outline is the polygon), then
+File > Save. Point `file` at that project file. CAMP's File > Open reads the same file to show the
+outline, so one file serves both. The node reads the file once at startup and keeps
+running (the latched sample lives in the publisher) so a scorer that starts later still
+receives it; to pick up
+an edit, restart the node. The stamp is wall-clock time (not the simulation clock, which
+reads 0 until `/clock` arrives), and the scorer replaces an area when the same id arrives
+again with a newer stamp, so no scorer reset is needed.
+
+Run it in the **root namespace** (as above): the topic is then `/survey_area`, which
+is what the scorer's example `coverage_assessment.yaml` subscribes to.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `file` | installed `config/demo_target_polygon_camp.json` | CAMP project file; every `SurveyArea` item in it (nested groups included) is published, its `Waypoint` children are the vertices |
+| `topic` | `survey_area` | Relative, so it follows the node's namespace: under a launch namespace it becomes `/<ns>/survey_area`, which the scorer would not hear |
+| `area_id` | empty | Empty uses each CAMP item's label (`area0000`, ...); non-empty is accepted only for a file with exactly one area |
+| `priority` | `0` | `SurveyArea.priority` (int16, lower is more urgent) |
+| `standard_name` | `demo` | `SurveyStandard.name` |
+| `standard_a`, `standard_b` | `0.5`, `0.013` | `allowed(depth) = sqrt(a^2 + (b*depth)^2)`; the defaults are IHO S-44 Order 1a |
+
+The node exits with status 1 and a message on stderr when it is given: a missing,
+unreadable or non-JSON file, a file with no `SurveyArea`, an area with fewer than 3
+distinct vertices (a repeated closing point counts once), more than 10000 vertices, more
+than 100 areas (the latched history is 100 deep, so a late scorer would lose the rest; the scorer itself holds only 20 by default, its `max_areas`, and refuses further new ids with an ERROR), a
+file over 16 MB or nested too deeply, or a vertex without a finite latitude in [-90, 90] and longitude in
+[-180, 180], two areas with one label, an `area_id` for a multi-area file, a priority
+outside int16, a parameter of the wrong type, or a standard the scorer would read as "not set" (`a` and `b` both 0, or
+either negative or not finite): that would leave the scoreboard at 0 % with no
+explanation.
+
+Checked against the scorer's example config by reading both (not yet against a running
+graph with the scorer): the scorer's `/survey_area` matches this node's topic in the root
+namespace; `cube_bathymetry` publishes a relative `grid` in `<boat>/sensors/mbes`, so
+`/<boat>/sensors/mbes/grid` matches `grid_topics`; the demo's TF frames are
+`<boat>/map`, `<boat>/map_tide` and `<boat>/base_link`, matching `map_frame`,
+`water_surface_frame` and `water_surface_boat_frame`. Starting the scorer and this node
+together with the boats is the single demo launch (issue #94).
+
 ### Known limits
 
 - The nav stack is not wired (`enable_nav`); there is no bridge or command bridge, so the operator mode buttons do nothing.
 - The tide topic `/asv_sim/environment/tide_level` is shared by every boat on purpose.
 - `asv_sim`'s `set_pose` service and `sim_reset` topic work per boat (they were both broken before issue #88).
-- Four `mbes_sim` nodes each load the 69 MB grid; expect memory use to scale with the boat count.
+- Four `mbes_sim` nodes each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.
 
 ### Tests
 

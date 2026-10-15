@@ -10,6 +10,7 @@ install(PROGRAMS
   scripts/demo_boats_selftest.py
   scripts/place_windows.py
   scripts/run_demo.sh
+  scripts/publish_survey_area.py
   DESTINATION lib/${PROJECT_NAME})
 
 if(BUILD_TESTING)
@@ -23,6 +24,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_place_windows test/test_place_windows.py)
   ament_add_pytest_test(test_demo_launch test/test_demo_launch.py)
   ament_add_pytest_test(test_run_demo test/test_run_demo.py)
+  ament_add_pytest_test(test_publish_survey_area test/test_publish_survey_area.py)
 endif()
 
 ament_package()
