@@ -36,7 +36,11 @@ command -v ros2 > /dev/null 2>&1 ||
 
 # A private domain keeps the demo off other people's ROS graph on the network. An
 # exported ROS_DOMAIN_ID is deliberately not used: lab computers often share one.
-export ROS_DOMAIN_ID=${DEMO_ROS_DOMAIN_ID:-42}
+# When two people run the demo on one host, one of them sets DEMO_ROS_DOMAIN_ID.
+domain=${DEMO_ROS_DOMAIN_ID:-42}
+[[ "$domain" =~ ^[0-9]+$ ]] && [ "${#domain}" -le 3 ] && [ "$((10#$domain))" -le 101 ] ||
+    die "DEMO_ROS_DOMAIN_ID is '$domain'; it must be a whole number from 0 to 101."
+export ROS_DOMAIN_ID=$((10#$domain))
 
 switched_off() { # switched_off <switch> <args...>; the last one wins and any letter case counts
     local switch=$1 arg off=1

@@ -64,7 +64,7 @@ The up-arrow command is the one typed last, so type it once yourself first:
 ### What the one launch does
 
 ```bash
-export ROS_DOMAIN_ID=42   # run_demo.sh always sets 42 (DEMO_ROS_DOMAIN_ID overrides)
+export ROS_DOMAIN_ID=42   # run_demo.sh sets 42 unless DEMO_ROS_DOMAIN_ID (0 to 101) is set, e.g. when two people share a host
 ros2 launch marine_simulation demo_launch.py \
     joystick_config:=$HOME/.config/marine_simulation_demo/joysticks.yaml \
     layout_config:=$HOME/.config/marine_simulation_demo/layout.yaml

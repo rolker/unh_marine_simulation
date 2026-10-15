@@ -104,6 +104,22 @@ def test_an_exported_domain_is_not_used_but_the_demo_override_is(machine):
     assert _record(machine)[0] == '55'
 
 
+def test_the_demo_domain_override_is_checked_and_a_leading_zero_is_not_octal(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    _run(machine, DEMO_ROS_DOMAIN_ID='08')
+    assert _record(machine)[0] == '8'
+    _run(machine, DEMO_ROS_DOMAIN_ID='101')
+    assert _record(machine)[0] == '101'
+    (machine / 'record').unlink()
+    for bad in ('102', 'abc', '-1', '4 2', '1' * 30):
+        result = _run(machine, DEMO_ROS_DOMAIN_ID=bad)
+        assert result.returncode == 1, bad
+        assert 'DID NOT START' in result.stderr and 'DEMO_ROS_DOMAIN_ID' in result.stderr
+        assert not (machine / 'record').exists()
+    assert _run(machine, DEMO_ROS_DOMAIN_ID='').returncode == 0  # empty means the default
+    assert _record(machine)[0] == '42'
+
+
 def test_extra_arguments_and_the_target_file_are_passed_on(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml', 'target.json')
     _run(machine, 'boats:=a,b')
