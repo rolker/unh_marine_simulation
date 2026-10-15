@@ -45,9 +45,9 @@ unh_marine_simulation/
 │   └── launch/                        #   harbor_launch.py, isles_of_shoals_launch.py, ...
 └── marine_simulation/                 # Scenario launch files
     ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml
-    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py
-    ├── test/                          #   pytest: demo launch fail-fast checks, graph check
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml, demo_target_polygon_camp.json
+    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, publish_survey_area.py
+    ├── test/                          #   pytest: demo launch fail-fast checks, graph check, survey-area publisher
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes
 ```
 
@@ -134,3 +134,4 @@ Known build issues:
 - **The packaged chart grid `US5NH02M.tiff` has no nodata tag and no NaN.** Land and drying cells are negative "depths" (minimum -10), and `mbes_sim` does not ping where `chart_depth < 0`. `build_demo_bathy` keeps that convention: its -9999 nodata appears only outside the chart extent, and `BathyGrid.getDepth` returns `None` there.
 - **CCOM GIS 2 m and 16 m image services mark nodata as 3.4e38 by VALUE** (the exported GeoTIFF carries no nodata tag); the 4 m service uses -99999. `demo_bathy` masks anything beyond +-1e4 m. ArcGIS also answers some errors with HTTP 200 and a JSON body, so the fetch checks for a TIFF header and retries.
 - **The demo truth grid is generated, not committed** (`ros2 run mbes_sim build_demo_bathy`, see `marine_simulation/README.md`); `demo_boats_launch.py` falls back to the chart grid with a printed message when it is absent.
+- **`survey_area` is latched: a publisher must be transient_local, and `ros2 topic echo` needs `--qos-durability transient_local --qos-reliability reliable` to see it.** `publish_survey_area.py` (CAMP project file to `marine_interfaces/SurveyArea`, for the `coverage_assessment` scorer) uses reliable, transient_local, depth 100; a volatile publisher never reaches the scorer. Run it in the root namespace so the topic is `/survey_area`. It reads the file once; restart it to pick up an edit. A standard with `a = b = 0` means "not set" to the scorer (0 % meeting), so the node refuses it.

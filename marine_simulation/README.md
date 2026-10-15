@@ -229,6 +229,61 @@ correction. The coverage summary reports the measured offset between the two whe
 (compilation minus chart; the build on 2026-10-14 gave a median of 0.89 m). It is suitable for
 the demo; do not call it survey truth until CCOM GIS confirms the datum.
 
+### Target survey area for the coverage scorer
+
+`coverage_assessment` (in `cube_bathymetry`) scores coverage against target areas
+it receives as `marine_interfaces/SurveyArea` on a latched `survey_area` topic
+(reliable, transient_local, depth 100). CAMP only sends a survey area out as a mission
+plan, which this demo does not run, so `publish_survey_area.py` reads the area from a
+saved CAMP project file and publishes it:
+
+```bash
+export ROS_DOMAIN_ID=42   # the demo's domain
+# the shipped demo polygon (config/demo_target_polygon_camp.json), S-44 Order 1a
+ros2 run marine_simulation publish_survey_area.py
+# your own file
+ros2 run marine_simulation publish_survey_area.py --ros-args -p file:=$HOME/my_target.json
+```
+
+To draw a new target: in CAMP add a survey area (its outline is the polygon), then
+File > Save. Point `file` at that project file. CAMP's File > Open reads the same file to show the
+outline, so one file serves both. The node reads the file once at startup and keeps
+running (the latched sample lives in the publisher) so a scorer that starts later still
+receives it; to pick up
+an edit, restart the node. The stamp is wall-clock time (not the simulation clock, which
+reads 0 until `/clock` arrives), and the scorer replaces an area when the same id arrives
+again with a newer stamp, so no scorer reset is needed.
+
+Run it in the **root namespace** (as above): the topic is then `/survey_area`, which
+is what the scorer's example `coverage_assessment.yaml` subscribes to.
+
+| Parameter | Default | Meaning |
+|---|---|---|
+| `file` | installed `config/demo_target_polygon_camp.json` | CAMP project file; every `SurveyArea` item in it (nested groups included) is published, its `Waypoint` children are the vertices |
+| `topic` | `survey_area` | Relative, so it follows the node's namespace: under a launch namespace it becomes `/<ns>/survey_area`, which the scorer would not hear |
+| `area_id` | empty | Empty uses each CAMP item's label (`area0000`, ...); non-empty is accepted only for a file with exactly one area |
+| `priority` | `0` | `SurveyArea.priority` (int16, lower is more urgent) |
+| `standard_name` | `demo` | `SurveyStandard.name` |
+| `standard_a`, `standard_b` | `0.5`, `0.013` | `allowed(depth) = sqrt(a^2 + (b*depth)^2)`; the defaults are IHO S-44 Order 1a |
+
+The node exits with status 1 and a message on stderr when it is given: a missing,
+unreadable or non-JSON file, a file with no `SurveyArea`, an area with fewer than 3
+distinct vertices (a repeated closing point counts once), more than 10000 vertices, more
+than 100 areas (the latched history is 100 deep, so a late scorer would lose the rest; the scorer itself holds only 20 by default, its `max_areas`, and refuses further new ids with an ERROR), a
+file over 16 MB or nested too deeply, or a vertex without a finite latitude in [-90, 90] and longitude in
+[-180, 180], two areas with one label, an `area_id` for a multi-area file, a priority
+outside int16, a parameter of the wrong type, or a standard the scorer would read as "not set" (`a` and `b` both 0, or
+either negative or not finite): that would leave the scoreboard at 0 % with no
+explanation.
+
+Checked against the scorer's example config by reading both (not yet against a running
+graph with the scorer): the scorer's `/survey_area` matches this node's topic in the root
+namespace; `cube_bathymetry` publishes a relative `grid` in `<boat>/sensors/mbes`, so
+`/<boat>/sensors/mbes/grid` matches `grid_topics`; the demo's TF frames are
+`<boat>/map`, `<boat>/map_tide` and `<boat>/base_link`, matching `map_frame`,
+`water_surface_frame` and `water_surface_boat_frame`. Starting the scorer and this node
+together with the boats is the single demo launch (issue #94).
+
 ### Known limits
 
 - The nav stack is not wired (`enable_nav`); there is no bridge or command bridge, so the operator mode buttons do nothing.
