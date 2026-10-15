@@ -136,7 +136,7 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [x] (suggestion) switched_off matches only lowercase values; the launch accepts any case (Gemini, Claude A) — `marine_simulation/scripts/run_demo.sh:46` (fixed 5852025)
 - [x] (suggestion) place_all promises one more look after the deadline but breaks without listing again (Claude A) — `marine_simulation/scripts/place_windows.py:323` (fixed 8a939c4)
 - [x] (suggestion) state and run directories use the umask default, not 0o700 (Claude B) — `marine_simulation/launch/demo_launch.py:acquire_demo_lock` (fixed, see the commit "private state directories")
-- [x] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29` (deferred: a private domain per user needs a design decision on the shared lab host; the override variable exists and the README names it)
+- [x] (suggestion) fixed ROS domain 42 is shared by two users on one host, DEMO_ROS_DOMAIN_ID is not range-checked (Claude B) — `marine_simulation/scripts/run_demo.sh:29` (deferred, then done after round 3 by owner decision: 42 stays the default, DEMO_ROS_DOMAIN_ID overrides and is now range-checked 0 to 101, see 4e8151a)
 - [x] (suggestion) tilde paths in layout_config/camp_profile/camp_view_config are not expanded (Gemini) — `marine_simulation/launch/demo_launch.py:529` (deferred: run_demo.sh now expands ~ for the files it checks; the launch gets absolute paths from it, direct ros2 launch users type full paths)
 - [x] (suggestion) view_center divides by len(boats) without an empty check (Gemini) — `marine_simulation/launch/demo_launch.py:243` (fixed, see the commit "private state directories")
 
@@ -175,3 +175,19 @@ Independence uncertain: this context wrote the plan and no fresh dispatch interv
 - [ ] (suggestion) the top-of-loop list_windows in place_all can still abort every placement on a wmctrl failure (Claude) — `marine_simulation/scripts/place_windows.py:313`
 - [ ] (suggestion) no test for DEMO_PLACE_WINDOWS precedence or the "package not found" branch (Claude) — `marine_simulation/test/test_run_demo.py:1`
 - [ ] (suggestion) fixed ROS domain 42 on shared hosts (carried from round 2, deferred) — `marine_simulation/scripts/run_demo.sh:29`
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-15 (merge-up and publication)
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-94
+**Addressed**: Local Review (Pre-Push), round 3 deferred item (ROS domain)
+
+**Merge-up**: `7ab5a64` merges origin/jazzy (PR #95 demo polygon, PR #99 truth bathymetry). Conflicts, both sides kept: `.agents/README.md` (tree block merged: place_windows.py, run_demo.sh, publish_survey_area.py, demo_target_polygon_camp.json, survey-area test; the pitfalls from both sides kept) and `marine_simulation/CMakeLists.txt` (installs and pytest registrations from both). `marine_simulation/README.md` auto-merged.
+
+**Domain override** (`4e8151a`): 42 stays the default; `DEMO_ROS_DOMAIN_ID` already existed and wins. Added a check (whole number 0 to 101, leading zero not octal, empty means default) with a plain stop message, a test for default, override, boundaries and rejections, and README wording.
+
+**Tests**: `./simulation_ws/test.sh marine_simulation mbes_sim`: `Summary: 485 tests, 0 errors, 8 failures, 0 skipped`; the 8 are the pre-existing lint failures (copyright 1, flake8 I100 1, pep257 D213 3 in bizzyboat_massabesic_launch.py, gazebo_ben_launch.py, gazebo_simulator_launch.py; flake8 in simulator_launch.py), none in this issue's files.
+
+**Still owed**: cold-boot rehearsal on the demo machine.
