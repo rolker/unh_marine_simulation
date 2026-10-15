@@ -49,9 +49,11 @@ import re
 import sys
 from typing import Callable, Dict, List, Sequence, Tuple
 
+from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.actions import ExecuteProcess
 from launch.actions import GroupAction
 from launch.actions import IncludeLaunchDescription
 from launch.actions import OpaqueFunction
@@ -89,6 +91,17 @@ DATUM_ROOT = '~/data/world/datum'
 GEOID_GRID = os.path.join('geoid', 'us_noaa_g2018u0.tif')
 VDATUM_DIR = 'vdatum'
 
+# Lifecycle nodes each boat runs (counted from a live run; demo_manager.py checks that its own
+# copy of this number agrees). The guard below waits for this many per boat.
+LIFECYCLE_NODES_PER_BOAT = 9
+# The guard leaves a node alone until its state has been quiet this long, so a slow launch
+# chain (which sends its transitions unconditionally) is never raced; rclpy lifecycle nodes
+# die on a transition that is invalid for their state.
+GUARD_SETTLE_SECONDS = 3.0
+# It declares success once no new node has appeared for this long: the launch is still
+# starting nodes for a while after the first ones are up.
+GUARD_QUIET_SECONDS = 15.0
+GUARD_TIMEOUT_SECONDS = 240.0
 # The demo truth grid built by `ros2 run mbes_sim build_demo_bathy` (see the README). The
 # launch uses it when it exists and otherwise falls back to the packaged chart grid.
 DEMO_GRID = '~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif'
@@ -415,6 +428,24 @@ def asv_sim_remappings(boats: Sequence[Boat]) -> List[Tuple[str, str]]:
     return remaps
 
 
+def lifecycle_guard_command(boats: Sequence[Boat], executable: str) -> List[str]:
+    """
+    Return the command of the post-launch lifecycle guard (``launch_manager_proto converge``).
+
+    Each boat's lifecycle nodes are configured and activated by one-shot chains in the
+    per-package launch files; when a ``change_state`` reply or a transition event is lost the
+    chain stops and the node sits in ``inactive`` for the whole session (issue 96). The guard
+    reads each node's state and takes it the rest of the way, exactly like the launch manager
+    does (same convergence code), and prints what it could not fix.
+    """
+    names = '|'.join(re.escape(b.name) for b in boats)
+    return [executable, 'converge', '--match', '^/(%s)/' % names,
+            '--expect', str(LIFECYCLE_NODES_PER_BOAT * len(boats)),
+            '--settle', repr(GUARD_SETTLE_SECONDS),
+            '--quiet-period', repr(GUARD_QUIET_SECONDS),
+            '--timeout', repr(GUARD_TIMEOUT_SECONDS)]
+
+
 def _include(package: str, *path: str, launch_arguments: dict = None):
     return IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -621,6 +652,7 @@ def launch_setup(context, *args, **kwargs):
 
     refuse_enable_nav(arg('enable_nav'))
     enable_joysticks = parse_bool(arg('enable_joysticks'), 'enable_joysticks')
+    lifecycle_guard = parse_bool(arg('lifecycle_guard'), 'lifecycle_guard')
 
     roster = load_roster(arg('roster_file'))
     boats = select_boats(roster, arg('boats'))
@@ -668,6 +700,12 @@ def launch_setup(context, *args, **kwargs):
             remappings=asv_sim_remappings(boats)),
     ]
     actions.extend(boat_actions(b, joysticks.get(b.name), settings) for b in boats)
+    if lifecycle_guard:
+        executable = os.path.join(get_package_prefix('launch_manager_proto'), 'lib',
+                                  'launch_manager_proto', 'launch_manager_proto')
+        actions.append(ExecuteProcess(
+            cmd=lifecycle_guard_command(boats, executable), name='lifecycle_guard',
+            output='screen'))
     return actions
 
 
@@ -708,5 +746,9 @@ def generate_launch_description():
                 'Seconds between simulated multibeam pings.'),
         declare('beam_count', TextSubstitution(text='120'),
                 'Beams per simulated multibeam ping.'),
+        declare('lifecycle_guard', TextSubstitution(text='true'),
+                'Run the lifecycle guard: after the launch, drive every boat lifecycle node '
+                'that a lost change_state reply left behind to active (issue 96). Turn it '
+                'off when the launch manager runs this launch; it is the one writer then.'),
         OpaqueFunction(function=launch_setup),
     ])

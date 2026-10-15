@@ -206,6 +206,10 @@ ros2 launch marine_simulation demo_boats_launch.py enable_joysticks:=false
 
 # check the whole thing without hardware (starts and stops the launch itself)
 ros2 run marine_simulation demo_boats_selftest.py --start-launch
+
+# the same boats under the launch manager, which also starts CAMP and the scorer and
+# stops everything when CAMP is closed (see "Demo launch manager" below)
+ros2 run marine_simulation demo_manager.py
 ```
 
 The launch starts about 50 processes and other ROS machines on the network
@@ -249,6 +253,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `cell_size` | `1.0` | CUBE cell size in metres. |
 | `ping_interval` | `0.2` | Seconds between simulated multibeam pings. |
 | `beam_count` | `120` | Beams per ping. |
+| `lifecycle_guard` | `true` | Run a guard process that takes any boat lifecycle node a lost `change_state` reply left behind to `active` (issue #96). Turn it off when the launch manager runs this launch: it is the one writer then. |
 
 The launch refuses to start (with the reason) when a boat name is unknown or
 repeated, a roster value is not a finite number in range, the joystick list does
@@ -366,6 +371,19 @@ a subscription to another boat's topic or a wrong topic published by `asv_sim`
 itself is not caught here (the self-test's presence checks cover `asv_sim`'s
 per-boat topics).
 
+### The lifecycle guard
+
+Each boat runs nine lifecycle nodes, configured and activated by one-shot chains in the
+per-package launch files. Intermittently a chain stops (a `change_state` reply or a
+transition event is lost under load) and a node sits in `inactive` for the whole session:
+no sonar, no datum frames, a boat that never drives (issue #96). `lifecycle_guard` starts
+one extra process, `launch_manager_proto converge`, which reads each boat node's state and
+takes it the rest of the way, leaving a node alone until its state has been quiet for three
+seconds so that a slow chain is not raced. It prints what it did (`[launch_manager_proto]
+/clownfish/joy_to_helm: sending activate from inactive`) and exits 0 once all nodes are
+active and no new one has appeared for fifteen seconds, or prints which nodes it could not
+fix. It needs `launch_manager_proto` (a dependency of this package).
+
 ### Demo truth bathymetry
 
 The 5 m chart grid is derived from charts. The demo samples the best bathymetry we have: the
@@ -480,4 +498,57 @@ together with the boats is the single demo launch (issue #94).
 ```bash
 source setup.bash && ./simulation_ws/build.sh asv_sim marine_simulation
 ./simulation_ws/test.sh asv_sim marine_simulation
+```
+
+## Demo launch manager
+
+`demo_manager.py` runs the demo under `launch_manager_proto` (issue #97), the prototype of
+the persistent launch and lifecycle manager designed in
+`unh_marine_autonomy/docs/launch_manager.md`. Its README describes the manager; this is how
+the demo uses it.
+
+```bash
+export ROS_DOMAIN_ID=...                 # a private one
+ros2 run marine_simulation demo_manager.py                      # boats, CAMP, scorer
+ros2 run marine_simulation demo_manager.py --profile headless   # no CAMP
+ros2 run marine_simulation demo_manager.py --boats bluefin,clownfish --no-joysticks
+ros2 run launch_manager_proto launch_manager_proto status       # what is it doing?
+```
+
+`config/demo_manager.yaml` has three groups and three profiles:
+
+| Group | Launch file | Rule |
+|---|---|---|
+| `boats` | `demo_boats_launch.py` (with `lifecycle_guard:=false`) | READY when every boat's nine lifecycle nodes are `active` |
+| `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, the same code as `demo_launch.py`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
+| `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_launch.scorer_parameters` (map frame = the first boat's) | `requires: [boats]`, lifecycle node `/coverage_assessment` to `active` |
+
+Profiles: `demo` (all three), `headless` (boats and scorer), `boats` (boats only). The
+boats and the scorer **follow** CAMP: closing CAMP's window stops them and ends the manager,
+so the terminal returns. Boat names come from `config/demo_roster.yaml` only; the
+configuration has placeholders that the script fills in. The target-area publisher (#93) is
+not a group yet.
+
+The manager is the only thing that configures and activates the boats' lifecycle nodes. It
+sends every transition itself, checks the state first and again just before sending, and a
+lost reply cannot strand a node. A node that the launch's `respawn=True` restarts comes
+back `unconfigured` and is repaired. **Group stop and start work** (`launch_manager_proto
+command stop boats`, `... start boats`); a stopped group's processes are all gone.
+
+**What a helper sees when something is wrong.** CAMP only opens once the boats are READY. If
+a boat cannot be brought up, the terminal shows an ERROR line naming the node (`group boats
+FAILED: lifecycle node /clownfish/mbes_sim FAILED: configure failed 5 times: ...`) and
+`launch_manager_proto status` shows the same, with `!` marking every node that is not
+active. The fix is to close the manager (Ctrl-C) and run it again.
+
+The lifecycle guard of the plain launch is not as loud: a node it cannot fix is reported by
+the guard's own last line (`did not converge ... saw N of M expected node(s)`) and by the exit
+code of the `lifecycle_guard` process in the launch output, and the rest of the launch keeps
+running.
+
+Host-only test of the whole thing (about two minutes, needs the datum grids and a private
+domain above 100; it never starts CAMP or any GUI):
+
+```bash
+ROS_DOMAIN_ID=173 ./simulation_ws/test.sh marine_simulation    # test_demo_manager_live.py
 ```

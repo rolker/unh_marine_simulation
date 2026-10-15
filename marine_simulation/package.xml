@@ -28,6 +28,8 @@
   <exec_depend>lifecycle_msgs</exec_depend>
   <exec_depend>ben_description</exec_depend>
   <exec_depend>helm_manager</exec_depend>
+  <exec_depend>launch_manager_proto</exec_depend>
+  <exec_depend>coverage_assessment</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>
   <exec_depend>geographic_msgs</exec_depend>
   <exec_depend>joy_linux</exec_depend>

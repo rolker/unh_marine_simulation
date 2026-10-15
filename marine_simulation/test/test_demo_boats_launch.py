@@ -39,8 +39,8 @@ import importlib.util
 import os
 import pathlib
 
-from launch import LaunchDescription, LaunchService
-from launch.actions import GroupAction, OpaqueFunction
+from launch import LaunchContext, LaunchDescription, LaunchService
+from launch.actions import ExecuteProcess, GroupAction, OpaqueFunction
 from launch_ros.actions import SetParameter, SetRemap
 import numpy as np
 from osgeo import gdal
@@ -439,6 +439,68 @@ def test_cube_never_reloads_from_disk():
     assert 'bizzyboat' not in LAUNCH.read_text()
 
 
+# -- the lifecycle guard (issue 96) ----------------------------------------------------------
+
+
+def _setup_context(tmp_path, **overrides):
+    grid = tmp_path / 'grid.tiff'
+    grid.write_bytes(b'x')
+    values = {
+        'boats': '', 'roster_file': str(ROSTER), 'joystick_config': str(JOYSTICKS),
+        'enable_joysticks': 'false', 'enable_nav': 'false', 'tide_speed_factor': '10',
+        'current_speed': '0.0', 'mbes_grid_file': str(grid), 'cell_size': '1.0',
+        'ping_interval': '0.2', 'beam_count': '120', 'lifecycle_guard': 'true',
+    }
+    values.update(overrides)
+    context = LaunchContext()
+    context.launch_configurations.update(values)
+    return context
+
+
+def _processes(actions):
+    return [a for a in actions if type(a) is ExecuteProcess]    # not the Node subclass
+
+
+@pytest.fixture
+def no_host_checks(monkeypatch):
+    monkeypatch.setattr(demo, 'check_datum_grids', lambda *a, **k: None)
+    monkeypatch.setattr(demo, 'check_mbes_grid', lambda *a, **k: [])    # the grid is a stub
+    monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/opt/' + package)
+
+
+def test_the_guard_runs_by_default_after_the_boats(tmp_path, no_host_checks):
+    actions = demo.launch_setup(_setup_context(tmp_path))
+    guards = _processes(actions)
+    assert len(guards) == 1 and actions[-1] is guards[0]
+
+
+def test_the_guard_can_be_turned_off_for_the_launch_manager(tmp_path, no_host_checks):
+    actions = demo.launch_setup(_setup_context(tmp_path, lifecycle_guard='false'))
+    assert _processes(actions) == []
+
+
+def test_a_bad_guard_value_is_refused(tmp_path, no_host_checks):
+    with pytest.raises(ValueError, match='lifecycle_guard'):
+        demo.launch_setup(_setup_context(tmp_path, lifecycle_guard='ture'))
+
+
+def test_the_guard_waits_for_exactly_the_selected_boats(roster):
+    names = [b.name for b in roster][:2]
+    command = demo.lifecycle_guard_command(demo.select_boats(roster, ','.join(names)), '/x/guard')
+    assert command[:2] == ['/x/guard', 'converge']
+    match = command[command.index('--match') + 1]
+    assert match == '^/(%s)/' % '|'.join(names)
+    assert command[command.index('--expect') + 1] == str(demo.LIFECYCLE_NODES_PER_BOAT * 2)
+    assert float(command[command.index('--settle') + 1]) == demo.GUARD_SETTLE_SECONDS
+    assert float(command[command.index('--quiet-period') + 1]) == demo.GUARD_QUIET_SECONDS
+
+
+def test_the_guard_declares_its_launch_argument():
+    description = demo.generate_launch_description()
+    declared = {e.name: e for e in description.entities if hasattr(e, 'default_value')}
+    assert 'lifecycle_guard' in declared
+
+
 # --- mbes grid resolution ---------------------------------------------------------------
 
 def _grids(tmp_path):
@@ -558,3 +620,21 @@ def test_the_shipped_chart_grid_passes_the_check_for_the_roster_boats(roster):
     from ament_index_python.packages import get_package_share_directory
     chart = os.path.join(get_package_share_directory('mbes_sim'), 'data', 'US5NH02M.tiff')
     assert demo.check_mbes_grid(chart, roster) == []
+
+
+# -- launch_setup really runs the grid check -----------------------------------------------------
+
+def test_launch_setup_propagates_a_refused_grid(tmp_path, no_host_checks, monkeypatch):
+    def refuse(path, boats):
+        raise ValueError('mbes grid is in degrees')
+    monkeypatch.setattr(demo, 'check_mbes_grid', refuse)
+    with pytest.raises(ValueError, match='in degrees'):
+        demo.launch_setup(_setup_context(tmp_path))
+
+
+def test_launch_setup_prints_the_grid_warnings_to_stderr(tmp_path, no_host_checks,
+                                                         monkeypatch, capsys):
+    monkeypatch.setattr(demo, 'check_mbes_grid',
+                        lambda path, boats: ['WARNING boat dry starts on land'])
+    demo.launch_setup(_setup_context(tmp_path))
+    assert 'WARNING boat dry starts on land' in capsys.readouterr().err

@@ -1,0 +1,71 @@
+# Configuration of the demo's launch manager (launch_manager_proto, issue #97).
+#
+# Loaded by scripts/demo_manager.py, which substitutes every dollar-brace placeholder from the boat
+# roster and its own arguments, so no boat name is copied into this file. The manager
+# starts the default profile, converges every boat's lifecycle nodes to active (the fix for
+# the lost change_state reply of issue #96), and stops the whole demo when CAMP is closed.
+#
+# The target-area publisher (issue #93) is not a group yet; add one here, `requires:
+# [boats]` and `follows: [camp]`, when it lands.
+manager:
+  name: demo_manager
+  default_profile: demo
+  status_period: 1.0
+  # Closing CAMP stops everything and ends the manager process, so the terminal returns.
+  exit_when_all_stopped: true
+  converge:
+    # The manager is the only writer of lifecycle transitions in the groups it runs: the
+    # per-package launch files' autostart chains are not acted on (see the README of
+    # launch_manager_proto), so there is nothing to wait for but a node finishing its start.
+    settle: 1.0
+
+groups:
+  boats:
+    description: the boats, their sonars and CUBE chains (demo_boats_launch.py)
+    launch: {package: marine_simulation, file: demo_boats_launch.py}
+    arguments:
+      boats: {type: string, default: '${boats}'}
+      roster_file: {type: string, default: '${roster_file}'}
+      enable_joysticks: {type: bool, default: '${enable_joysticks}'}
+      # The manager is the one convergence loop; the launch's own guard stays off.
+      lifecycle_guard: {type: bool, default: false}
+    follows: [camp]
+    lifecycle:
+      match: '^/(${boats_regex})/'
+      expect: ${boats_expect}
+      target: active
+    ready: {timeout: 180}
+    restart: on-failure
+
+  camp:
+    description: CAMP, the operator display; closing it stops the demo
+    # Not CAMP's own camp_launch.py: that runs on the operator's settings and the shared live
+    # tile cache. demo_camp_launch.py starts CAMP on the demo profile, like demo_launch.py.
+    launch: {package: marine_simulation, file: demo_camp_launch.py}
+    arguments:
+      boats: {type: string, default: '${boats}'}
+      roster_file: {type: string, default: '${roster_file}'}
+    requires: [boats]
+    # Closing the window is an operator decision, not a crash: never restarted, and the
+    # groups that follow it are stopped.
+    restart: never
+
+  scorer:
+    description: the coverage scorer (coverage_assessment)
+    launch: {package: coverage_assessment, file: coverage_assessment_launch.py}
+    arguments:
+      params_file: {type: string, default: '${scorer_params}'}
+    requires: [boats]
+    follows: [camp]
+    lifecycle:
+      nodes: [/coverage_assessment]
+      target: active
+    restart: on-failure
+
+profiles:
+  # everything the event needs
+  demo: [boats, camp, scorer]
+  # the boats and the scorer without a display (live checks, a head-less laptop)
+  headless: [boats, scorer]
+  # only the boats (what demo_boats_selftest.py drives)
+  boats: [boats]

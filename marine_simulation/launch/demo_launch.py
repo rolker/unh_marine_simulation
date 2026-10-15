@@ -477,6 +477,28 @@ def camp_node(settings_home: str, project_file: str = '') -> Node:
                 additional_env={'XDG_CONFIG_HOME': settings_home})
 
 
+def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
+                 target_file: str = '') -> list:
+    """
+    Return the actions that start CAMP on the demo's own settings and tile cache.
+
+    Seeds the private ``XDG_CONFIG_HOME`` with the generated profile and empties the demo's
+    live tile cache, so nothing of the operator's settings or of an earlier session shows.
+    Shared by the one-launch demo and the launch manager's ``camp`` group
+    (``demo_camp_launch.py``); the last action is the CAMP node.
+    """
+    require_file(camp_profile, 'camp_profile')
+    view = load_view(camp_view_config)
+    lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
+    with open(camp_profile) as f:
+        profile = build_profile(f.read(), boats, lat, lon, view['scale'], cache_dir())
+    root = settings_root()
+    seed_camp_settings(root, profile)
+    reset_state_dir(cache_dir(), CACHE_DIR_NAME)
+    camp = camp_node(root, target_file)
+    return [LogInfo(msg='CAMP settings: %s' % root), camp]
+
+
 def placement_process(layout_config: str) -> ExecuteProcess:
     """Return the process that moves the windows (``scripts/place_windows.py``)."""
     script = os.path.join(get_package_prefix('marine_simulation'), 'lib',
@@ -588,17 +610,10 @@ def launch_setup(context, *args, **kwargs):
         enable['target_area'], target_file, target_script_installed))
 
     if enable['camp']:
-        require_file(arg('camp_profile'), 'camp_profile')
-        view = load_view(arg('camp_view_config'))
-        lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
-        with open(arg('camp_profile')) as f:
-            profile = build_profile(f.read(), boats, lat, lon, view['scale'], cache_dir())
-        root = settings_root()
-        seed_camp_settings(root, profile)
-        reset_state_dir(cache_dir(), CACHE_DIR_NAME)
-        camp = camp_node(root, target_file)
-        actions.extend([LogInfo(msg='CAMP settings: %s' % root), camp])
-        actions.extend(camp_exit_handlers(camp))
+        camp_start = camp_actions(boats, arg('camp_profile'), arg('camp_view_config'),
+                                  target_file)
+        actions.extend(camp_start)
+        actions.extend(camp_exit_handlers(camp_start[-1]))
 
     if enable['window_layout']:
         placement = placement_process(arg('layout_config'))
