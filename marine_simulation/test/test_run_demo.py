@@ -301,3 +301,19 @@ def test_help_needs_no_machine_files(machine):
     result = _run(machine, '--help')
     assert result.returncode == 0, result.stderr
     assert _record(machine)[1:] == ['--help']
+
+
+@pytest.mark.parametrize('option', ['--layout=', '--joysticks=', '--target=', '--profile='])
+def test_an_empty_option_value_is_refused_not_replaced_by_a_default(machine, option):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine, option)
+    assert result.returncode == 1 and 'non-empty value' in result.stderr
+    assert not (machine / 'record').exists()
+
+
+def test_equals_forms_of_the_options_are_read_like_the_separate_forms(machine):
+    _files(machine, 'joysticks.yaml')
+    result = _run(machine, '--profile=headless', '--target=%s/t.json' % machine)
+    assert result.returncode == 0, result.stderr   # no layout needed, no CAMP check
+    assert _record(machine)[1:] == ['--joysticks', '%s/config/joysticks.yaml' % machine,
+                                    '--profile', 'headless', '--target', '%s/t.json' % machine]

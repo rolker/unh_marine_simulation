@@ -110,7 +110,9 @@ one sentence). `run_demo.sh` itself refuses, with the same phrase and exit statu
 this computer's `joysticks.yaml` or `layout.yaml` is missing, the domain override is not
 0 to 101, ROS is not set up, or a map window is open. The scorer's parameters are
 generated from the roster (so `--boats a,b` scores exactly those boats) into a temporary
-directory the manager removes on exit.
+directory the manager removes on exit. The lock does not outlive the manager: after a
+`kill -9` the lock is free but the boats and CAMP keep running, and a second `--profile
+headless` would start duplicates of the boats (stop the orphans first).
 
 ### CAMP starts in a known state
 

@@ -115,7 +115,8 @@ def check_layout_tool(layout: str, tool: str = None) -> None:
     Runs ``place_windows.py --check`` (X11, ``wmctrl``, a layout that parses, the monitors it
     names connected), the same check ``run_demo.sh`` makes, from beside this script.
     """
-    tool = tool or os.path.join(os.path.dirname(os.path.abspath(__file__)), 'place_windows.py')
+    tool = tool or os.environ.get('DEMO_PLACE_WINDOWS') or os.path.join(
+        os.path.dirname(os.path.abspath(__file__)), 'place_windows.py')
     try:
         result = subprocess.run([tool, '--check', '--layout', layout], capture_output=True,
                                 text=True, timeout=60)
@@ -151,7 +152,8 @@ def preflight(members: Sequence[str], enable_joysticks: bool, joystick_config: s
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description=__doc__,
+    # no abbreviations: run_demo.sh reads the full option names to decide which files it needs
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--profile', help='profile to start (default: the configured one)')
     parser.add_argument('--boats', default='',
@@ -179,10 +181,11 @@ def main(argv: List[str] = None) -> int:
     from launch_manager_proto.manager import run_manager
 
     share = get_package_share_directory('marine_simulation')
-    roster_file = args.roster or os.path.join(share, 'config', 'demo_roster.yaml')
+    roster_file = os.path.abspath(os.path.expanduser(
+        args.roster or os.path.join(share, 'config', 'demo_roster.yaml')))
     try:
         boats = roster.select_boats(roster.load_roster(roster_file), args.boats)
-    except ValueError as error:
+    except (ValueError, OSError, yaml.YAMLError) as error:
         print('roster problem: %s' % error, file=sys.stderr)
         return 2
     names = [b.name for b in boats]
@@ -194,7 +197,7 @@ def main(argv: List[str] = None) -> int:
         args.target or os.path.join(share, 'config', 'demo_target_polygon_camp.json')))
     try:
         demo_support.acquire_demo_lock(demo_support.state_dir())
-    except ValueError as error:
+    except (ValueError, OSError) as error:
         print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
         return 2
     state_dir = tempfile.mkdtemp(prefix='demo_manager_')

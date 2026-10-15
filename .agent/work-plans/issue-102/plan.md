@@ -44,7 +44,7 @@ After #100 and #101 the demo has two start paths, each lacking what the other ha
 
 - `test_demo_support.py`: the moved helpers (profile, Qt encodings, reset guards, lock, scorer parameters, CAMP-running scan, placement exit message, `camp_actions` seeding); `roster` re-export identity test.
 - `test_demo_manager.py`: group wiring (publisher and placement present; scorer requires the publisher; layout requires and follows camp, `restart: never`; publisher follows camp; profiles), the placeholders, argument handling and every preflight refusal, the two new launch files (nodes, parameters, arguments), the no-load-by-path scan.
-- `test_manager_core.py`: a clean exit of a run-once group is not a failure, stops nothing, can be started again; a non-zero exit fails only that group.
+- `test_manager_core.py` and `test_launch_manager.py` (real manager process, a run-once fixture): a clean exit of a run-once group is not a failure, stops nothing, can be started again; a non-zero exit fails only that group.
 - `test_run_demo.py`: invokes the manager, passes the machine files as flags, keeps the domain / config / CAMP-open checks.
 - `test_demo_boats_selftest.py`: `--demo` builds the manager command.
 - Host-only `test_demo_manager_live.py` (headless profile): additionally asserts `target_area` and `scorer` READY. Not run here: CAMP and `place_windows` (no GUI).
@@ -61,3 +61,10 @@ After #100 and #101 the demo has two start paths, each lacking what the other ha
 ## Open items for the host's CAMP run
 
 CAMP now opens the shipped demo polygon by default (it is also the published target); window placement and the real `CAMP` exit are only exercised there.
+
+## Implementation Notes
+
+- `ament_cmake_python` package `marine_simulation.roster` was added next to `demo_support` because `demo_boats_launch.py` (a launch file) held the roster functions the manager needs; it re-imports them.
+- `place_windows.py` stays a script; the manager's preflight runs `place_windows.py --check` as a subprocess instead of importing it.
+- `demo_boats_selftest.py --demo` now starts `demo_manager.py --profile headless`.
+- Defaults changed on purpose: the publisher is always part of the demo and CAMP opens the same target file (installed demo polygon by default).

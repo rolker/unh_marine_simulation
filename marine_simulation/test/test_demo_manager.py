@@ -666,3 +666,32 @@ def test_the_helpers_the_manager_and_the_launch_files_share_are_importable_modul
     boats = _launch_module('demo_boats_launch.py')
     for name in ('Boat', 'load_roster', 'select_boats', 'parse_bool'):
         assert getattr(boats, name) is getattr(roster_module, name), name
+
+
+def test_option_abbreviations_are_rejected(run_manager_spy):
+    for abbreviation in ('--prof', '--no-lay', '--lay'):
+        with pytest.raises(SystemExit):
+            demo_manager.main([abbreviation, 'x'])
+
+
+def test_a_missing_roster_file_is_a_plain_refusal(capsys):
+    assert demo_manager.main(['--roster', '/nope/roster.yaml']) == 2
+    err = capsys.readouterr().err
+    assert 'roster problem' in err and 'Traceback' not in err
+
+
+def test_an_unwritable_state_directory_is_a_plain_refusal(monkeypatch, capsys):
+    def fail(directory):
+        raise PermissionError('read-only file system')
+    monkeypatch.setattr(demo_support, 'acquire_demo_lock', fail)
+    assert demo_manager.main(['--no-joysticks']) == 2
+    err = capsys.readouterr().err
+    assert err.startswith('THE DEMO DID NOT START:') and 'read-only' in err
+
+
+def test_the_layout_check_honours_the_same_tool_override_as_run_demo_sh(tmp_path, monkeypatch):
+    record = tmp_path / 'args'
+    tool = _tool(tmp_path, 'printf "%%s\\n" "$@" > %s\n' % record)
+    monkeypatch.setenv('DEMO_PLACE_WINDOWS', tool)
+    demo_manager.check_layout_tool('/my/layout.yaml')
+    assert record.read_text().split() == ['--check', '--layout', '/my/layout.yaml']

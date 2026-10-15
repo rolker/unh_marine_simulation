@@ -104,6 +104,11 @@ while [ $# -gt 0 ]; do
         *) value= ;;
     esac
     case "$arg" in
+        --joysticks | --layout | --target | --profile)
+            [ -n "$value" ] || die "$arg needs a non-empty value."
+            ;;
+    esac
+    case "$arg" in
         --no-joysticks) no_joysticks=0 ;;
         --no-layout) no_layout=0 ;;
         -h | --help) want_help=0 ;;
