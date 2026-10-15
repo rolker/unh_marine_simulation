@@ -36,11 +36,15 @@ a boat there does not break anything here.
 """
 
 import importlib.util
+import os
 import pathlib
 
 from launch import LaunchContext, LaunchDescription, LaunchService
 from launch.actions import ExecuteProcess, GroupAction, OpaqueFunction
 from launch_ros.actions import SetParameter, SetRemap
+import numpy as np
+from osgeo import gdal
+from osgeo import osr
 import pytest
 import yaml
 
@@ -494,3 +498,122 @@ def test_the_guard_declares_its_launch_argument():
     description = demo.generate_launch_description()
     declared = {e.name: e for e in description.entities if hasattr(e, 'default_value')}
     assert 'lifecycle_guard' in declared
+# --- mbes grid resolution ---------------------------------------------------------------
+
+def _grids(tmp_path):
+    demo_grid, chart, other = (tmp_path / n for n in ('demo.tif', 'chart.tif', 'other.tif'))
+    for path in (demo_grid, chart, other):
+        path.write_bytes(b'x')
+    return str(demo_grid), str(chart), str(other)
+
+
+def test_an_explicit_grid_argument_wins_over_everything(tmp_path):
+    demo_grid, chart, other = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid(other, {'MBES_DEMO_GRID': demo_grid}, demo_grid, chart)
+    assert path == other and 'argument' in message
+
+
+def test_an_explicit_grid_that_is_not_a_file_is_refused(tmp_path):
+    demo_grid, chart, _ = _grids(tmp_path)
+    with pytest.raises(ValueError, match='is not a file'):
+        demo.resolve_mbes_grid(str(tmp_path / 'missing.tif'), {}, demo_grid, chart)
+
+
+def test_the_environment_grid_is_next_and_must_exist(tmp_path):
+    demo_grid, chart, other = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {'MBES_DEMO_GRID': other}, demo_grid, chart)
+    assert path == other and 'MBES_DEMO_GRID' in message
+    with pytest.raises(ValueError, match='MBES_DEMO_GRID'):
+        gone = {'MBES_DEMO_GRID': str(tmp_path / 'gone.tif')}
+        demo.resolve_mbes_grid('', gone, demo_grid, chart)
+
+
+def test_the_demo_grid_is_used_when_it_exists(tmp_path):
+    demo_grid, chart, _ = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {}, demo_grid, chart)
+    assert path == demo_grid and 'demo truth grid' in message
+
+
+def test_without_a_demo_grid_the_chart_grid_is_used_and_the_command_is_named(tmp_path):
+    _, chart, _ = _grids(tmp_path)
+    path, message = demo.resolve_mbes_grid('', {}, str(tmp_path / 'absent.tif'), chart)
+    assert path == chart
+    assert 'not found' in message and 'falling back' in message
+    assert 'build_demo_bathy' in message and str(tmp_path / 'absent.tif') in message
+
+
+def test_the_shipped_default_is_the_demo_location_and_the_launch_argument_is_empty():
+    assert demo.DEMO_GRID == '~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif'
+    declared = {a.name: a for a in demo.generate_launch_description().entities
+                if hasattr(a, 'name')}
+    default = declared['mbes_grid_file'].default_value
+    assert default is not None and ''.join(s.text for s in default) == ''
+
+
+# --- mbes grid sanity ---------------------------------------------------------------------
+
+def _utm_grid(tmp_path, name, epsg=32619, values=None):
+    """Write a grid around 43.07 N 70.7 W; the west half is water (5 m), the east half land."""
+    gdal.UseExceptions()
+    wgs84 = osr.SpatialReference()
+    wgs84.ImportFromEPSG(4326)
+    wgs84.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    target = osr.SpatialReference()
+    target.ImportFromEPSG(epsg)
+    target.SetAxisMappingStrategy(osr.OAMS_TRADITIONAL_GIS_ORDER)
+    x, y, _ = osr.CoordinateTransformation(wgs84, target).TransformPoint(-70.7, 43.07)
+    if epsg == 4326:
+        origin, step = (-70.8, 43.2), 0.001
+        ncols, nrows = 200, 260
+    else:
+        origin, step = (x - 500.0, y + 500.0), 10.0
+        ncols, nrows = 100, 100
+    data = np.full((nrows, ncols), 5.0, dtype=np.float32)
+    data[:, ncols // 2:] = -3.0 if values is None else values
+    path = str(tmp_path / name)
+    dataset = gdal.GetDriverByName('GTiff').Create(path, ncols, nrows, 1, gdal.GDT_Float32)
+    dataset.SetGeoTransform((origin[0], step, 0, origin[1], 0, -step))
+    dataset.SetProjection(target.ExportToWkt())
+    dataset.GetRasterBand(1).WriteArray(data)
+    dataset = None
+    return path
+
+
+def _roster_boat(name, lon):
+    return demo.Boat(name=name, pad='red', color=(1.0, 0.0, 0.0), lat=43.07, lon=lon,
+                     heading=0.0, index=0)
+
+
+def test_a_usable_grid_with_boats_on_water_gives_no_warnings(tmp_path):
+    path = _utm_grid(tmp_path, 'ok.tif')
+    assert demo.check_mbes_grid(path, [_roster_boat('a', -70.7005)]) == []
+
+
+def test_a_boat_starting_on_land_or_off_the_grid_is_named_in_a_warning(tmp_path):
+    path = _utm_grid(tmp_path, 'ok.tif')
+    warnings = demo.check_mbes_grid(
+        path, [_roster_boat('wet', -70.7005), _roster_boat('dry', -70.6990),
+               _roster_boat('lost', -71.5)])
+    assert len(warnings) == 2
+    assert 'dry' in warnings[0] and 'depth -3.00' in warnings[0]
+    assert 'lost' in warnings[1] and 'off the grid' in warnings[1]
+    assert all(w.startswith('WARNING') for w in warnings)
+
+
+def test_a_grid_in_degrees_is_refused(tmp_path):
+    path = _utm_grid(tmp_path, 'deg.tif', epsg=4326)
+    with pytest.raises(ValueError, match='projected CRS'):
+        demo.check_mbes_grid(path, [])
+
+
+def test_an_unreadable_grid_is_refused_with_its_path(tmp_path):
+    bad = tmp_path / 'bad.tif'
+    bad.write_bytes(b'not a tiff')
+    with pytest.raises(ValueError, match='cannot be read'):
+        demo.check_mbes_grid(str(bad), [])
+
+
+def test_the_shipped_chart_grid_passes_the_check_for_the_roster_boats(roster):
+    from ament_index_python.packages import get_package_share_directory
+    chart = os.path.join(get_package_share_directory('mbes_sim'), 'data', 'US5NH02M.tiff')
+    assert demo.check_mbes_grid(chart, roster) == []

@@ -1,0 +1,33 @@
+# Where the demo's windows go on one machine (read by scripts/place_windows.py).
+#
+# Copy this file, edit it for the host, and give the copy to the launch with
+# layout_config:=<file> (run_demo.sh picks up ~/.config/marine_simulation_demo/layout.yaml).
+# Monitor names are the ones `xrandr --listmonitors` prints in its last column.
+# Placement needs an X11 session ("GNOME on Xorg") and the wmctrl package.
+
+# How long to wait for the windows to appear, in seconds (default 90).
+timeout_seconds: 90
+
+windows:
+  # CAMP, full screen on the big display.
+  - name: camp
+    match: {wm_class: CCOMAutonomousMissionPlanner}
+    monitor: HDMI-0
+    fullscreen: true
+
+  # The second display is reserved for the scoreboard (not built yet), so nothing
+  # is placed there now. When it exists, add an entry for it:
+  #
+  # - name: scoreboard
+  #   match: {title: Scoreboard}
+  #   monitor: DP-2
+  #   fullscreen: true
+
+# One display only (a laptop, say)? Keep the camp entry, point it at that monitor,
+# and put a window in a corner instead of full screen with a rectangle, measured in
+# pixels from the monitor's top left corner:
+#
+#   - name: camp
+#     match: {wm_class: CCOMAutonomousMissionPlanner}
+#     monitor: eDP-1
+#     rect: {x: 0, y: 0, width: 1600, height: 900}
