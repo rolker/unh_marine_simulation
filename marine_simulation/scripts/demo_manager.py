@@ -42,7 +42,6 @@ The boat names come from the roster only: the manager configuration
 """
 
 import argparse
-import importlib.util
 import os
 import re
 import shutil
@@ -51,6 +50,8 @@ import tempfile
 from typing import Dict, List, Sequence
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
+from marine_simulation import demo_support
+from marine_simulation import roster
 import yaml
 
 # Lifecycle nodes each boat runs (counted from a live run of demo_boats_launch.py). The
@@ -59,27 +60,9 @@ import yaml
 MIN_LIFECYCLE_NODES_PER_BOAT = 9
 
 
-def _load_boats_launch(share: str):
-    """Load ``demo_boats_launch.py`` (a launch file is not an importable package)."""
-    path = os.path.join(share, 'launch', 'demo_boats_launch.py')
-    spec = importlib.util.spec_from_file_location('demo_boats_launch', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
 def boats_regex(names: Sequence[str]) -> str:
     """Return the alternation matching the namespaces of these boats."""
     return '|'.join(re.escape(n) for n in names)
-
-
-def _load_demo_launch(share: str):
-    """Load ``demo_launch.py``, the one place that knows how the scorer is configured."""
-    path = os.path.join(share, 'launch', 'demo_launch.py')
-    spec = importlib.util.spec_from_file_location('demo_launch', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
 
 
 def scorer_template_path() -> str:
@@ -88,36 +71,17 @@ def scorer_template_path() -> str:
                         'config', 'coverage_assessment.yaml')
 
 
-def scorer_parameters(boats: Sequence, share: str = None, template: dict = None) -> dict:
+def scorer_parameters(boats: Sequence, template: dict = None) -> dict:
     """
     Return the coverage_assessment parameters scoring these boats' CUBE grids.
 
-    The content is ``demo_launch.scorer_parameters`` (also used by the one-launch demo), so
-    the scorer's ``map_frame`` is the first boat's map frame (the boats publish
+    The scorer's ``map_frame`` is the first boat's map frame (the boats publish
     ``earth -> <boat>/map``, never a plain ``map``) and its tide frames are that boat's too.
     """
-    demo_launch = _load_demo_launch(share or get_package_share_directory('marine_simulation'))
     if template is None:
         with open(scorer_template_path()) as f:
             template = yaml.safe_load(f)
-    return demo_launch.scorer_parameters(template, boats)
-
-
-_HELD = []    # keeps the module that owns the demo lock alive for the process lifetime
-
-
-def take_demo_lock(share: str):
-    """
-    Take the one-demo-at-a-time lock for the life of this process; return its module.
-
-    Taken at manager start, before any group runs, so a second manager or ``demo_launch.py``
-    is refused at once instead of after its boats are up. Raises ``ValueError`` when another
-    process holds it.
-    """
-    demo_launch = _load_demo_launch(share)
-    demo_launch.acquire_demo_lock(demo_launch.state_dir())
-    _HELD.append(demo_launch)
-    return demo_launch
+    return demo_support.scorer_parameters(template, boats)
 
 
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
@@ -152,16 +116,15 @@ def main(argv: List[str] = None) -> int:
     from launch_manager_proto.manager import run_manager
 
     share = get_package_share_directory('marine_simulation')
-    launch = _load_boats_launch(share)
-    roster_path = args.roster or os.path.join(share, 'config', 'demo_roster.yaml')
+    roster_file = args.roster or os.path.join(share, 'config', 'demo_roster.yaml')
     try:
-        boats = launch.select_boats(launch.load_roster(roster_path), args.boats)
+        boats = roster.select_boats(roster.load_roster(roster_file), args.boats)
     except ValueError as error:
         print('roster problem: %s' % error, file=sys.stderr)
         return 2
     names = [b.name for b in boats]
     try:
-        take_demo_lock(share)
+        demo_support.acquire_demo_lock(demo_support.state_dir())
     except ValueError as error:
         print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
         return 2
@@ -169,7 +132,7 @@ def main(argv: List[str] = None) -> int:
     try:
         scorer_path = os.path.join(state_dir, 'scorer_params.yaml')
         try:
-            parameters = scorer_parameters(boats, share)
+            parameters = scorer_parameters(boats)
             with open(scorer_path, 'w') as f:
                 yaml.safe_dump(parameters, f)
         except (ValueError, OSError, yaml.YAMLError, PackageNotFoundError, ImportError) as error:
@@ -180,7 +143,7 @@ def main(argv: List[str] = None) -> int:
             spec = load_config(
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
-                              roster_path))
+                              roster_file))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2

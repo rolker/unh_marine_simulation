@@ -12,6 +12,7 @@
   <license>BSD</license>
 
   <buildtool_depend>ament_cmake_ros</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>asv_helm</exec_depend>
   <exec_depend>asv_sim</exec_depend>
   <exec_depend>coverage_assessment</exec_depend>

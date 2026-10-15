@@ -2,6 +2,11 @@ cmake_minimum_required(VERSION 3.14.4)
 project(marine_simulation)
 
 find_package(ament_cmake REQUIRED)
+find_package(ament_cmake_python REQUIRED)
+
+# marine_simulation.roster and marine_simulation.demo_support: the helpers the launch manager's
+# starter and the launch files of its groups import (nothing is loaded by file path)
+ament_python_install_package(${PROJECT_NAME})
 
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
@@ -26,6 +31,7 @@ if(BUILD_TESTING)
   # host-only and slow (about two minutes): the default 60 s CTest timeout would kill it
   ament_add_pytest_test(test_demo_manager_live test/test_demo_manager_live.py TIMEOUT 900)
   ament_add_pytest_test(test_place_windows test/test_place_windows.py)
+  ament_add_pytest_test(test_demo_support test/test_demo_support.py)
   ament_add_pytest_test(test_demo_launch test/test_demo_launch.py)
   ament_add_pytest_test(test_run_demo test/test_run_demo.py)
   ament_add_pytest_test(test_publish_survey_area test/test_publish_survey_area.py)

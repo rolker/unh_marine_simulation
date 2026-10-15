@@ -41,6 +41,8 @@ import re
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch_manager_proto import config
+from marine_simulation import demo_support
+from marine_simulation import roster
 import pytest
 import yaml
 
@@ -122,11 +124,8 @@ def test_scorer_is_one_lifecycle_node_at_a_fixed_name(spec):
 
 
 def _scorer_params(names=None):
-    launch = importlib.util.module_from_spec(importlib.util.spec_from_file_location(
-        'boats_for_test', str(PACKAGE / 'launch' / 'demo_boats_launch.py')))
-    launch.__spec__.loader.exec_module(launch)
-    boats = launch.select_boats(launch.load_roster(str(ROSTER)), ','.join(names or []))
-    return demo_manager.scorer_parameters(boats, str(PACKAGE))['/**/coverage_assessment']
+    boats = roster.select_boats(roster.load_roster(str(ROSTER)), ','.join(names or []))
+    return demo_manager.scorer_parameters(boats)['/**/coverage_assessment']
 
 
 def test_scorer_map_frame_is_the_first_boats_map_frame():
@@ -178,7 +177,10 @@ def test_main_refuses_an_unknown_profile_and_an_unknown_boat(capsys):
 
 
 def test_the_per_boat_node_count_agrees_with_the_launch_file():
-    launch = demo_manager._load_boats_launch(str(PACKAGE))
+    spec = importlib.util.spec_from_file_location(
+        'boats_for_test', str(PACKAGE / 'launch' / 'demo_boats_launch.py'))
+    launch = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(launch)
     assert demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT == launch.LIFECYCLE_NODES_PER_BOAT
 
 
@@ -217,7 +219,7 @@ def _camp_launch_module():
 def _camp_start(monkeypatch, tmp_path, **arguments):
     from launch import LaunchContext
     module = _camp_launch_module()
-    demo = module.demo_launch
+    demo = demo_support
     monkeypatch.setenv('HOME', str(tmp_path))
     monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
     started = []
@@ -258,8 +260,7 @@ def test_manager_camp_gets_the_private_settings_directory(monkeypatch, tmp_path)
 
 
 def test_manager_camp_start_empties_the_tile_cache(monkeypatch, tmp_path):
-    module = _camp_launch_module()
-    demo = module.demo_launch
+    demo = demo_support
     cache = pathlib.Path(demo.cache_dir(str(tmp_path)))
     cache.mkdir(parents=True)
     (cache / demo.ROOT_MARKER).write_text('x')
@@ -275,9 +276,7 @@ def test_manager_camp_start_empties_the_tile_cache(monkeypatch, tmp_path):
 def held_locks():
     """Release the demo locks the manager code took in this process."""
     yield
-    for module in demo_manager._HELD:
-        module.release_demo_locks()
-    demo_manager._HELD.clear()
+    demo_support.release_demo_locks()
 
 
 def _lock_path(tmp_path):
@@ -304,17 +303,17 @@ def _release(proc):
 
 
 def test_manager_camp_restarts_keep_the_manager_lock(monkeypatch, tmp_path, held_locks):
-    """The manager holds the lock; each group start loads demo_camp_launch.py afresh by path."""
+    """The manager holds the lock; each group start runs the camp launch file afresh."""
     import fcntl
     from launch import LaunchContext
     monkeypatch.setenv('HOME', str(tmp_path))
-    demo_manager.take_demo_lock(str(PACKAGE))
+    demo_support.acquire_demo_lock(demo_support.state_dir())
     first = _camp_launch_module()
     second = _camp_launch_module()    # exactly what AnyLaunchDescriptionSource does per start
     assert first is not second
     for module in (first, second):
-        monkeypatch.setattr(module.demo_launch, 'running_camp_pids', lambda *a, **k: [])
-        monkeypatch.setattr(module.demo_launch, 'camp_node', lambda *a, **k: 'camp-node')
+        monkeypatch.setattr(demo_support, 'running_camp_pids', lambda *a, **k: [])
+        monkeypatch.setattr(demo_support, 'camp_node', lambda *a, **k: 'camp-node')
         context = LaunchContext()
         context.launch_configurations.update({
             'boats': '', 'roster_file': str(ROSTER),
@@ -332,7 +331,7 @@ def test_manager_camp_restarts_keep_the_manager_lock(monkeypatch, tmp_path, held
 
 def test_the_camp_launch_does_not_take_the_lock():
     module = _camp_launch_module()
-    assert 'demo_launch.acquire_demo_lock(' not in pathlib.Path(module.__file__).read_text()
+    assert 'acquire_demo_lock(' not in pathlib.Path(module.__file__).read_text()
 
 
 def test_a_lock_held_by_another_process_refuses_the_manager(monkeypatch, tmp_path, held_locks):
@@ -340,7 +339,7 @@ def test_a_lock_held_by_another_process_refuses_the_manager(monkeypatch, tmp_pat
     proc = _other_process_holding(_lock_path(tmp_path))
     try:
         with pytest.raises(ValueError, match='already running'):
-            demo_manager.take_demo_lock(str(PACKAGE))
+            demo_support.acquire_demo_lock(demo_support.state_dir())
     finally:
         _release(proc)
 
@@ -358,7 +357,7 @@ def test_main_refuses_at_startup_with_a_plain_message(monkeypatch, tmp_path, hel
 
 @pytest.mark.parametrize('error', [
     ValueError('bad'), OSError('disk'), yaml.YAMLError('yaml'),
-    PackageNotFoundError('coverage_assessment'), ImportError('demo_launch')])
+    PackageNotFoundError('coverage_assessment'), ImportError('demo_support')])
 def test_main_reports_scorer_parameter_failures_without_a_traceback(
         monkeypatch, tmp_path, held_locks, capsys, error):
     monkeypatch.setenv('HOME', str(tmp_path))

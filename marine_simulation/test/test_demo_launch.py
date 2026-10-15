@@ -56,6 +56,7 @@ LAUNCH = PACKAGE / 'launch' / 'demo_launch.py'
 _spec = importlib.util.spec_from_file_location('demo_launch', LAUNCH)
 demo = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(demo)
+support = demo.support
 
 CONFIG = PACKAGE / 'config'
 
@@ -100,7 +101,7 @@ QT_SAMPLES = [
 
 @pytest.mark.parametrize('point, text', QT_SAMPLES)
 def test_point_variant_matches_what_qt_writes(point, text):
-    assert demo.qt_point_variant(*point) == text
+    assert support.qt_point_variant(*point) == text
 
 
 def test_point_variant_matches_qt_for_random_points(tmp_path):
@@ -114,15 +115,15 @@ def test_point_variant_matches_qt_for_random_points(tmp_path):
         settings.sync()
         line = [row for row in open(path).read().splitlines()
                 if row.startswith('mapCenter=')][0]
-        assert line == 'mapCenter=' + demo.qt_point_variant(x, y)
+        assert line == 'mapCenter=' + support.qt_point_variant(x, y)
 
 
 def test_web_mercator_matches_camps_formula():
-    assert demo.web_mercator(0.0, 0.0) == (0.0, 0.0)
-    x, y = demo.web_mercator(0.0, 180.0)
+    assert support.web_mercator(0.0, 0.0) == (0.0, 0.0)
+    x, y = support.web_mercator(0.0, 180.0)
     assert x == pytest.approx(20037508.342789244)
     assert y == 0.0
-    x, y = demo.web_mercator(43.074296, -70.7105)
+    x, y = support.web_mercator(43.074296, -70.7105)
     assert (x, y) == pytest.approx((-7871456.853737771, 5323287.301604602))
 
 
@@ -130,12 +131,12 @@ def test_web_mercator_matches_camps_formula():
 
 def test_live_layer_key_matches_what_camp_writes():
     # Copied from a real CAMP settings file.
-    assert demo.live_layer_key('bluefin') == \
+    assert support.live_layer_key('bluefin') == \
         'live%3A%252Fbluefin%252Fsensors%252Fmbes%252Fcube_bathymetry'
 
 
 def test_the_shipped_template_parses_and_has_no_generated_section():
-    sections = demo.parse_profile((CONFIG / 'demo_camp_profile.conf').read_text())
+    sections = support.parse_profile((CONFIG / 'demo_camp_profile.conf').read_text())
     assert 'MainWindow' not in sections and 'MapView' not in sections
     assert sections['BackgroundTileLayers'][0] == 'ids=openstreetmap'
     assert 'seeded=true' in sections['BackgroundTileLayers']
@@ -144,15 +145,15 @@ def test_the_shipped_template_parses_and_has_no_generated_section():
 def test_profile_has_the_view_and_a_live_layer_per_boat():
     template = (CONFIG / 'demo_camp_profile.conf').read_text()
     boats = [_boat('one'), _boat('two')]
-    text = demo.build_profile(template, boats, 43.0743, -70.7105, 1.25)
-    sections = demo.parse_profile(text)
+    text = support.build_profile(template, boats, 43.0743, -70.7105, 1.25)
+    sections = support.parse_profile(text)
     assert 'mapScale=1.25' in sections['MainWindow']
     assert sections['MainWindow'][0].startswith('mapCenter=')
     assert sections['MapView'][1] == r'mapView\scale=1.25'
     assert sections['MapView'][0].replace(r'mapView\center', 'mapCenter') == \
         sections['MainWindow'][0]
     for name in ('one', 'two'):
-        key = demo.live_layer_key(name)
+        key = support.live_layer_key(name)
         assert '%s\\live_enabled=true' % key in sections['MapItem']
         assert '%s\\visible=true' % key in sections['MapItem']
     # The fixed part is still there.
@@ -164,13 +165,13 @@ def test_profile_reads_back_the_same_view_in_qt(tmp_path):
     qtcore = pytest.importorskip('PyQt5.QtCore')
     template = (CONFIG / 'demo_camp_profile.conf').read_text()
     path = tmp_path / 'p.conf'
-    path.write_text(demo.build_profile(template, [_boat('one')], 43.074296, -70.7105, 0.9))
+    path.write_text(support.build_profile(template, [_boat('one')], 43.074296, -70.7105, 0.9))
     settings = qtcore.QSettings(str(path), qtcore.QSettings.IniFormat)
     point = settings.value('MainWindow/mapCenter')
-    assert (point.x(), point.y()) == pytest.approx(demo.web_mercator(43.074296, -70.7105))
+    assert (point.x(), point.y()) == pytest.approx(support.web_mercator(43.074296, -70.7105))
     assert float(settings.value('MainWindow/mapScale')) == 0.9
     assert settings.value('MapView/mapView/center') == point
-    key = demo.live_layer_key('one')
+    key = support.live_layer_key('one')
     settings.beginGroup('MapItem')
     settings.beginGroup(key.replace('%3A', ':').replace('%25', '%'))
     # QSettings decodes the percent escapes of group names itself.
@@ -181,28 +182,28 @@ def test_profile_reads_back_the_same_view_in_qt(tmp_path):
 @pytest.mark.parametrize('section', ['MainWindow', 'MapView'])
 def test_profile_template_may_not_set_the_generated_sections(section):
     with pytest.raises(ValueError, match=section):
-        demo.build_profile('[%s]\nx=1\n' % section, [_boat('one')], 43.0, -70.0, 1.0)
+        support.build_profile('[%s]\nx=1\n' % section, [_boat('one')], 43.0, -70.0, 1.0)
 
 
 @pytest.mark.parametrize('scale', [0.0, -1.0, float('nan'), float('inf')])
 def test_profile_rejects_a_bad_scale(scale):
     with pytest.raises(ValueError, match='view_scale'):
-        demo.build_profile('', [_boat('one')], 43.0, -70.0, scale)
+        support.build_profile('', [_boat('one')], 43.0, -70.0, scale)
 
 
 @pytest.mark.parametrize('text', ['key=1\n', '[open\nk=v\n', '[s]\nno equals sign\n'])
 def test_profile_parser_rejects_malformed_text(text):
     with pytest.raises(ValueError):
-        demo.parse_profile(text)
+        support.parse_profile(text)
 
 
 def test_view_centre_is_the_mean_of_the_boat_starts():
     boats = [_boat('a', lat=43.0, lon=-70.0), _boat('b', lat=45.0, lon=-72.0)]
-    assert demo.view_center(boats) == (44.0, -71.0)
+    assert support.view_center(boats) == (44.0, -71.0)
 
 
 def test_shipped_view_config_loads():
-    view = demo.load_view(str(CONFIG / 'demo_camp_view.yaml'))
+    view = support.load_view(str(CONFIG / 'demo_camp_view.yaml'))
     assert view['scale'] > 0 and 'lat' not in view
 
 
@@ -213,26 +214,26 @@ def test_view_config_rejects_a_malformed_file(tmp_path, body):
     path = tmp_path / 'view.yaml'
     path.write_text(body)
     with pytest.raises(ValueError):
-        demo.load_view(str(path))
+        support.load_view(str(path))
 
 
 # --- the settings directory ---------------------------------------------------------
 
 def test_seeding_writes_the_profile_where_camp_reads_it(tmp_path):
-    root = demo.settings_root(str(tmp_path))
-    path = demo.seed_camp_settings(root, '[A]\nk=v\n', str(tmp_path))
+    root = support.settings_root(str(tmp_path))
+    path = support.seed_camp_settings(root, '[A]\nk=v\n', str(tmp_path))
     assert path == os.path.join(root, 'UNH-CCOMJHC', 'CCOMAutonomousMissionPlanner.conf')
     assert open(path).read() == '[A]\nk=v\n'
 
 
 def test_seeding_again_throws_away_what_a_session_left_behind(tmp_path):
-    root = demo.settings_root(str(tmp_path))
-    path = demo.seed_camp_settings(root, 'first\n', str(tmp_path))
+    root = support.settings_root(str(tmp_path))
+    path = support.seed_camp_settings(root, 'first\n', str(tmp_path))
     with open(os.path.join(root, 'QtProject.conf'), 'w') as f:  # Qt writes such files
         f.write('leftover')
     with open(path, 'a') as f:
         f.write('drift')
-    demo.seed_camp_settings(root, 'second\n', str(tmp_path))
+    support.seed_camp_settings(root, 'second\n', str(tmp_path))
     assert open(path).read() == 'second\n'
     assert not os.path.exists(os.path.join(root, 'QtProject.conf'))
 
@@ -241,7 +242,7 @@ def test_seeding_never_touches_the_operators_own_camp_settings(tmp_path):
     own = tmp_path / '.config' / 'UNH-CCOMJHC'
     own.mkdir(parents=True)
     (own / 'CCOMAutonomousMissionPlanner.conf').write_text('mine')
-    demo.seed_camp_settings(demo.settings_root(str(tmp_path)), 'demo\n', str(tmp_path))
+    support.seed_camp_settings(support.settings_root(str(tmp_path)), 'demo\n', str(tmp_path))
     assert (own / 'CCOMAutonomousMissionPlanner.conf').read_text() == 'mine'
 
 
@@ -250,9 +251,9 @@ def test_reset_refuses_a_path_that_is_not_the_demo_directory(tmp_path):
     victim.mkdir()
     (victim / 'file').write_text('x')
     with pytest.raises(ValueError, match='refusing'):
-        demo.reset_settings_root(str(victim), str(tmp_path))
+        support.reset_settings_root(str(victim), str(tmp_path))
     with pytest.raises(ValueError, match='refusing'):
-        demo.reset_settings_root(str(tmp_path), str(tmp_path))
+        support.reset_settings_root(str(tmp_path), str(tmp_path))
     assert (victim / 'file').read_text() == 'x'
 
 
@@ -260,36 +261,36 @@ def test_reset_refuses_a_symlink_and_leaves_its_target_alone(tmp_path):
     target = tmp_path / 'elsewhere'
     target.mkdir()
     (target / 'keep').write_text('x')
-    root = pathlib.Path(demo.settings_root(str(tmp_path)))
+    root = pathlib.Path(support.settings_root(str(tmp_path)))
     root.parent.mkdir(parents=True)
     root.symlink_to(target)
     with pytest.raises(ValueError, match='symlink'):
-        demo.reset_settings_root(str(root), str(tmp_path))
+        support.reset_settings_root(str(root), str(tmp_path))
     assert (target / 'keep').read_text() == 'x'
 
 
 def test_reset_refuses_a_directory_it_did_not_create(tmp_path):
-    root = pathlib.Path(demo.settings_root(str(tmp_path)))
+    root = pathlib.Path(support.settings_root(str(tmp_path)))
     root.mkdir(parents=True)
     (root / 'stranger.txt').write_text('x')
     with pytest.raises(ValueError, match='did not create'):
-        demo.reset_settings_root(str(root), str(tmp_path))
+        support.reset_settings_root(str(root), str(tmp_path))
     assert (root / 'stranger.txt').read_text() == 'x'
 
 
 def test_reset_accepts_an_empty_existing_directory(tmp_path):
-    root = pathlib.Path(demo.settings_root(str(tmp_path)))
+    root = pathlib.Path(support.settings_root(str(tmp_path)))
     root.mkdir(parents=True)
-    assert demo.reset_settings_root(str(root), str(tmp_path)) == str(root)
-    assert (root / demo.ROOT_MARKER).is_file()
+    assert support.reset_settings_root(str(root), str(tmp_path)) == str(root)
+    assert (root / support.ROOT_MARKER).is_file()
 
 
 def test_reset_refuses_a_plain_file(tmp_path):
-    root = pathlib.Path(demo.settings_root(str(tmp_path)))
+    root = pathlib.Path(support.settings_root(str(tmp_path)))
     root.parent.mkdir(parents=True)
     root.write_text('x')
     with pytest.raises(ValueError, match='not a directory'):
-        demo.reset_settings_root(str(root), str(tmp_path))
+        support.reset_settings_root(str(root), str(tmp_path))
 
 
 # --- scorer parameters --------------------------------------------------------------
@@ -301,7 +302,7 @@ TEMPLATE = {'/**/coverage_assessment': {'ros__parameters': {
 
 
 def test_scorer_parameters_follow_the_boats_not_the_template():
-    out = demo.scorer_parameters(TEMPLATE, [_boat('one'), _boat('two', 1)])
+    out = support.scorer_parameters(TEMPLATE, [_boat('one'), _boat('two', 1)])
     p = out['/**/coverage_assessment']['ros__parameters']
     assert p['grid_topics'] == ['/one/sensors/mbes/grid', '/two/sensors/mbes/grid']
     assert p['source_names'] == ['one', 'two']
@@ -313,22 +314,22 @@ def test_scorer_parameters_follow_the_boats_not_the_template():
 
 def test_scorer_parameters_do_not_modify_the_template():
     before = yaml.safe_dump(TEMPLATE)
-    demo.scorer_parameters(TEMPLATE, [_boat('one')])
+    support.scorer_parameters(TEMPLATE, [_boat('one')])
     assert yaml.safe_dump(TEMPLATE) == before
 
 
 def test_scorer_needs_a_boat_and_a_usable_template():
     with pytest.raises(ValueError, match='at least one boat'):
-        demo.scorer_parameters(TEMPLATE, [])
+        support.scorer_parameters(TEMPLATE, [])
     with pytest.raises(ValueError, match='no'):
-        demo.scorer_parameters({'x': 1}, [_boat('one')])
+        support.scorer_parameters({'x': 1}, [_boat('one')])
 
 
 @needs_scorer
 def test_the_installed_scorer_example_is_a_usable_template(tmp_path, roster):
     template = os.path.join(get_package_share_directory('coverage_assessment'),
                             'config', 'coverage_assessment.yaml')
-    path = demo.write_scorer_parameters(template, roster, str(tmp_path))
+    path = support.write_scorer_parameters(template, roster, str(tmp_path))
     p = yaml.safe_load(open(path))['/**/coverage_assessment']['ros__parameters']
     assert p['source_names'] == [b.name for b in roster]
     assert 'grid_topics' in p
@@ -444,16 +445,16 @@ DEFAULTS = {
 
 @pytest.fixture(autouse=True)
 def _release_locks():
-    demo.release_demo_locks()
+    support.release_demo_locks()
     yield
-    demo.release_demo_locks()
+    support.release_demo_locks()
 
 
 def _setup(monkeypatch, tmp_path, **overrides):
     monkeypatch.setenv('HOME', str(tmp_path))
     # The machine running the tests may have its own CAMP open.
-    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [])
-    demo.release_demo_locks()
+    monkeypatch.setattr(support, 'running_camp_pids', lambda *a, **k: [])
+    support.release_demo_locks()
     context = LaunchContext()
     for name, value in {**DEFAULTS, **overrides}.items():
         context.launch_configurations[name] = value
@@ -505,7 +506,7 @@ def test_everything_enabled_gives_boats_scorer_and_camp(monkeypatch, tmp_path):
     actions = _setup(monkeypatch, tmp_path)
     assert len(_includes(actions)) == 2
     assert len(_camp(actions)) == 1
-    conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
+    conf = pathlib.Path(support.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
                         'CCOMAutonomousMissionPlanner.conf')
     assert conf.is_file()
 
@@ -515,7 +516,7 @@ def test_everything_enabled_gives_boats_scorer_and_camp(monkeypatch, tmp_path):
 def test_camp_gets_the_demo_settings_directory(monkeypatch, tmp_path):
     camp = _camp(_setup(monkeypatch, tmp_path))[0]
     env = {_perform(k): _perform(v) for k, v in camp.additional_env}
-    assert env == {'XDG_CONFIG_HOME': demo.settings_root(str(tmp_path))}
+    assert env == {'XDG_CONFIG_HOME': support.settings_root(str(tmp_path))}
 
 
 @needs_camp
@@ -550,11 +551,11 @@ def test_a_boat_subset_reaches_the_profile_and_the_scorer(monkeypatch, tmp_path,
     first = roster[0].name
     _setup(monkeypatch, tmp_path, boats=first, enable_boats='false',
            enable_scorer='true' if _installed('coverage_assessment') else 'false')
-    conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
+    conf = pathlib.Path(support.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
                         'CCOMAutonomousMissionPlanner.conf').read_text()
-    assert demo.live_layer_key(first) in conf
+    assert support.live_layer_key(first) in conf
     for other in roster[1:]:
-        assert demo.live_layer_key(other.name) not in conf
+        assert support.live_layer_key(other.name) not in conf
 
 
 def test_a_bad_switch_value_is_refused(monkeypatch, tmp_path):
@@ -615,21 +616,21 @@ def test_a_running_camp_is_found_by_its_executable_name(tmp_path):
         10: ['/opt/ros/lib/camp/CCOMAutonomousMissionPlanner', '/ws/'],
         11: ['/usr/bin/python3', 'CCOMAutonomousMissionPlanner.py'],
         12: ['bash', '-c', 'echo CCOMAutonomousMissionPlanner']})
-    assert demo.running_camp_pids(proc) == [10]
+    assert support.running_camp_pids(proc) == [10]
     with pytest.raises(ValueError, match='already running.*10'):
-        demo.refuse_running_camp(proc)
+        support.refuse_running_camp(proc)
 
 
 def test_no_camp_running_is_fine(tmp_path):
     proc = _fake_proc(tmp_path, {5: ['bash']})
-    assert demo.running_camp_pids(proc) == []
-    demo.refuse_running_camp(proc)
+    assert support.running_camp_pids(proc) == []
+    support.refuse_running_camp(proc)
 
 
 @needs_camp
 def test_the_launch_refuses_to_start_next_to_a_running_camp(monkeypatch, tmp_path):
     monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.setattr(demo, 'running_camp_pids', lambda *a, **k: [4242])
+    monkeypatch.setattr(support, 'running_camp_pids', lambda *a, **k: [4242])
     context = LaunchContext()
     for name, value in {**DEFAULTS, 'enable_boats': 'false', 'enable_scorer': 'false'}.items():
         context.launch_configurations[name] = value
@@ -638,21 +639,21 @@ def test_the_launch_refuses_to_start_next_to_a_running_camp(monkeypatch, tmp_pat
 
 
 def test_a_second_demo_is_refused_while_the_first_holds_the_lock(tmp_path):
-    demo.acquire_demo_lock(str(tmp_path))
+    support.acquire_demo_lock(str(tmp_path))
     with pytest.raises(ValueError, match='already running'):
-        demo.acquire_demo_lock(str(tmp_path))
-    demo.release_demo_locks()
-    demo.acquire_demo_lock(str(tmp_path))  # free again
+        support.acquire_demo_lock(str(tmp_path))
+    support.release_demo_locks()
+    support.acquire_demo_lock(str(tmp_path))  # free again
 
 
 @needs_scorer
 def test_launch_setup_takes_the_lock_before_touching_the_state(monkeypatch, tmp_path):
     _setup(monkeypatch, tmp_path, enable_boats='false', enable_camp='false')
-    state = pathlib.Path(demo.state_dir(str(tmp_path)))
+    state = pathlib.Path(support.state_dir(str(tmp_path)))
     marker = state / 'run' / 'coverage_assessment.yaml'
     assert marker.is_file()
     with pytest.raises(ValueError, match='already running'):
-        demo.acquire_demo_lock(str(state))  # the launch holds it
+        support.acquire_demo_lock(str(state))  # the launch holds it
     assert marker.is_file()  # and the failed second launch deleted nothing
 
 
@@ -667,39 +668,39 @@ def test_qt_strings_match_what_qt_writes(tmp_path):
         settings.sync()
         line = [row for row in open(path).read().splitlines()
                 if row.startswith('cache_dir=')][0]
-        assert line == 'cache_dir=' + demo.qt_ini_string(text), text
+        assert line == 'cache_dir=' + support.qt_ini_string(text), text
         reread = qtcore.QSettings(path, qtcore.QSettings.IniFormat)
         assert reread.value('LiveTileCache/cache_dir') == text
 
 
 def test_the_profile_points_camps_tile_cache_at_the_demo_directory(tmp_path):
     template = (CONFIG / 'demo_camp_profile.conf').read_text()
-    text = demo.build_profile(template, [_boat('one')], 43.0, -70.0, 1.0,
-                              str(tmp_path / 'cache dir'))
+    text = support.build_profile(template, [_boat('one')], 43.0, -70.0, 1.0,
+                                 str(tmp_path / 'cache dir'))
     cache = str(tmp_path / 'cache dir')
-    assert demo.parse_profile(text)['LiveTileCache'] == ['cache_dir=' + cache]
+    assert support.parse_profile(text)['LiveTileCache'] == ['cache_dir=' + cache]
     with pytest.raises(ValueError, match='LiveTileCache'):
-        demo.build_profile('[LiveTileCache]\nx=1\n', [_boat('one')], 43.0, -70.0, 1.0)
+        support.build_profile('[LiveTileCache]\nx=1\n', [_boat('one')], 43.0, -70.0, 1.0)
 
 
 @needs_camp
 def test_the_tile_cache_is_emptied_on_every_start(monkeypatch, tmp_path):
     kwargs = {'enable_boats': 'false', 'enable_scorer': 'false'}
     _setup(monkeypatch, tmp_path, **kwargs)
-    cache = pathlib.Path(demo.cache_dir(str(tmp_path)))
+    cache = pathlib.Path(support.cache_dir(str(tmp_path)))
     (cache / 'old_tile.bin').write_text('x')
     _setup(monkeypatch, tmp_path, **kwargs)
-    assert not (cache / 'old_tile.bin').exists() and (cache / demo.ROOT_MARKER).is_file()
+    assert not (cache / 'old_tile.bin').exists() and (cache / support.ROOT_MARKER).is_file()
 
 
 def test_state_directories_other_than_the_demos_are_never_reset(tmp_path):
     other = tmp_path / 'elsewhere'
     other.mkdir()
     with pytest.raises(ValueError, match='refusing'):
-        demo.reset_state_dir(str(other), demo.CACHE_DIR_NAME, str(tmp_path))
+        support.reset_state_dir(str(other), support.CACHE_DIR_NAME, str(tmp_path))
     with pytest.raises(ValueError, match='refusing'):  # the cache path is not the config one
-        demo.reset_state_dir(demo.cache_dir(str(tmp_path)), demo.SETTINGS_ROOT_NAME,
-                             str(tmp_path))
+        support.reset_state_dir(support.cache_dir(str(tmp_path)), support.SETTINGS_ROOT_NAME,
+                                str(tmp_path))
 
 
 @pytest.mark.parametrize('body, message', [
@@ -716,13 +717,13 @@ def test_view_config_checks_types_and_ranges(tmp_path, body, message):
     path = tmp_path / 'view.yaml'
     path.write_text(body)
     with pytest.raises(ValueError, match=message):
-        demo.load_view(str(path))
+        support.load_view(str(path))
 
 
 def test_view_config_accepts_an_explicit_centre(tmp_path):
     path = tmp_path / 'view.yaml'
     path.write_text('camp_view: {scale: 2, lat: 43.07, lon: -70.71}\n')
-    assert demo.load_view(str(path)) == {'scale': 2.0, 'lat': 43.07, 'lon': -70.71}
+    assert support.load_view(str(path)) == {'scale': 2.0, 'lat': 43.07, 'lon': -70.71}
 
 
 # --- closing the CAMP window stops the whole demo (owner requirement, 2026-10-14) -----
@@ -753,7 +754,7 @@ def test_camp_crashing_also_stops_the_demo_and_other_exits_do_not(monkeypatch, t
     actions = _setup(monkeypatch, tmp_path, enable_boats='false', enable_scorer='false')
     camp = _camp(actions)[0]
     assert any(h.matches(_exited(camp, returncode=-11)) for h in _handlers(actions))
-    other = demo.placement_process('/x.yaml')
+    other = support.placement_process('/x.yaml')
     assert not any(h.matches(_exited(other)) for h in _handlers(actions))
 
 
@@ -769,8 +770,8 @@ def test_a_failed_placement_is_announced_and_a_good_one_is_quiet():
         def __init__(self, returncode):
             self.returncode = returncode
 
-    assert demo.placement_exit(Event(0), None) == []
-    banner = demo.placement_exit(Event(1), None)
+    assert support.placement_exit(Event(0), None) == []
+    banner = support.placement_exit(Event(1), None)
     assert len(banner) == 1 and 'NOT IN PLACE' in _perform(banner[0].msg)
 
 
@@ -789,7 +790,7 @@ def test_the_handler_really_stops_a_running_launch_when_camp_exits():
 
 def test_the_state_directory_is_private_and_an_empty_fleet_is_refused(tmp_path):
     state = tmp_path / 'state'
-    demo.acquire_demo_lock(str(state))
+    support.acquire_demo_lock(str(state))
     assert (state.stat().st_mode & 0o777) == 0o700
     with pytest.raises(ValueError):
-        demo.view_center([])
+        support.view_center([])

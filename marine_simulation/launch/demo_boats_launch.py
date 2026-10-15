@@ -41,9 +41,7 @@ module level (``load_roster``, ``select_boats``, ``assign_joysticks``,
 be unit tested without a launch context.
 """
 
-import dataclasses
 import glob
-import math
 import os
 import re
 import sys
@@ -71,14 +69,13 @@ from launch_ros.actions import SetRemap
 from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.utilities.evaluate_parameters import evaluate_parameter_dict
+# The roster lives in the package so the launch manager can import it too.
+from marine_simulation.roster import Boat
+from marine_simulation.roster import load_roster
+from marine_simulation.roster import number
+from marine_simulation.roster import parse_bool
+from marine_simulation.roster import select_boats
 import yaml
-
-# Names that are already in use as top-level namespaces or TF frames.
-RESERVED_NAMES = frozenset({
-    'asv_sim', 'earth', 'marine', 'parameter_events', 'rosout', 'tf', 'tf_static',
-})
-# Used with fullmatch: `$` would accept a trailing newline.
-_NAME_PATTERN = re.compile(r'[a-z][a-z0-9_]*')
 
 # The kernel joystick device a by-path link must resolve to (joy_linux reads the
 # js API; an -event-joystick link resolves to eventN and reads as garbage).
@@ -140,54 +137,6 @@ class ScopedSetRemap(SetRemap):
         context.launch_configurations['ros_remaps'] = [*existing, (src, dst)]
 
 
-@dataclasses.dataclass(frozen=True)
-class Boat:
-    """One boat of the roster."""
-
-    name: str
-    pad: str
-    color: Tuple[float, float, float]
-    lat: float
-    lon: float
-    heading: float
-    index: int
-
-    def frame(self, suffix: str) -> str:
-        """Return the boat's TF frame name for ``suffix``."""
-        return '%s/%s' % (self.name, suffix)
-
-
-def _number(value, what: str, low: float = None, high: float = None) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError('%s must be a number, got %r' % (what, value))
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError('%s must be a finite number, got %r' % (what, value))
-    if (low is not None and value < low) or (high is not None and value > high):
-        raise ValueError('%s = %s is outside [%s, %s]' % (what, value, low, high))
-    return value
-
-
-_TRUE_WORDS = ('true', '1', 'yes', 'on')
-_FALSE_WORDS = ('false', '0', 'no', 'off')
-
-
-def parse_bool(value: str, what: str) -> bool:
-    """
-    Parse a boolean launch argument strictly.
-
-    Anything outside true/1/yes/on and false/0/no/off raises: ``enable_joysticks:=ture``
-    must not quietly start four boats with no pads.
-    """
-    word = value.strip().lower()
-    if word in _TRUE_WORDS:
-        return True
-    if word in _FALSE_WORDS:
-        return False
-    raise ValueError('%s must be one of %s, got %r'
-                     % (what, ', '.join(_TRUE_WORDS + _FALSE_WORDS), value))
-
-
 def parse_float(text: str, what: str, low: float = None, high: float = None,
                 positive: bool = False) -> float:
     """Parse a numeric launch argument; it must be finite (and positive if asked)."""
@@ -195,7 +144,7 @@ def parse_float(text: str, what: str, low: float = None, high: float = None,
         value = float(text)
     except ValueError:
         raise ValueError('%s must be a number, got %r' % (what, text)) from None
-    value = _number(value, what, low, high)
+    value = number(value, what, low, high)
     if positive and value <= 0.0:
         raise ValueError('%s must be greater than zero, got %s' % (what, text))
     return value
@@ -215,70 +164,6 @@ def parse_positive_int(text: str, what: str) -> int:
     if value < 1:
         raise ValueError('%s must be at least 1, got %s' % (what, text))
     return value
-
-
-def load_roster(path: str) -> List[Boat]:
-    """Read and validate the boat roster; return the boats in file order."""
-    with open(path) as f:
-        data = yaml.safe_load(f)
-    entries = data.get('boats') if isinstance(data, dict) else None
-    if not isinstance(entries, list) or not entries:
-        raise ValueError("%s: expected a non-empty 'boats' list" % path)
-
-    boats = []
-    seen = set()
-    for index, entry in enumerate(entries):
-        where = '%s: boats[%d]' % (path, index)
-        if not isinstance(entry, dict) or not isinstance(entry.get('name'), str):
-            raise ValueError("%s: each boat needs a string 'name'" % where)
-        name = entry['name']
-        where = '%s: boat %r' % (path, name)
-        if not _NAME_PATTERN.fullmatch(name):
-            raise ValueError('%s: the name must match %s (it becomes a ROS namespace '
-                             'and a TF frame prefix)' % (where, _NAME_PATTERN.pattern))
-        if name in RESERVED_NAMES:
-            raise ValueError('%s: %r is reserved' % (where, name))
-        if name in seen:
-            raise ValueError('%s: duplicate boat name' % where)
-        seen.add(name)
-
-        color = entry.get('color')
-        if not isinstance(color, dict) or set(color) != {'red', 'green', 'blue'}:
-            raise ValueError("%s: 'color' needs exactly red, green and blue" % where)
-        start = entry.get('start')
-        if not isinstance(start, dict) or set(start) != {'lat', 'lon', 'heading'}:
-            raise ValueError("%s: 'start' needs exactly lat, lon and heading" % where)
-        boats.append(Boat(
-            name=name,
-            pad=str(entry.get('pad', '')),
-            color=tuple(_number(color[k], '%s color.%s' % (where, k), 0.0, 1.0)
-                        for k in ('red', 'green', 'blue')),
-            lat=_number(start['lat'], where + ' start.lat', -90.0, 90.0),
-            lon=_number(start['lon'], where + ' start.lon', -180.0, 180.0),
-            heading=_number(start['heading'], where + ' start.heading', 0.0, 360.0),
-            index=index,
-        ))
-    return boats
-
-
-def select_boats(roster: Sequence[Boat], requested: str) -> List[Boat]:
-    """
-    Return the roster boats named in the comma separated ``requested``.
-
-    An empty string selects every boat. Boats keep their roster position (and
-    so their joystick) whatever subset is chosen.
-    """
-    names = [n.strip() for n in requested.split(',') if n.strip()]
-    if not names:
-        return list(roster)
-    known = {b.name: b for b in roster}
-    unknown = [n for n in names if n not in known]
-    if unknown:
-        raise ValueError('unknown boat(s) %s; the roster has %s'
-                         % (', '.join(repr(n) for n in unknown), ', '.join(known)))
-    if len(set(names)) != len(names):
-        raise ValueError('boat listed more than once in %r' % requested)
-    return [known[n] for n in names]
 
 
 def load_joystick_config(path: str) -> dict:
@@ -681,9 +566,9 @@ def launch_setup(context, *args, **kwargs):
                                      'enable_joysticks:=false')
         config = load_joystick_config(arg('joystick_config'))
         joysticks = assign_joysticks(roster, boats, config)
-        settings['deadzone'] = _number(
+        settings['deadzone'] = number(
             config.get('deadzone', settings['deadzone']), 'joystick deadzone')
-        settings['autorepeat_rate'] = _number(
+        settings['autorepeat_rate'] = number(
             config.get('autorepeat_rate', settings['autorepeat_rate']),
             'joystick autorepeat_rate')
         check_joystick_settings(settings['deadzone'], settings['autorepeat_rate'])
