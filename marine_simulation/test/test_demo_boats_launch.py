@@ -464,6 +464,7 @@ def _processes(actions):
 @pytest.fixture
 def no_host_checks(monkeypatch):
     monkeypatch.setattr(demo, 'check_datum_grids', lambda *a, **k: None)
+    monkeypatch.setattr(demo, 'check_mbes_grid', lambda *a, **k: [])    # the grid is a stub
     monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/opt/' + package)
 
 
@@ -498,6 +499,8 @@ def test_the_guard_declares_its_launch_argument():
     description = demo.generate_launch_description()
     declared = {e.name: e for e in description.entities if hasattr(e, 'default_value')}
     assert 'lifecycle_guard' in declared
+
+
 # --- mbes grid resolution ---------------------------------------------------------------
 
 def _grids(tmp_path):
