@@ -1,19 +1,24 @@
 #!/usr/bin/env bash
-# Start the whole demo display with one command.
+# Start the whole demo display with one command: the launch manager (demo_manager.py).
 #
-#   run_demo.sh [extra launch arguments, e.g. boats:=bluefin,clownfish]
+#   run_demo.sh [demo_manager.py options, e.g. --boats bluefin,clownfish]
 #
 # Reads the files of this machine from $DEMO_CONFIG_DIR (default
 # ~/.config/marine_simulation_demo):
 #   env.bash       sources the ROS workspace (optional when ros2 is already on PATH)
 #   joysticks.yaml the gamepad device links of this host (required unless
-#                  enable_joysticks:=false is given)
+#                  --no-joysticks is given)
 #   layout.yaml    where the windows go on this host (required unless
-#                  enable_window_layout:=false is given)
-#   target.json    the saved CAMP file holding the target area (optional)
-# then checks that the display can be laid out, and launches marine_simulation
-# demo_launch.py on a private ROS domain (42, or $DEMO_ROS_DOMAIN_ID). When
-# something is missing it says what, in plain words, and starts nothing.
+#                  --no-layout is given)
+#   target.json    the saved CAMP file holding the target area (optional; the installed
+#                  demo polygon is used without it)
+# then checks that the display can be laid out and starts demo_manager.py, which brings up
+# the boats, CAMP, the target-area publisher, the scorer and the window placement, on a
+# private ROS domain (42, or $DEMO_ROS_DOMAIN_ID). When something is missing it says what,
+# in plain words, and starts nothing. Closing the map window stops everything.
+#
+# Options after the script name go to demo_manager.py (--help lists them). The ones that name
+# this machine's files (--joysticks FILE, --layout FILE, --target FILE) replace the files above.
 #
 # Copy-and-edit examples of the two yaml files are installed in
 # share/marine_simulation/config (demo_joysticks.yaml, demo_layout.yaml).
@@ -42,34 +47,17 @@ domain=${DEMO_ROS_DOMAIN_ID:-42}
     die "DEMO_ROS_DOMAIN_ID is '$domain'; it must be a whole number from 0 to 101."
 export ROS_DOMAIN_ID=$((10#$domain))
 
-switched_off() { # switched_off <switch> <args...>; the last one wins and any letter case counts
-    local switch=$1 arg off=1
-    shift
-    for arg in "$@"; do
-        [[ "$arg" == "$switch:="* ]] || continue
-        case "${arg,,}" in
-            *":=false" | *":=0" | *":=no" | *":=off") off=0 ;;
-            *) off=1 ;;
-        esac
-    done
-    return "$off"
-}
-
-given() { # given <name> <args...>: print the last <name>:=value, ~ expanded; fail if absent
-    local name=$1 arg found=1 value=
-    shift
-    for arg in "$@"; do
-        if [[ "$arg" == "$name:="* ]]; then
-            value=${arg#"$name:="}
-            found=0
-        fi
-    done
-    [ "$found" -eq 0 ] || return 1
-    case "$value" in
-        "~") value=$HOME ;;
-        "~/"*) value=$HOME/${value#"~/"} ;;
-    esac
-    printf '%s\n' "$value"
+manager_tool() { # the manager: beside this script, else in the installed package
+    if [ -n "${DEMO_MANAGER:-}" ]; then
+        printf '%s\n' "$DEMO_MANAGER"
+    elif [ -x "$SCRIPT_DIR/demo_manager.py" ]; then
+        printf '%s\n' "$SCRIPT_DIR/demo_manager.py"
+    else
+        local prefix
+        prefix=$(ros2 pkg prefix marine_simulation 2> /dev/null) ||
+            die "the marine_simulation package is not found; is the workspace sourced in $CONFIG_DIR/env.bash?"
+        printf '%s\n' "$prefix/lib/marine_simulation/demo_manager.py"
+    fi
 }
 
 place_windows_tool() { # where the checker is: beside this script, else in the installed package
@@ -85,43 +73,93 @@ place_windows_tool() { # where the checker is: beside this script, else in the i
     fi
 }
 
-# Path arguments get ~ expanded here, for the checks and for the launch alike.
+expand_tilde() { # expand_tilde <path>: a leading ~ is this user's home
+    case "$1" in
+        "~") printf '%s\n' "$HOME" ;;
+        "~/"*) printf '%s\n' "$HOME/${1#"~/"}" ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+# Read the options that decide which of this machine's files are needed; everything is passed
+# on to the manager, with ~ expanded in the three file options. The manager has the last word
+# on what an option means; this only decides which files must exist.
 passed=()
-for arg in "$@"; do
+no_joysticks=1 no_layout=1 want_help=1
+profile=
+given_joysticks= given_layout= given_target=
+while [ $# -gt 0 ]; do
+    arg=$1
+    shift
     case "$arg" in
-        layout_config:=* | joystick_config:=*) passed+=("${arg%%:=*}:=$(given "${arg%%:=*}" "$arg")") ;;
+        --joysticks | --layout | --target | --profile)
+            [ $# -gt 0 ] || die "$arg needs a value."
+            value=$1
+            shift
+            ;;
+        --joysticks=* | --layout=* | --target=* | --profile=*)
+            value=${arg#*=}
+            arg=${arg%%=*}
+            ;;
+        *) value= ;;
+    esac
+    case "$arg" in
+        --no-joysticks) no_joysticks=0 ;;
+        --no-layout) no_layout=0 ;;
+        -h | --help) want_help=0 ;;
+        --profile) profile=$value ;;
+        --joysticks) given_joysticks=$(expand_tilde "$value") value=$given_joysticks ;;
+        --layout) given_layout=$(expand_tilde "$value") value=$given_layout ;;
+        --target) given_target=$(expand_tilde "$value") value=$given_target ;;
+    esac
+    case "$arg" in
+        --joysticks | --layout | --target | --profile) passed+=("$arg" "$value") ;;
         *) passed+=("$arg") ;;
     esac
 done
-set -- "${passed[@]}"
+
+# Only the full demo (the default profile) has a map window to place and close.
+display=1
+{ [ -z "$profile" ] || [ "$profile" = demo ]; } && display=0
 
 args=()
-if ! switched_off enable_boats "$@" && ! switched_off enable_joysticks "$@" &&
-    ! given joystick_config "$@" > /dev/null; then
-    [ -f "$CONFIG_DIR/joysticks.yaml" ] ||
-        die "$CONFIG_DIR/joysticks.yaml is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
-    args+=("joystick_config:=$CONFIG_DIR/joysticks.yaml")
-fi
-if ! switched_off enable_window_layout "$@"; then
-    if layout=$(given layout_config "$@"); then
-        [ -f "$layout" ] || die "the layout file $layout is missing."
-    else
-        layout=$CONFIG_DIR/layout.yaml
-        [ -f "$layout" ] ||
-            die "$layout is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
-        args+=("layout_config:=$layout")
+if [ "$want_help" -ne 0 ]; then
+    if [ "$no_joysticks" -ne 0 ]; then
+        if [ -n "$given_joysticks" ]; then
+            [ -f "$given_joysticks" ] || die "the joystick file $given_joysticks is missing."
+        else
+            [ -f "$CONFIG_DIR/joysticks.yaml" ] ||
+                die "$CONFIG_DIR/joysticks.yaml is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
+            args+=(--joysticks "$CONFIG_DIR/joysticks.yaml")
+        fi
     fi
-    checker=$(place_windows_tool) || exit 1
-    problem=$("$checker" --check --layout "$layout" 2>&1) ||
-        die "the windows cannot be laid out: ${problem#place_windows: }"
-fi
-if ! switched_off enable_camp "$@" && command -v pgrep > /dev/null 2>&1 &&
-    pgrep -x CCOMAutonomousM > /dev/null 2>&1; then
-    die "a map window (CAMP) is already open. Close it, then start the demo again."
-fi
-if [ -f "$CONFIG_DIR/target.json" ]; then
-    args+=("target_area_file:=$CONFIG_DIR/target.json")
+    if [ "$display" -eq 0 ] && [ "$no_layout" -ne 0 ]; then
+        if [ -n "$given_layout" ]; then
+            layout=$given_layout
+            [ -f "$layout" ] || die "the layout file $layout is missing."
+        else
+            layout=$CONFIG_DIR/layout.yaml
+            [ -f "$layout" ] ||
+                die "$layout is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
+            args+=(--layout "$layout")
+        fi
+        checker=$(place_windows_tool) || exit 1
+        problem=$("$checker" --check --layout "$layout" 2>&1) ||
+            die "the windows cannot be laid out: ${problem#place_windows: }"
+    fi
+    if [ "$display" -eq 0 ] && command -v pgrep > /dev/null 2>&1 &&
+        pgrep -x CCOMAutonomousM > /dev/null 2>&1; then
+        die "a map window (CAMP) is already open. Close it, then start the demo again."
+    fi
+    if [ -z "$given_target" ] && [ -f "$CONFIG_DIR/target.json" ]; then
+        args+=(--target "$CONFIG_DIR/target.json")
+    fi
+    if [ "$display" -eq 0 ]; then
+        echo "Starting the demo on ROS domain $ROS_DOMAIN_ID. To stop everything, close the map window."
+    else
+        echo "Starting the demo on ROS domain $ROS_DOMAIN_ID (profile $profile). To stop everything, press Ctrl-C."
+    fi
 fi
 
-echo "Starting the demo on ROS domain $ROS_DOMAIN_ID. To stop everything, close the map window."
-exec ros2 launch marine_simulation demo_launch.py "${args[@]}" "$@"
+manager=$(manager_tool) || exit 1
+exec "$manager" "${args[@]}" "${passed[@]}"

@@ -27,7 +27,7 @@
 # ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
 # POSSIBILITY OF SUCH DAMAGE.
 
-"""Tests for scripts/run_demo.sh with a fake ``ros2`` that records its arguments."""
+"""Tests for scripts/run_demo.sh with a fake ``ros2`` and a fake manager recording their input."""
 
 import os
 import pathlib
@@ -41,17 +41,20 @@ SCRIPT = pathlib.Path(__file__).resolve().parents[1] / 'scripts' / 'run_demo.sh'
 
 @pytest.fixture
 def machine(tmp_path):
-    """Return a fake home with fake ros2, pgrep and place_windows on PATH / in reach."""
+    """Return a fake home with fake ros2, pgrep, place_windows and demo_manager in reach."""
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
     _script(bin_dir / 'ros2',
             '#!/bin/sh\nif [ "$1" = pkg ]; then echo "$FAKE_PREFIX"; exit 0; fi\n'
-            'printf "%s\\n" "$ROS_DOMAIN_ID" "$@" > "$RECORD"\n')
+            'echo "ros2 must not be the launcher: $*" >&2; exit 9\n')
     _script(bin_dir / 'pgrep', '#!/bin/sh\nexit "${FAKE_PGREP_STATUS:-1}"\n')
     _script(tmp_path / 'place_windows.py',
             '#!/bin/sh\nprintf "%s\\n" "$@" > "$RECORD.check"\n'
             'if [ -n "$FAKE_CHECK_FAILS" ]; then echo "place_windows: $FAKE_CHECK_FAILS" >&2;'
             ' exit 2; fi\n')
+    _script(tmp_path / 'demo_manager.py',
+            '#!/bin/sh\nprintf "%s\\n" "$ROS_DOMAIN_ID" "$@" > "$RECORD"\n'
+            'exit "${FAKE_MANAGER_STATUS:-0}"\n')
     config = tmp_path / 'config'
     config.mkdir()
     return tmp_path
@@ -65,7 +68,8 @@ def _script(path, text):
 def _run(machine, *args, path=True, domain=None, **extra_env):
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(machine), 'RECORD': str(machine / 'record'),
            'DEMO_CONFIG_DIR': str(machine / 'config'),
-           'DEMO_PLACE_WINDOWS': str(machine / 'place_windows.py')}
+           'DEMO_PLACE_WINDOWS': str(machine / 'place_windows.py'),
+           'DEMO_MANAGER': str(machine / 'demo_manager.py')}
     if path:
         env['PATH'] = str(machine / 'bin') + ':' + env['PATH']
     if domain:
@@ -84,16 +88,29 @@ def _record(machine):
     return (machine / 'record').read_text().split()
 
 
-def test_it_launches_the_demo_with_this_machines_files_on_a_private_domain(machine):
+def test_it_starts_the_manager_with_this_machines_files_on_a_private_domain(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
     result = _run(machine)
     assert result.returncode == 0, result.stderr
     domain, *args = _record(machine)
     assert domain == '42'
-    assert args == ['launch', 'marine_simulation', 'demo_launch.py',
-                    'joystick_config:=%s/config/joysticks.yaml' % machine,
-                    'layout_config:=%s/config/layout.yaml' % machine]
+    assert args == ['--joysticks', '%s/config/joysticks.yaml' % machine,
+                    '--layout', '%s/config/layout.yaml' % machine]
     assert 'close the map window' in result.stdout
+
+
+def test_it_does_not_launch_through_ros2_or_the_old_launch_file(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine)
+    assert result.returncode == 0, result.stderr
+    text = SCRIPT.read_text()
+    assert 'demo_launch' not in text and 'ros2 launch' not in text
+    assert 'must not be the launcher' not in result.stderr
+
+
+def test_the_managers_exit_status_is_the_scripts(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    assert _run(machine, FAKE_MANAGER_STATUS='2').returncode == 2
 
 
 def test_an_exported_domain_is_not_used_but_the_demo_override_is(machine):
@@ -120,12 +137,18 @@ def test_the_demo_domain_override_is_checked_and_a_leading_zero_is_not_octal(mac
     assert _record(machine)[0] == '42'
 
 
-def test_extra_arguments_and_the_target_file_are_passed_on(machine):
+def test_extra_options_and_the_target_file_are_passed_on(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml', 'target.json')
-    _run(machine, 'boats:=a,b')
+    _run(machine, '--boats', 'a,b')
     args = _record(machine)
-    assert 'target_area_file:=%s/config/target.json' % machine in args
-    assert args[-1] == 'boats:=a,b'
+    assert ['--target', '%s/config/target.json' % machine] == args[-4:-2]
+    assert args[-2:] == ['--boats', 'a,b']
+
+
+def test_without_a_target_file_the_manager_uses_its_installed_polygon(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    _run(machine)
+    assert '--target' not in _record(machine)
 
 
 @pytest.mark.parametrize('missing', ['joysticks.yaml', 'layout.yaml'])
@@ -138,10 +161,10 @@ def test_a_missing_machine_file_stops_with_a_plain_message(machine, missing):
 
 
 def test_a_machine_file_is_not_needed_when_its_part_is_switched_off(machine):
-    result = _run(machine, 'enable_joysticks:=false', 'enable_window_layout:=false')
+    result = _run(machine, '--no-joysticks', '--no-layout')
     assert result.returncode == 0, result.stderr
-    args = _record(machine)
-    assert not any(a.startswith(('joystick_config', 'layout_config')) for a in args)
+    args = _record(machine)[1:]
+    assert args == ['--no-joysticks', '--no-layout']
     assert not (machine / 'record.check').exists()  # nothing to check without a layout
 
 
@@ -165,7 +188,25 @@ def test_a_map_window_that_is_already_open_stops_the_demo(machine):
     result = _run(machine, FAKE_PGREP_STATUS='0')
     assert result.returncode == 1 and 'already open' in result.stderr
     assert not (machine / 'record').exists()
-    assert _run(machine, 'enable_camp:=false', FAKE_PGREP_STATUS='0').returncode == 0
+    # a profile without the map window does not mind one that is open
+    assert _run(machine, '--profile', 'headless', FAKE_PGREP_STATUS='0').returncode == 0
+
+
+def test_the_headless_profile_needs_no_layout_file_and_passes_nothing_for_it(machine):
+    _files(machine, 'joysticks.yaml')
+    result = _run(machine, '--profile', 'headless')
+    assert result.returncode == 0, result.stderr
+    args = _record(machine)[1:]
+    assert args == ['--joysticks', '%s/config/joysticks.yaml' % machine,
+                    '--profile', 'headless']
+    assert not (machine / 'record.check').exists()
+
+
+def test_the_demo_profile_named_out_loud_is_the_default_demo(machine):
+    result = _run(machine, '--profile=demo')
+    assert result.returncode == 1 and 'joysticks.yaml' in result.stderr
+    _files(machine, 'joysticks.yaml')
+    assert 'layout.yaml' in _run(machine, '--profile', 'demo').stderr
 
 
 def test_no_ros_says_how_to_set_it_up(machine):
@@ -199,11 +240,12 @@ def test_the_script_is_executable():
     assert os.access(SCRIPT, os.X_OK)
 
 
-def test_a_copy_of_the_script_finds_the_checker_in_the_installed_package(machine, tmp_path):
+def test_a_copy_of_the_script_finds_the_tools_in_the_installed_package(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
     lib = machine / 'prefix' / 'lib' / 'marine_simulation'
     lib.mkdir(parents=True)
-    _script(lib / 'place_windows.py', (machine / 'place_windows.py').read_text())
+    for name in ('place_windows.py', 'demo_manager.py'):
+        _script(lib / name, (machine / name).read_text())
     copy = machine / 'home_bin' / 'run_demo.sh'
     copy.parent.mkdir()
     copy.write_text(SCRIPT.read_text())
@@ -214,46 +256,48 @@ def test_a_copy_of_the_script_finds_the_checker_in_the_installed_package(machine
                             timeout=30)
     assert result.returncode == 0, result.stderr
     assert (machine / 'record.check').read_text().split()[0] == '--check'
+    assert _record(machine)[0] == '42'
 
 
-def test_a_layout_or_joystick_file_given_on_the_command_line_replaces_the_default(machine):
+def test_files_given_on_the_command_line_replace_the_default_ones(machine):
     other = machine / 'other.yaml'
     other.write_text('x: 1\n')
-    result = _run(machine, 'layout_config:=%s' % other, 'joystick_config:=%s' % other)
+    result = _run(machine, '--layout', str(other), '--joysticks=%s' % other)
     assert result.returncode == 0, result.stderr  # no default files exist at all
     assert (machine / 'record.check').read_text().split() == ['--check', '--layout', str(other)]
-    args = _record(machine)
-    assert [a for a in args if a.startswith(('layout_config', 'joystick_config'))] == [
-        'layout_config:=%s' % other, 'joystick_config:=%s' % other]
+    args = _record(machine)[1:]
+    assert args == ['--layout', str(other), '--joysticks', str(other)]
 
 
-def test_a_layout_file_given_on_the_command_line_must_exist(machine):
-    result = _run(machine, 'layout_config:=%s/nope.yaml' % machine, 'enable_joysticks:=false')
+def test_a_layout_or_joystick_file_given_on_the_command_line_must_exist(machine):
+    result = _run(machine, '--layout', '%s/nope.yaml' % machine, '--no-joysticks')
+    assert result.returncode == 1 and 'nope.yaml' in result.stderr
+    result = _run(machine, '--joysticks', '%s/nope.yaml' % machine, '--no-layout')
     assert result.returncode == 1 and 'nope.yaml' in result.stderr
 
 
-def test_switches_are_read_in_any_letter_case_like_the_launch_does(machine):
-    result = _run(machine, 'enable_joysticks:=False', 'enable_window_layout:=NO',
-                  'enable_camp:=Off', FAKE_PGREP_STATUS='0')
-    assert result.returncode == 0, result.stderr
+def test_an_option_that_needs_a_value_says_so(machine):
+    result = _run(machine, '--layout')
+    assert result.returncode == 1 and '--layout needs a value' in result.stderr
 
 
-def test_the_last_value_of_a_switch_wins_like_in_the_launch(machine):
-    _files(machine, 'layout.yaml')
-    result = _run(machine, 'enable_joysticks:=false', 'enable_joysticks:=true')
-    assert result.returncode == 1 and 'joysticks.yaml' in result.stderr
-    result = _run(machine, 'enable_joysticks:=true', 'enable_joysticks:=false')
-    assert result.returncode == 0, result.stderr
-
-
-def test_without_boats_no_joystick_file_is_needed(machine):
-    _files(machine, 'layout.yaml')
-    result = _run(machine, 'enable_boats:=false')
-    assert result.returncode == 0, result.stderr
-
-
-def test_a_tilde_in_a_file_argument_is_expanded_for_the_launch_too(machine):
+def test_a_tilde_in_a_file_option_is_expanded_before_the_manager_sees_it(machine):
     (machine / 'mine.yaml').write_text('x: 1\n')
-    result = _run(machine, 'layout_config:=~/mine.yaml', 'enable_joysticks:=false')
+    result = _run(machine, '--no-joysticks', '--layout', '~/mine.yaml')
     assert result.returncode == 0, result.stderr
-    assert 'layout_config:=%s/mine.yaml' % machine in _record(machine)
+    assert ['--layout', '%s/mine.yaml' % machine] == _record(machine)[-2:]
+
+
+def test_a_path_with_spaces_stays_one_argument(machine):
+    spaced = machine / 'my files'
+    spaced.mkdir()
+    (spaced / 'l.yaml').write_text('x: 1\n')
+    result = _run(machine, '--no-joysticks', '--layout', str(spaced / 'l.yaml'))
+    assert result.returncode == 0, result.stderr
+    assert (machine / 'record').read_text().splitlines()[-1] == str(spaced / 'l.yaml')
+
+
+def test_help_needs_no_machine_files(machine):
+    result = _run(machine, '--help')
+    assert result.returncode == 0, result.stderr
+    assert _record(machine)[1:] == ['--help']
