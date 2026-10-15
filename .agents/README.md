@@ -34,7 +34,10 @@ unh_marine_simulation/
 │   └── urdf/                          #   WAM-V URDF model
 ├── mbes_sim/                          # Multibeam sonar simulator
 │   ├── mbes_sim/mbes_sim.py
-│   └── data/US5NH02M.tiff            #   Bathymetry grid (69 MB)
+│   ├── mbes_sim/bathy_grid.py        #   Nearest-cell GDAL lookup (None off the grid / on nodata)
+│   ├── mbes_sim/demo_bathy.py        #   `build_demo_bathy`: CCOM 2 m/4 m compilation -> demo truth grid
+│   ├── test/                         #   pytest: bathy_grid, demo_bathy (fake image service)
+│   └── data/US5NH02M.tiff            #   Chart bathymetry grid (69 MB)
 ├── marine_charts_to_gazebo_world/     # Chart-to-Gazebo converter
 │   └── marine_charts_to_gazebo_world/ #   generate_world, s57_reader, terrain, heightmap, ...
 ├── portsmouth_nh_gazebo/              # Portsmouth NH Gazebo world
@@ -94,7 +97,7 @@ source ../../../.agent/scripts/setup.bash && colcon test --packages-select asv_s
 ```
 
 Known build issues:
-- `mbes_sim` includes a 69 MB bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
+- `mbes_sim` includes a 69 MB chart bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
 - `marine_charts_to_gazebo_world` requires GDAL (`python3-gdal`) and may fail to build if GDAL headers are missing
 - `portsmouth_nh_gazebo` downloads ETOPO data on first launch and caches it in `~/.cache/marine_charts_to_gazebo_world/`
 - `vrx_project11` depends on `marine_interfaces` and `marine_autonomy` from the core layer
@@ -128,4 +131,7 @@ Known build issues:
 - **A four-boat stack (about 50 processes) is not fully discoverable with `ROS_LOCALHOST_ONLY=1`.** Observed: a second process saw only part of the graph. Use default discovery on a private `ROS_DOMAIN_ID` for the self-test.
 - **Empty string parameters cannot be `-p` overrides** (`Failed to parse global arguments`); put them in a parameter file (the demo's `draft_dir` / `prior_store_dir` for `cube_bathymetry`).
 - **`marine_simulation` lint was already failing** (copyright, flake8 I100, pep257 D213 in `bizzyboat_massabesic_launch.py`, `gazebo_*_launch.py`, `simulator_launch.py`); new files there follow the D213 style (summary on the second line).
+- **The packaged chart grid `US5NH02M.tiff` has no nodata tag and no NaN.** Land and drying cells are negative "depths" (minimum -10), and `mbes_sim` does not ping where `chart_depth < 0`. `build_demo_bathy` keeps that convention: its -9999 nodata appears only outside the chart extent, and `BathyGrid.getDepth` returns `None` there.
+- **CCOM GIS 2 m and 16 m image services mark nodata as 3.4e38 by VALUE** (the exported GeoTIFF carries no nodata tag); the 4 m service uses -99999. `demo_bathy` masks anything beyond +-1e4 m. ArcGIS also answers some errors with HTTP 200 and a JSON body, so the fetch checks for a TIFF header and retries.
+- **The demo truth grid is generated, not committed** (`ros2 run mbes_sim build_demo_bathy`, see `marine_simulation/README.md`); `demo_boats_launch.py` falls back to the chart grid with a printed message when it is absent.
 - **`survey_area` is latched: a publisher must be transient_local, and `ros2 topic echo` needs `--qos-durability transient_local --qos-reliability reliable` to see it.** `publish_survey_area.py` (CAMP project file to `marine_interfaces/SurveyArea`, for the `coverage_assessment` scorer) uses reliable, transient_local, depth 100; a volatile publisher never reaches the scorer. Run it in the root namespace so the topic is `/survey_area`. It reads the file once; restart it to pick up an edit. A standard with `a = b = 0` means "not set" to the scorer (0 % meeting), so the node refuses it.

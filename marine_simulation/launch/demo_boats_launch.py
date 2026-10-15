@@ -46,8 +46,10 @@ import glob
 import math
 import os
 import re
+import sys
 from typing import Callable, Dict, List, Sequence, Tuple
 
+from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.actions import GroupAction
@@ -86,6 +88,13 @@ _JS_DEVICE = re.compile(r'js[0-9]+')
 DATUM_ROOT = '~/data/world/datum'
 GEOID_GRID = os.path.join('geoid', 'us_noaa_g2018u0.tif')
 VDATUM_DIR = 'vdatum'
+
+# The demo truth grid built by `ros2 run mbes_sim build_demo_bathy` (see the README). The
+# launch uses it when it exists and otherwise falls back to the packaged chart grid.
+DEMO_GRID = '~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif'
+DEMO_GRID_ENV = 'MBES_DEMO_GRID'
+BUILD_COMMAND = ('ros2 run mbes_sim build_demo_bathy --bbox -70.7405 43.0537 -70.6695 43.0937 '
+                 '--out ' + DEMO_GRID)
 
 # asv_sim zeroes throttle and rudder after 0.5 s without a command, so a held
 # stick needs the joystick driver to repeat faster than that (2 Hz) with margin.
@@ -544,6 +553,66 @@ def boat_actions(
     return GroupAction(actions)
 
 
+def resolve_mbes_grid(requested: str, env, demo_grid: str, chart_grid: str) -> Tuple[str, str]:
+    """
+    Choose the ground-truth grid and say why.
+
+    An explicit argument wins and must be a file. Otherwise ``$MBES_DEMO_GRID``, then the
+    demo grid when it exists, then the packaged chart grid. Returns ``(path, message)``.
+    """
+    if requested:
+        path = os.path.expanduser(requested)
+        if not os.path.isfile(path):
+            raise ValueError('mbes_grid_file %r is not a file' % requested)
+        return path, 'mbes_grid_file: %s (argument)' % path
+    from_env = env.get(DEMO_GRID_ENV, '')
+    if from_env:
+        path = os.path.expanduser(from_env)
+        if not os.path.isfile(path):
+            raise ValueError('$%s=%r is not a file' % (DEMO_GRID_ENV, from_env))
+        return path, 'mbes_grid_file: %s (from $%s)' % (path, DEMO_GRID_ENV)
+    demo = os.path.expanduser(demo_grid)
+    if os.path.isfile(demo):
+        return demo, 'mbes_grid_file: %s (demo truth grid)' % demo
+    return chart_grid, (
+        'WARNING: mbes_grid_file: demo truth grid not found at %s; falling back to the 5 m '
+        'chart grid '
+        '%s. Build the demo grid with: %s' % (demo, chart_grid, BUILD_COMMAND))
+
+
+def check_mbes_grid(path: str, boats: Sequence[Boat]) -> List[str]:
+    """
+    Refuse a grid the sonar cannot use and return warnings for one it can barely use.
+
+    Raises ``ValueError`` when GDAL cannot read the file, or its CRS is not a projected one in
+    metres (``mbes_sim`` converts positions with that CRS and treats the cell values as
+    metres of depth, positive down). The warnings name every boat whose start position has no
+    water (outside the grid, nodata, or a land or drying cell), since a sonar over such a
+    cell publishes nothing.
+    """
+    from mbes_sim.bathy_grid import BathyGrid
+    from osgeo import osr
+    try:
+        grid = BathyGrid(path)
+        srs = osr.SpatialReference(wkt=grid.dataset.GetProjection())
+        projected = bool(srs.IsProjected())
+        metres = projected and abs(srs.GetLinearUnits() - 1.0) < 1e-9
+    except (RuntimeError, AttributeError) as error:
+        raise ValueError('mbes grid %r cannot be read by GDAL: %s' % (path, error))
+    if not metres:
+        raise ValueError('mbes grid %r is not in a projected CRS with metre units; mbes_sim '
+                         'needs one (UTM)' % path)
+    warnings = []
+    for boat in boats:
+        depth = grid.getDepthAtLatLon(boat.lat, boat.lon)
+        if depth is None or depth <= 0:
+            reason = 'off the grid or nodata' if depth is None else 'depth %.2f' % depth
+            warnings.append('WARNING: boat %s starts at %.5f, %.5f where the grid has no water '
+                            '(%s); its sonar will publish nothing there'
+                            % (boat.name, boat.lat, boat.lon, reason))
+    return warnings
+
+
 def launch_setup(context, *args, **kwargs):
     """Resolve the arguments, run the fail-fast checks and build the boats."""
 
@@ -556,9 +625,12 @@ def launch_setup(context, *args, **kwargs):
     roster = load_roster(arg('roster_file'))
     boats = select_boats(roster, arg('boats'))
 
-    mbes_grid_file = arg('mbes_grid_file')
-    if not os.path.isfile(mbes_grid_file):
-        raise ValueError('mbes_grid_file %r is not a file' % mbes_grid_file)
+    chart_grid = os.path.join(get_package_share_directory('mbes_sim'), 'data', 'US5NH02M.tiff')
+    mbes_grid_file, grid_message = resolve_mbes_grid(
+        arg('mbes_grid_file'), os.environ, DEMO_GRID, chart_grid)
+    print('[demo_boats_launch] ' + grid_message, file=sys.stderr, flush=True)
+    for warning in check_mbes_grid(mbes_grid_file, boats):
+        print('[demo_boats_launch] ' + warning, file=sys.stderr, flush=True)
     settings = {
         'ping_interval': parse_float(arg('ping_interval'), 'ping_interval', positive=True),
         'beam_count': parse_positive_int(arg('beam_count'), 'beam_count'),
@@ -626,10 +698,10 @@ def generate_launch_description():
         declare('current_speed', TextSubstitution(text='0.0'),
                 'Water current in m/s. asv_sim itself defaults to 1.0 m/s toward 090, '
                 'which drifts every boat; the demo defaults to none.'),
-        declare('mbes_grid_file',
-                PathJoinSubstitution([FindPackageShare('mbes_sim'), 'data',
-                                      'US5NH02M.tiff']),
-                'Ground-truth bathymetry GeoTIFF sampled by the simulated multibeams.'),
+        declare('mbes_grid_file', TextSubstitution(text=''),
+                'Ground-truth bathymetry GeoTIFF sampled by the simulated multibeams. Empty '
+                '(default): $MBES_DEMO_GRID, else the demo truth grid at %s when it exists, '
+                'else the packaged 5 m chart grid.' % DEMO_GRID),
         declare('cell_size', TextSubstitution(text='1.0'),
                 'CUBE grid cell size in metres.'),
         declare('ping_interval', TextSubstitution(text='0.2'),
