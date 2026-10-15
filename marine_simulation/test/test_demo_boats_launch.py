@@ -620,3 +620,21 @@ def test_the_shipped_chart_grid_passes_the_check_for_the_roster_boats(roster):
     from ament_index_python.packages import get_package_share_directory
     chart = os.path.join(get_package_share_directory('mbes_sim'), 'data', 'US5NH02M.tiff')
     assert demo.check_mbes_grid(chart, roster) == []
+
+
+# -- launch_setup really runs the grid check -----------------------------------------------------
+
+def test_launch_setup_propagates_a_refused_grid(tmp_path, no_host_checks, monkeypatch):
+    def refuse(path, boats):
+        raise ValueError('mbes grid is in degrees')
+    monkeypatch.setattr(demo, 'check_mbes_grid', refuse)
+    with pytest.raises(ValueError, match='in degrees'):
+        demo.launch_setup(_setup_context(tmp_path))
+
+
+def test_launch_setup_prints_the_grid_warnings_to_stderr(tmp_path, no_host_checks,
+                                                         monkeypatch, capsys):
+    monkeypatch.setattr(demo, 'check_mbes_grid',
+                        lambda path, boats: ['WARNING boat dry starts on land'])
+    demo.launch_setup(_setup_context(tmp_path))
+    assert 'WARNING boat dry starts on land' in capsys.readouterr().err
