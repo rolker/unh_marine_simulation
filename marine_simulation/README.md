@@ -11,7 +11,9 @@ described in the repository's `.agents/README.md`.
 One command starts everything on the demo computer: the boats, the coverage
 scorer, CAMP on a known view with the planned layers, and the windows on the
 right screens. `scripts/run_demo.sh` (installed as
-`lib/marine_simulation/run_demo.sh`) wraps `demo_launch.py` for the helper.
+`lib/marine_simulation/run_demo.sh`) is the helper's command: it finds this
+computer's files and starts the launch manager (`demo_manager.py`, see "Demo launch
+manager" below). That is the only way to start the demo.
 
 ### Helper card
 
@@ -47,7 +49,7 @@ The up-arrow command is the one typed last, so type it once yourself first:
 
 1. `sudo apt install wmctrl` (it is `<exec_depend>wmctrl</exec_depend>`, so
    `rosdep install` also gets it). Window placement needs an X11 session: at
-   the login screen choose "GNOME on Xorg"; on Wayland the launch refuses to
+   the login screen choose "GNOME on Xorg"; on Wayland the demo refuses to
    start and says so.
 2. Create `~/.config/marine_simulation_demo/` holding:
    - `env.bash`: the line(s) that source the workspace `setup.bash`.
@@ -61,56 +63,66 @@ The up-arrow command is the one typed last, so type it once yourself first:
    `run_demo.sh`, and check the card above against what appears. This is a
    human check; the tests below cannot do it.
 
-### What the one launch does
+### What the one command does
 
 ```bash
 export ROS_DOMAIN_ID=42   # run_demo.sh sets 42 unless DEMO_ROS_DOMAIN_ID (0 to 101) is set, e.g. when two people share a host
-ros2 launch marine_simulation demo_launch.py \
-    joystick_config:=$HOME/.config/marine_simulation_demo/joysticks.yaml \
-    layout_config:=$HOME/.config/marine_simulation_demo/layout.yaml
+run_demo.sh                # the helper's command; the options below are passed on
+# what it runs, with this computer's files:
+ros2 run marine_simulation demo_manager.py \
+    --joysticks $HOME/.config/marine_simulation_demo/joysticks.yaml \
+    --layout $HOME/.config/marine_simulation_demo/layout.yaml
 ```
 
-Every argument of `demo_boats_launch.py` (for example `tide_speed_factor:=1`)
-also works here: arguments given on the command line reach the included launch.
+`demo_manager.py` starts five groups under the launch manager: the boats, CAMP (private
+settings, emptied tile cache), the target-area publisher, the scorer (its target exists
+before it starts) and, once CAMP is up, the window placement. The groups, their rules and the
+profiles are in "Demo launch manager" below.
 
-| Argument | Default | Meaning |
+| Option | Default | Meaning |
 |---|---|---|
-| `boats`, `roster_file`, `joystick_config`, `enable_joysticks` | as in the boats launch | Passed to `demo_boats_launch.py`. |
-| `layout_config` | `config/demo_layout.yaml` | Window layout of this computer. |
-| `camp_profile` | `config/demo_camp_profile.conf` | Fixed part of the CAMP settings. |
-| `camp_view_config` | `config/demo_camp_view.yaml` | CAMP's starting scale (and optional centre). |
-| `target_area_file` | empty | Saved CAMP `.json`; CAMP opens it and (later) the target-area publisher sends it to the scorer. |
-| `enable_boats`, `enable_camp`, `enable_scorer`, `enable_window_layout` | `true` | Switch a part off (testing, or an emergency subset). |
-| `enable_target_area` | `false` | Start the target-area publisher of issue #93. Refused with the reason until `publish_survey_area.py` is installed with this package. |
+| `--boats a,b` | the whole roster | Comma separated boat names; the scorer and CAMP's layers follow. |
+| `--roster FILE` | `config/demo_roster.yaml` | Boat roster: the only place boat names live. |
+| `--joysticks FILE` | `config/demo_joysticks.yaml` (`run_demo.sh`: `~/.config/marine_simulation_demo/joysticks.yaml`) | Gamepad bindings of this computer. |
+| `--no-joysticks` | off | Do not start the `joy_linux` drivers. |
+| `--layout FILE` | `config/demo_layout.yaml` (`run_demo.sh`: `layout.yaml` in the config directory) | Window layout of this computer. |
+| `--no-layout` | off | Do not move the windows. |
+| `--target FILE` | `config/demo_target_polygon_camp.json` (`run_demo.sh`: `target.json` when present) | Saved CAMP `.json` with the target survey area: CAMP opens it and the publisher sends it to the scorer. |
+| `--profile NAME` | `demo` | `demo`, `headless` (no CAMP, no placement) or `boats`. |
+| `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
 
-**Closing the CAMP window (or CAMP dying) shuts the whole launch down**
-(whenever `enable_camp` is true), so the helper stops everything by closing the
-map window.
+The CAMP profile and view are `config/demo_camp_profile.conf` and
+`config/demo_camp_view.yaml` (CAMP's starting scale and optional centre). Any option of
+`demo_boats_launch.py` that is not listed (for example `tide_speed_factor`) is not
+reachable from the manager: add it to the `boats` group's `arguments` in
+`config/demo_manager.yaml` when it is needed.
 
-The launch refuses to start, before anything else runs, when: a boolean argument
-is not a clear yes or no; the layout file is malformed; a monitor it names is not
-connected; the session is not X11; `wmctrl` is missing; `target_area_file` is
-given and is not a file; a CAMP is already running (window placement could pick
-the wrong window); another demo already holds the lock in
-`~/.local/state/marine_simulation_demo`. `run_demo.sh` checks the layout, the
-session and a running CAMP itself first and prints the reason as one sentence;
-the launch's own checks show as a Python error message. Boats and scorer start in
-parallel. The scorer is configured as soon as it
-is up and activated once, by the scorer package's own launch file; its parameters
-are generated from the roster (so `boats:=a,b` scores exactly those boats) into
-`~/.local/state/marine_simulation_demo/run/coverage_assessment.yaml`.
+**Closing the CAMP window (or CAMP dying) stops everything and the manager exits**, so
+the helper stops the demo by closing the map window.
+
+The manager refuses to start, before anything else runs, and prints `THE DEMO DID NOT
+START: <reason>` with exit status 2, when: another demo already holds the lock in
+`~/.local/state/marine_simulation_demo`; a CAMP is already running (window placement could
+pick the wrong window); the joystick, layout or target file is not a file; the layout is
+malformed, names a monitor that is not connected, or the session is not X11 or `wmctrl` is
+missing (the same `place_windows.py --check` that `run_demo.sh` makes first and reports as
+one sentence). `run_demo.sh` itself refuses, with the same phrase and exit status 1, when
+this computer's `joysticks.yaml` or `layout.yaml` is missing, the domain override is not
+0 to 101, ROS is not set up, or a map window is open. The scorer's parameters are
+generated from the roster (so `--boats a,b` scores exactly those boats) into a temporary
+directory the manager removes on exit.
 
 ### CAMP starts in a known state
 
 CAMP keeps its view, layer lists and layer settings in a Qt settings file.
-`demo_launch.py` gives CAMP its own settings directory
+The demo gives CAMP its own settings directory (`demo_camp_launch.py`, the manager's `camp` group)
 (`XDG_CONFIG_HOME=~/.local/state/marine_simulation_demo/xdg_config`) and writes
 that file fresh on every start, so the operator's own CAMP settings are never read
 or changed. The live coverage tile cache, which CAMP keeps outside its settings
 file, is moved to `~/.local/state/marine_simulation_demo/live_tile_cache` and emptied
 on every start too, so a previous session's tiles are not warm-loaded. Both
 directories are guarded: they are only deleted at those exact paths, never through a
-symlink, and only when they hold the marker file the launch writes. The file is
+symlink, and only when they hold the marker file the demo writes. The file is
 `config/demo_camp_profile.conf` (OpenStreetMap as the only background map) plus,
 generated at launch:
 
@@ -144,7 +156,7 @@ Known limits of this approach:
   rehearsal confirms it matches this graph.
 - The file is only the first source of truth for the layers: an operator who
   changes them in CAMP during the demo changes only that run.
-- `camp_launch.py` takes no arguments, so the demo launch starts the CAMP
+- `camp_launch.py` takes no arguments, so `demo_camp_launch.py` starts the CAMP
   executable itself (rolker/camp#240 asks for launch arguments).
 
 ### Window layout
@@ -158,37 +170,43 @@ for the scoreboard (not built yet); it also shows the one-display variant.
 all), takes the newest window that matches, clears its full screen and maximised
 state, moves it with `wmctrl`, checks the geometry and moves it once more if the
 application resized itself, and exits non-zero naming any window it could not
-place; the launch then prints a banner saying the windows are not in place.
+place. It runs as the manager's `layout` group, a **run-once** group: it starts when
+CAMP is running, and a clean exit just ends the group (status `STOPPED`, detail
+`exited(0)`; nothing else stops). A failure makes the group `FAILED`, logged at ERROR
+level, and the launch file prints `*** THE WINDOWS ARE NOT IN PLACE ... ***`; the rest of
+the demo keeps running. `launch_manager_proto command start layout` places the windows
+again, after `clear-failure layout` when it failed.
 `place_windows.py --check --layout FILE` only checks the session, tools, layout
-and monitors. Placement runs once at start: a CAMP window that is closed and
-reopened by hand is not placed again (close the map window to stop and start the
-demo again instead).
+and monitors. A CAMP window that is closed and reopened by hand is not placed again
+(close the map window to stop and start the demo again instead).
 
 ### Target area
 
-The target polygon is drawn in CAMP and saved as a `.json` project file. Pass it
-as `target_area_file:=` (or put it at `~/.config/marine_simulation_demo/target.json`
-for `run_demo.sh`): CAMP opens it, which shows the outline. The scorer reads its
-target from the `survey_area` topic; the node that publishes it from the same file
-is issue #93's `publish_survey_area.py`. Until that is installed,
-`enable_target_area:=true` is refused and the scorer starts with no area.
+The target polygon is drawn in CAMP and saved as a `.json` project file. The demo uses
+`config/demo_target_polygon_camp.json` unless `--target FILE` is given (`run_demo.sh` passes
+`~/.config/marine_simulation_demo/target.json` when it exists). The same file goes to
+two places: CAMP opens it, which shows the outline, and the manager's `target_area` group
+runs `publish_survey_area.py` on it, which sends it to the scorer on the latched
+`survey_area` topic. The scorer's group `requires` the publisher, so it never starts without a
+target; a file the publisher refuses makes `target_area` `FAILED` and the scorer waits,
+`BLOCKED`, naming it.
 
 ### Checks
 
 ```bash
 ./simulation_ws/test.sh marine_simulation          # unit tests and lint
-# the whole display without CAMP and windows (needs the datum grids and no gamepads):
+# the manager's headless profile (boats, target area, scorer; no CAMP, no windows; needs the
+# datum grids and no gamepads):
 ros2 run marine_simulation demo_boats_selftest.py --start-launch --demo --boats bluefin,clownfish
 ```
 
-`--demo` starts `demo_launch.py` with `enable_camp:=false
-enable_window_layout:=false`, then checks the boats as usual and that
-`coverage_assessment` becomes active and assesses a target area the self-test
-publishes itself. Not covered by any test: CAMP's real window class, the
-`wmctrl` calls on a live desktop, the view after the window is made full screen,
-and the cold-boot rehearsal. `~/.local/state/marine_simulation_demo` stays after the
-demo ends (settings, tile cache, scorer parameters, lock); it is small and reset on
-every start, so there is no need to delete it.
+`--demo` starts `demo_manager.py --profile headless` instead of the boats launch, then
+checks the boats as usual and that `coverage_assessment` becomes active and assesses a target
+area the self-test publishes itself. Not covered by any test: CAMP's real window class, the
+`wmctrl` calls on a live desktop, the `layout` group after a real CAMP is up, the target
+file opening in CAMP, the view after the window is made full screen, and the cold-boot
+rehearsal. `~/.local/state/marine_simulation_demo` stays after the demo ends (settings,
+tile cache, lock); it is small and reset on every start, so there is no need to delete it.
 
 ## Demo boats
 
@@ -207,9 +225,9 @@ ros2 launch marine_simulation demo_boats_launch.py enable_joysticks:=false
 # check the whole thing without hardware (starts and stops the launch itself)
 ros2 run marine_simulation demo_boats_selftest.py --start-launch
 
-# the same boats under the launch manager, which also starts CAMP and the scorer and
-# stops everything when CAMP is closed (see "Demo launch manager" below)
-ros2 run marine_simulation demo_manager.py
+# the whole demo (boats, CAMP, target area, scorer, window placement), which stops everything
+# when CAMP is closed: run_demo.sh, i.e. the launch manager (see "Demo launch manager" below)
+ros2 run marine_simulation demo_manager.py --no-layout
 ```
 
 The launch starts about 50 processes and other ROS machines on the network
@@ -504,30 +522,36 @@ source setup.bash && ./simulation_ws/build.sh asv_sim marine_simulation
 
 `demo_manager.py` runs the demo under `launch_manager_proto` (issue #97), the prototype of
 the persistent launch and lifecycle manager designed in
-`unh_marine_autonomy/docs/launch_manager.md`. Its README describes the manager; this is how
-the demo uses it.
+`unh_marine_autonomy/docs/launch_manager.md`. Since issue #102 it is the only way to start
+the demo: `run_demo.sh` calls it. The manager's own README describes the manager; this is
+how the demo uses it.
 
 ```bash
 export ROS_DOMAIN_ID=...                 # a private one
-ros2 run marine_simulation demo_manager.py                      # boats, CAMP, scorer
-ros2 run marine_simulation demo_manager.py --profile headless   # no CAMP
-ros2 run marine_simulation demo_manager.py --boats bluefin,clownfish --no-joysticks
+run_demo.sh                                                     # the helper's command
+ros2 run marine_simulation demo_manager.py --layout my_layout.yaml   # the same, by hand
+ros2 run marine_simulation demo_manager.py --profile headless   # no CAMP, no window placement
+ros2 run marine_simulation demo_manager.py --boats bluefin,clownfish --no-joysticks --no-layout
 ros2 run launch_manager_proto launch_manager_proto status       # what is it doing?
 ```
 
-`config/demo_manager.yaml` has three groups and three profiles:
+`config/demo_manager.yaml` has five groups and three profiles:
 
 | Group | Launch file | Rule |
 |---|---|---|
-| `boats` | `demo_boats_launch.py` (with `lifecycle_guard:=false`) | READY when every boat's nine lifecycle nodes are `active` |
-| `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, the same code as `demo_launch.py`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
-| `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_launch.scorer_parameters` (map frame = the first boat's) | `requires: [boats]`, lifecycle node `/coverage_assessment` to `active` |
+| `boats` | `demo_boats_launch.py` (with `lifecycle_guard:=false`) | READY when every boat's nine lifecycle nodes are `active`; `follows: [camp]` |
+| `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, via `marine_simulation.demo_support.camp_actions`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
+| `target_area` | `demo_target_area_launch.py` (`publish_survey_area.py`, latched, on the target file) | READY when `/survey_area_publisher` is in the graph; `follows: [camp]` |
+| `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_support.scorer_parameters` (map frame = the first boat's) | `requires: [boats, target_area]`, `follows: [camp]`, lifecycle node `/coverage_assessment` to `active` |
+| `layout` | `demo_layout_launch.py` (`place_windows.py`, once) | `requires: [camp]`, `follows: [camp]`, `restart: never` (run once, see "Window layout") |
 
-Profiles: `demo` (all three), `headless` (boats and scorer), `boats` (boats only). The
-boats and the scorer **follow** CAMP: closing CAMP's window stops them and ends the manager,
-so the terminal returns. Boat names come from `config/demo_roster.yaml` only; the
-configuration has placeholders that the script fills in. The target-area publisher (#93) is
-not a group yet.
+Profiles: `demo` (all five), `headless` (boats, target area and scorer), `boats` (boats
+only); `--no-layout` takes `layout` out of every profile. The groups that **follow** CAMP stop
+when its window closes and the manager exits, so the terminal returns. Boat names come from
+`config/demo_roster.yaml` only; the configuration has placeholders that the script fills in.
+The helpers the script and the launch files share (`marine_simulation.roster`,
+`marine_simulation.demo_support`) are an installed Python package; nothing is loaded by file
+path, and a test pins that.
 
 The manager is the only thing that configures and activates the boats' lifecycle nodes. It
 sends every transition itself, checks the state first and again just before sending, and a
