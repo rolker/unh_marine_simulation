@@ -135,3 +135,10 @@ compilation minus chart where both exist (2660823 cells): median 0.89 m, 5th -0.
 - [x] (suggestion) Ping-centre gate ignored the tide while the beam loop did not — fixed at `b83bd26`, `mbes_sim/mbes_sim/mbes_sim.py:160`
 - [x] (suggestion) Partial files created outside the cleanup scope — fixed at `b83bd26`, `demo_bathy.py`
 - [x] (suggestion) spatialReference with only latestWkid raised KeyError — fixed at `b83bd26`, `demo_bathy.py`
+
+## Implementation
+
+**Merge-up of origin/jazzy (f39f679)** after PR #95 (demo polygon publisher, issue #93) merged.
+- Conflicts: `.agents/README.md` (pitfall bullets) and `marine_simulation/README.md` (new documentation sections); both were adjacent additions, resolved by keeping both sides.
+- Build: mbes_sim and marine_simulation (plus their workspace dependencies) build clean.
+- Tests: `303 tests, 0 errors, 8 failures, 0 skipped`; the 8 failures are the pre-existing marine_simulation ament lint failures (copyright, flake8 I100, pep257 D213) in launch files this issue does not touch.
