@@ -465,7 +465,7 @@ class SelfTest:
 
 
 def start_launch(cmd):
-    """Start the demo launch in its own process group."""
+    """Start what the self-test runs against (a launch or the manager) in its own process group."""
     return subprocess.Popen(cmd, start_new_session=True)
 
 

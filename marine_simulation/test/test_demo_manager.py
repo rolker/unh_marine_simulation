@@ -628,3 +628,41 @@ def test_the_headless_profile_needs_no_display_checks(run_manager_spy, monkeypat
     monkeypatch.setattr(demo_support, 'running_camp_pids', lambda *a, **k: [777])
     assert demo_manager.main(['--no-joysticks', '--profile', 'headless',
                               '--layout', '/nope/l.yaml']) == 0
+
+
+# -- there is one way to start the demo, and nothing is loaded by file path ---------------------
+
+def _shipped_files(*directories):
+    for directory in directories:
+        for path in sorted((PACKAGE / directory).rglob('*')):
+            if path.is_file() and '__pycache__' not in path.parts:
+                yield path
+
+
+def test_demo_launch_is_gone_as_a_start_path():
+    assert not (PACKAGE / 'launch' / 'demo_launch.py').exists()
+    assert not (PACKAGE / 'test' / 'test_demo_launch.py').exists()
+    stale = [str(p.relative_to(PACKAGE)) for p in _shipped_files(
+        'launch', 'scripts', 'config', 'marine_simulation')
+        if 'demo_launch.py' in p.read_text(errors='replace')]
+    assert stale == []
+    cmake = (PACKAGE / 'CMakeLists.txt').read_text()
+    assert 'demo_launch' not in cmake and 'demo_manager.py' in cmake
+
+
+def test_nothing_that_ships_loads_a_module_by_file_path():
+    offenders = [str(p.relative_to(PACKAGE)) for p in _shipped_files(
+        'launch', 'scripts', 'marine_simulation')
+        if p.suffix in ('.py', '') and 'spec_from_file_location' in p.read_text(
+            errors='replace')]
+    assert offenders == []
+
+
+def test_the_helpers_the_manager_and_the_launch_files_share_are_importable_modules():
+    from marine_simulation import demo_support, roster as roster_module
+    for module in (demo_support, roster_module):
+        assert pathlib.Path(module.__file__).is_file()
+    # the boats launch re-exports the roster's functions rather than keeping copies
+    boats = _launch_module('demo_boats_launch.py')
+    for name in ('Boat', 'load_roster', 'select_boats', 'parse_bool'):
+        assert getattr(boats, name) is getattr(roster_module, name), name

@@ -41,7 +41,7 @@ groups:
   camp:
     description: CAMP, the operator display; closing it stops the demo
     # Not CAMP's own camp_launch.py: that runs on the operator's settings and the shared live
-    # tile cache. demo_camp_launch.py starts CAMP on the demo profile, like demo_launch.py.
+    # tile cache. demo_camp_launch.py starts CAMP on the demo profile.
     launch: {package: marine_simulation, file: demo_camp_launch.py}
     arguments:
       boats: {type: string, default: '${boats}'}
