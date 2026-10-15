@@ -236,3 +236,23 @@ Dismissed after checking: Gemini's claim that stopping one group shuts the share
 ### Verification
 - `./simulation_ws/test.sh launch_manager_proto marine_simulation mbes_sim`: Summary: 713 tests, 0 errors, 8 failures, 13 skipped. The 8 failures are the pre-existing marine_simulation lint in files this work does not touch (copyright in bizzyboat_massabesic_launch.py, flake8 I100 in simulator_launch.py, pep257 D213 in three launch files).
 - Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 69.55s after the last commit; no process of this worktree left afterwards.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-15 13:59 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-97
+**Addressed**: independent review of the post-round-2 commits (changes-requested: 1 must-fix, 3 suggestions)
+**Commits**: `268ad54` (item 4), `5a936f8` (items 1 to 3, one commit because they change the same two files)
+
+### Actions
+- [x] (must-fix) 1 The demo lock did not survive a CAMP group restart (`demo_camp_launch.py` is loaded afresh by path per start, so its module-level lock table was empty each time). The manager now takes the lock once in `demo_manager.main()` (`take_demo_lock`, module kept alive in `_HELD`); `demo_camp_launch.py` no longer acquires it. Tests: two loads of `demo_camp_launch.py` by path both start while a third-party flock is still refused after a garbage collection; a lock held by another process refuses the manager; the camp launch file has no acquire call.
+- [x] (suggestion) 2 Lock at manager start: a second manager or `demo_launch.py` is refused at startup; `main()` prints "THE DEMO DID NOT START: ..." and returns 2 (test checks no traceback).
+- [x] (suggestion) 3 `scorer_parameters` failures (ValueError, OSError, YAMLError, PackageNotFoundError, ImportError) return 2 with a message; parametrized test.
+- [x] (suggestion) 4 Two tests that `launch_setup` runs `check_mbes_grid`: a ValueError propagates, a warning reaches stderr.
+- Note: commit `02881c5`'s message mentions only the grid stub; it also fixes the E302 blank-line in the merged `test_demo_boats_launch.py`.
+
+### Verification
+- `./simulation_ws/test.sh launch_manager_proto marine_simulation mbes_sim`: Summary: 723 tests, 0 errors, 8 failures, 1 skipped, the 8 baseline lint failures only.
+- Host-only on `ROS_DOMAIN_ID=173`: `test_demo_manager_live.py` 1 passed in 71.62s; no process of this worktree left.
