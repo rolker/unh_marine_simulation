@@ -9,11 +9,13 @@
 timeout_seconds: 90
 
 windows:
-  # CAMP, full screen on the big display.
+  # CAMP, maximised on the big display. Maximised keeps the title bar and its Close button on
+  # screen, which is how the operator ends the demo without any keyboard shortcut. (Use
+  # `fullscreen: true` instead to cover the whole monitor with no title bar, or a `rect`.)
   - name: camp
     match: {wm_class: CCOMAutonomousMissionPlanner}
     monitor: HDMI-0
-    fullscreen: true
+    maximized: true
 
   # The second display is reserved for the scoreboard (not built yet), so nothing
   # is placed there now. When it exists, add an entry for it:
@@ -24,7 +26,7 @@ windows:
   #   fullscreen: true
 
 # One display only (a laptop, say)? Keep the camp entry, point it at that monitor,
-# and put a window in a corner instead of full screen with a rectangle, measured in
+# and put a window in a corner instead of maximised with a rectangle, measured in
 # pixels from the monitor's top left corner:
 #
 #   - name: camp

@@ -150,7 +150,7 @@ generated at launch:
   CAMP's own Web Mercator formula; the scale is `scale` in that file. CAMP stores
   the centre in map units, so the value in the settings file is exact and the same
   on every start. What the helper sees can differ: CAMP applies the centre at its
-  first window size and the window is then made full screen, which may shift the
+  first window size and the window is then maximised, which may shift the
   map (rolker/camp#242). Check the view at the rehearsal.
 - one live coverage layer per roster boat, switched on (`live_enabled` and
   `visible`), keyed by `/<boat>/sensors/mbes/cube_bathymetry`.
@@ -181,8 +181,12 @@ Known limits of this approach:
 
 `config/demo_layout.yaml` is the example. Each entry names a window (by WM_CLASS
 and/or title), a monitor (as `xrandr --listmonitors` names it) and either
-`fullscreen: true` or a `rect` in pixels from that monitor's top left corner. The
-example puts CAMP full screen on the big display and leaves the second display
+`maximized: true` (fills the monitor's work area and keeps the title bar with its Close
+button, so the operator never needs a keyboard shortcut), `fullscreen: true` (covers the whole
+monitor, no title bar) or a `rect` in pixels from that monitor's top left corner; exactly one
+of the three. A maximised window counts as in place when it lies on its monitor and covers at
+least 85 % of it (a geometry check, like the other two). The
+example puts CAMP maximised on the big display and leaves the second display
 for the scoreboard (not built yet); it also shows the one-display variant.
 `scripts/place_windows.py` waits for the windows (90 s by default, one deadline for
 all), takes the newest window that matches, clears its full screen and maximised
@@ -232,7 +236,7 @@ ros2 run marine_simulation demo_boats_selftest.py --start-launch --demo --boats 
 checks the boats as usual and that `coverage_assessment` becomes active and assesses a target
 area the self-test publishes itself. Not covered by any test: CAMP's real window class, the
 `wmctrl` calls on a live desktop, the `layout` group after a real CAMP is up, the target
-file opening in CAMP, the view after the window is made full screen, and the cold-boot
+file opening in CAMP, the view after the window is maximised, and the cold-boot
 rehearsal. `~/.local/state/marine_simulation_demo` stays after the demo ends (settings,
 tile cache, lock); it is small and reset on every start, so there is no need to delete it.
 
