@@ -317,3 +317,17 @@ def test_equals_forms_of_the_options_are_read_like_the_separate_forms(machine):
     assert result.returncode == 0, result.stderr   # no layout needed, no CAMP check
     assert _record(machine)[1:] == ['--joysticks', '%s/config/joysticks.yaml' % machine,
                                     '--profile', 'headless', '--target', '%s/t.json' % machine]
+
+
+def test_extra_boats_launch_arguments_are_forwarded_to_the_manager_untouched(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine, 'tide_speed_factor:=1', '--boats', 'a,b', 'cell_size:=2 5')
+    assert result.returncode == 0, result.stderr
+    lines = (machine / 'record').read_text().splitlines()
+    assert lines[-4:] == ['tide_speed_factor:=1', '--boats', 'a,b', 'cell_size:=2 5']
+
+
+def test_a_domain_of_only_zeros_means_domain_zero(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    assert _run(machine, DEMO_ROS_DOMAIN_ID='0000').returncode == 0
+    assert _record(machine)[0] == '0'

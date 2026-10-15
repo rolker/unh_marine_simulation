@@ -57,6 +57,7 @@ import tempfile
 from typing import Dict, List, Sequence
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
+from launch_manager_proto.config import ArgumentSpec
 from marine_simulation import demo_support
 from marine_simulation import roster
 import yaml
@@ -89,6 +90,24 @@ def scorer_parameters(boats: Sequence, template: dict = None) -> dict:
         with open(scorer_template_path()) as f:
             template = yaml.safe_load(f)
     return demo_support.scorer_parameters(template, boats)
+
+
+def boats_launch_arguments(spec, items: Sequence[str], declared: Sequence[str] = None) -> Dict:
+    """
+    Return the extra ``name:=value`` arguments for the ``boats`` group, checked.
+
+    A name must be declared by ``demo_boats_launch.py`` (read from the launch file itself) and
+    must not be one the configuration already gives the group (``--boats``, ``--roster``,
+    ``--no-joysticks``/``--joysticks`` and the lifecycle guard are set by the manager).
+    """
+    if not items:
+        return {}
+    if 'boats' not in spec.groups:
+        raise ValueError('this configuration has no boats group to give %s to' % ' '.join(items))
+    if declared is None:
+        declared = demo_support.declared_launch_arguments()
+    return demo_support.parse_launch_arguments(
+        items, declared, list(spec.groups['boats'].arguments))
 
 
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
@@ -129,8 +148,29 @@ def check_layout_tool(layout: str, tool: str = None) -> None:
                          % reason.replace('place_windows: ', '', 1))
 
 
+def check_target_tool(target: str, tool: str = None) -> None:
+    """
+    Raise ``ValueError`` with the reason unless ``target`` is a CAMP file the publisher accepts.
+
+    Runs ``publish_survey_area.py --check``: without it a malformed file would only show as a
+    publisher node that appears in the graph, publishes nothing and exits.
+    """
+    tool = tool or os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                'publish_survey_area.py')
+    try:
+        result = subprocess.run([tool, '--check', target], capture_output=True, text=True,
+                                timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError('cannot run the target area check %s: %s' % (tool, error)) from None
+    if result.returncode != 0:
+        reason = (result.stderr or result.stdout).strip() or 'exit status %d' % result.returncode
+        raise ValueError('the target area file cannot be used: %s'
+                         % reason.replace('publish_survey_area: ', '', 1))
+
+
 def preflight(members: Sequence[str], enable_joysticks: bool, joystick_config: str,
-              layout_config: str, target_file: str, check_layout=None, camp_pids=None) -> None:
+              layout_config: str, target_file: str, check_layout=None, camp_pids=None,
+              check_target=None) -> None:
     """
     Refuse, with the reason, what would make the groups of ``members`` start wrong.
 
@@ -141,6 +181,7 @@ def preflight(members: Sequence[str], enable_joysticks: bool, joystick_config: s
         demo_support.require_file(joystick_config, 'joystick file')
     if 'camp' in members or 'target_area' in members:
         demo_support.require_file(target_file, 'target area file')
+        (check_target or check_target_tool)(target_file)
     if 'camp' in members:
         pids = (camp_pids or demo_support.running_camp_pids)()
         if pids:
@@ -151,27 +192,41 @@ def preflight(members: Sequence[str], enable_joysticks: bool, joystick_config: s
         (check_layout or check_layout_tool)(layout_config)
 
 
+def non_empty(text: str) -> str:
+    """Return ``text``; an empty value is refused, never replaced by a default."""
+    if not text.strip():
+        raise argparse.ArgumentTypeError('needs a value, not an empty string')
+    return text
+
+
 def build_parser() -> argparse.ArgumentParser:
     # no abbreviations: run_demo.sh reads the full option names to decide which files it needs
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument('--profile', help='profile to start (default: the configured one)')
+    parser.add_argument('--profile', type=non_empty,
+                        help='profile to start (default: the configured one)')
     parser.add_argument('--boats', default='',
                         help='comma separated boat names (default: the whole roster)')
-    parser.add_argument('--roster', help='roster file (default: the installed one)')
-    parser.add_argument('--config', help='manager configuration (default: the installed one)')
+    parser.add_argument('--roster', type=non_empty,
+                        help='roster file (default: the installed one)')
+    parser.add_argument('--config', type=non_empty,
+                        help='manager configuration (default: the installed one)')
     parser.add_argument('--no-joysticks', action='store_true',
                         help='do not start the joy_linux drivers (pads not plugged in)')
-    parser.add_argument('--joysticks', metavar='FILE',
+    parser.add_argument('--joysticks', type=non_empty, metavar='FILE',
                         help="this computer's gamepad bindings (default: the installed example)")
     layout = parser.add_mutually_exclusive_group()
-    layout.add_argument('--layout', metavar='FILE',
+    layout.add_argument('--layout', type=non_empty, metavar='FILE',
                         help="this computer's window layout (default: the installed example)")
     layout.add_argument('--no-layout', action='store_true',
                         help='do not move the windows')
-    parser.add_argument('--target', metavar='FILE',
+    parser.add_argument('--target', type=non_empty, metavar='FILE',
                         help='saved CAMP file holding the target survey area (default: the '
                              'installed demo polygon); CAMP opens it and the scorer uses it')
+    parser.add_argument('launch_args', nargs='*', metavar='name:=value',
+                        help='more arguments of the boats launch (demo_boats_launch.py), '
+                             'for example tide_speed_factor:=1; the ones the options above '
+                             'set are refused')
     return parser
 
 
@@ -219,6 +274,13 @@ def main(argv: List[str] = None) -> int:
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2
+        try:
+            extra = boats_launch_arguments(spec, args.launch_args)
+        except ValueError as error:
+            print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
+            return 2
+        for name, value in extra.items():
+            spec.groups['boats'].arguments[name] = ArgumentSpec(name, 'string', value)
         if args.profile:
             if args.profile not in spec.profiles:
                 print('unknown profile %r; the configuration has %s'

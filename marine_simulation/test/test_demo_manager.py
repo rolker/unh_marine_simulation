@@ -38,6 +38,7 @@ dependencies, the lifecycle regular expression, and that every launch file it na
 import importlib.util
 import pathlib
 import re
+import shutil
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch_manager_proto import config
@@ -492,7 +493,7 @@ def _preflight(members, tmp_path, **override):
     joysticks, layout, target = _files(tmp_path, 'j.yaml', 'l.yaml', 't.json')
     arguments = {'enable_joysticks': True, 'joystick_config': joysticks, 'layout_config': layout,
                  'target_file': target, 'check_layout': lambda layout: None,
-                 'camp_pids': lambda: []}
+                 'camp_pids': lambda: [], 'check_target': lambda target: None}
     arguments.update(override)
     demo_manager.preflight(members, **arguments)
 
@@ -583,6 +584,7 @@ def test_the_default_demo_starts_every_part_with_the_installed_files(run_manager
 
 def test_the_files_given_on_the_command_line_reach_their_groups(run_manager_spy, tmp_path):
     joysticks, layout, target = _files(tmp_path, 'my_j.yaml', 'my_l.yaml', 'my_t.json')
+    shutil.copy(PACKAGE / 'config' / 'demo_target_polygon_camp.json', target)
     assert demo_manager.main(['--joysticks', joysticks, '--layout', layout,
                               '--target', target]) == 0
     (spec,) = run_manager_spy
@@ -695,3 +697,115 @@ def test_the_layout_check_honours_the_same_tool_override_as_run_demo_sh(tmp_path
     monkeypatch.setenv('DEMO_PLACE_WINDOWS', tool)
     demo_manager.check_layout_tool('/my/layout.yaml')
     assert record.read_text().split() == ['--check', '--layout', '/my/layout.yaml']
+
+
+# -- extra boats-launch arguments: name:=value ---------------------------------------------------
+
+def _boats_arguments(spec):
+    return {name: arg.default for name, arg in spec.groups['boats'].arguments.items()}
+
+
+def test_a_declared_boats_launch_argument_reaches_the_boats_group(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', 'tide_speed_factor:=0', 'cell_size:=2.5']) == 0
+    (spec,) = run_manager_spy
+    arguments = _boats_arguments(spec)
+    assert arguments['tide_speed_factor'] == '0' and arguments['cell_size'] == '2.5'
+    assert arguments['lifecycle_guard'] is False       # the manager's own settings are intact
+    from launch_manager_proto.manager import launch_argument_text
+    assert launch_argument_text(arguments['tide_speed_factor']) == '0'
+
+
+def test_the_last_value_of_a_repeated_argument_wins(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', 'tide_speed_factor:=1',
+                              'tide_speed_factor:=3']) == 0
+    assert _boats_arguments(run_manager_spy[0])['tide_speed_factor'] == '3'
+
+
+def test_no_extra_arguments_leaves_the_boats_group_as_configured(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks']) == 0
+    assert 'tide_speed_factor' not in _boats_arguments(run_manager_spy[0])
+
+
+@pytest.mark.parametrize('argument, message', [
+    ('tide_speed_fcator:=1', 'not an argument of the boats launch.*tide_speed_factor'),
+    ('boats:=bluefin', r'set by the demo.s own options'),
+    ('roster_file:=/x.yaml', r'set by the demo.s own options'),
+    ('enable_joysticks:=false', r'set by the demo.s own options'),
+    ('joystick_config:=/x.yaml', r'set by the demo.s own options'),
+    ('lifecycle_guard:=true', r'set by the demo.s own options'),
+    ('tide_speed_factor', 'name:=value'),
+    ('=1', 'name:=value'),
+])
+def test_an_unknown_or_manager_owned_argument_is_refused(run_manager_spy, capsys, argument,
+                                                         message):
+    assert demo_manager.main(['--no-joysticks', argument]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith('THE DEMO DID NOT START:') and 'Traceback' not in err
+    assert re.search(message, err), err
+    assert run_manager_spy == []
+
+
+def test_the_declared_names_are_read_from_the_launch_file_not_listed_here():
+    declared = demo_support.declared_launch_arguments()
+    boats = _launch_module('demo_boats_launch.py')
+    from launch.actions import DeclareLaunchArgument
+    expected = [e.name for e in boats.generate_launch_description().entities
+                if isinstance(e, DeclareLaunchArgument)]
+    assert declared == expected and 'tide_speed_factor' in declared
+
+
+def test_the_owned_names_come_from_the_configuration(spec):
+    declared = ['boats', 'tide_speed_factor', 'brand_new_argument']
+    extra = demo_manager.boats_launch_arguments(spec, ['brand_new_argument:=1'], declared)
+    assert extra == {'brand_new_argument': '1'}      # a new launch argument needs no code here
+    with pytest.raises(ValueError, match='set by the demo'):
+        demo_manager.boats_launch_arguments(spec, ['boats:=x'], declared)
+
+
+# -- empty option values and the target area's content --------------------------------------
+
+@pytest.mark.parametrize('option', ['--roster', '--joysticks', '--layout', '--target',
+                                    '--config', '--profile'])
+@pytest.mark.parametrize('form', ['separate', 'equals'])
+def test_an_empty_option_value_is_refused_not_replaced_by_a_default(run_manager_spy, capsys,
+                                                                    option, form):
+    argv = [option, ''] if form == 'separate' else [option + '=']
+    with pytest.raises(SystemExit) as stop:
+        demo_manager.main(['--no-joysticks'] + argv)
+    assert stop.value.code == 2 and 'needs a value' in capsys.readouterr().err
+    assert run_manager_spy == []
+
+
+def test_a_malformed_target_file_is_refused_before_anything_starts(
+        run_manager_spy, tmp_path, capsys):
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{"not": json')
+    assert demo_manager.main(['--no-joysticks', '--target', str(bad)]) == 2
+    err = capsys.readouterr().err
+    assert err.startswith('THE DEMO DID NOT START:') and 'target area file cannot be used' in err
+    assert 'not valid JSON' in err and 'Traceback' not in err and run_manager_spy == []
+
+
+def test_a_target_file_with_no_survey_area_is_refused(run_manager_spy, tmp_path, capsys):
+    empty = tmp_path / 'empty.json'
+    empty.write_text('{}')
+    assert demo_manager.main(['--no-joysticks', '--target', str(empty)]) == 2
+    assert 'target area file cannot be used' in capsys.readouterr().err
+
+
+def test_the_installed_demo_polygon_passes_the_target_check():
+    demo_manager.check_target_tool(str(PACKAGE / 'config' / 'demo_target_polygon_camp.json'))
+
+
+def test_the_headless_profile_skips_nothing_about_the_target(run_manager_spy, tmp_path, capsys):
+    bad = tmp_path / 'bad.json'
+    bad.write_text('nope')
+    # target_area is in the headless profile, so its file is checked there too
+    assert demo_manager.main(['--no-joysticks', '--profile', 'headless', '--target',
+                              str(bad)]) == 2
+    assert 'target area file cannot be used' in capsys.readouterr().err
+
+
+def test_the_target_check_reports_a_tool_that_cannot_run(tmp_path):
+    with pytest.raises(ValueError, match='cannot run the target area check'):
+        demo_manager.check_target_tool('/t.json', str(tmp_path / 'missing'))

@@ -92,10 +92,24 @@ profiles are in "Demo launch manager" below.
 | `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
 
 The CAMP profile and view are `config/demo_camp_profile.conf` and
-`config/demo_camp_view.yaml` (CAMP's starting scale and optional centre). Any option of
-`demo_boats_launch.py` that is not listed (for example `tide_speed_factor`) is not
-reachable from the manager: add it to the `boats` group's `arguments` in
-`config/demo_manager.yaml` when it is needed.
+`config/demo_camp_view.yaml` (CAMP's starting scale and optional centre).
+
+**Other boats-launch arguments** go after the options in the launch form `name:=value`, to
+`run_demo.sh` or `demo_manager.py` alike:
+
+```bash
+run_demo.sh tide_speed_factor:=1 current_speed:=0.3
+run_demo.sh --boats bluefin,clownfish tide_speed_factor:=0
+ros2 run marine_simulation demo_manager.py --profile headless cell_size:=2 ping_interval:=0.5
+```
+
+Each name is checked against what `demo_boats_launch.py` itself declares (read from the launch
+file, so the list cannot drift), and a name the launch does not declare is refused as `THE
+DEMO DID NOT START: tide_speed_fcator:= is not an argument of the boats launch; it has ...`
+(exit 2). The five the manager sets itself from its own options (`boats`, `roster_file`,
+`enable_joysticks`, `joystick_config`, `lifecycle_guard`) are refused too: use `--boats`,
+`--roster`, `--no-joysticks`/`--joysticks`. A name given twice keeps the last value. The
+arguments reach only the `boats` group.
 
 **Closing the CAMP window (or CAMP dying) stops everything and the manager exits**, so
 the helper stops the demo by closing the map window.
@@ -103,14 +117,16 @@ the helper stops the demo by closing the map window.
 The manager refuses to start, before anything else runs, and prints `THE DEMO DID NOT
 START: <reason>` with exit status 2, when: another demo already holds the lock in
 `~/.local/state/marine_simulation_demo`; a CAMP is already running (window placement could
-pick the wrong window); the joystick, layout or target file is not a file; the layout is
+pick the wrong window); the joystick, layout or target file is not a file; the target file is not a CAMP project
+the publisher accepts (`publish_survey_area.py --check FILE`); an extra `name:=value` argument
+is unknown or is one the manager sets itself; the layout is
 malformed, names a monitor that is not connected, or the session is not X11 or `wmctrl` is
 missing (the same `place_windows.py --check` that `run_demo.sh` makes first and reports as
 one sentence). `run_demo.sh` itself refuses, with the same phrase and exit status 1, when
 this computer's `joysticks.yaml` or `layout.yaml` is missing, the domain override is not
 0 to 101, ROS is not set up, or a map window is open. The scorer's parameters are
 generated from the roster (so `--boats a,b` scores exactly those boats) into a temporary
-directory the manager removes on exit. The lock does not outlive the manager: after a
+directory (`/tmp/demo_manager_*`) the manager removes on exit. The lock does not outlive the manager: after a
 `kill -9` the lock is free but the boats and CAMP keep running, and a second `--profile
 headless` would start duplicates of the boats (stop the orphans first).
 

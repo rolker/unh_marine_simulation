@@ -402,3 +402,29 @@ def test_wrong_type_parameter_is_a_refusal(ros_domain):
     with pytest.raises(psa.SurveyAreaFileError, match='bad parameter'):
         psa.make_node(['--ros-args', '-p', 'file:=%s' % DEMO_FILE,
                        '-p', 'priority:=1.5']).destroy_node()
+
+
+# --- --check: the dry run the launch manager makes before it starts the demo ----------
+
+def test_check_accepts_the_shipped_polygon(capsys):
+    assert psa.main(['--check', str(psa.default_file())]) == 0
+    assert 'holds 1 survey area' in capsys.readouterr().out
+
+
+def test_check_refuses_a_malformed_file_with_the_reason(tmp_path, capsys):
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{"x": ')
+    assert psa.main(['--check', str(bad)]) == 2
+    assert 'not valid JSON' in capsys.readouterr().err
+
+
+def test_check_refuses_a_missing_file_and_a_file_without_areas(tmp_path, capsys):
+    assert psa.main(['--check', str(tmp_path / 'nope.json')]) == 2
+    empty = tmp_path / 'empty.json'
+    empty.write_text('{}')
+    assert psa.main(['--check', str(empty)]) == 2
+
+
+def test_check_needs_exactly_one_file(capsys):
+    assert psa.main(['--check']) == 2 and psa.main(['--check', 'a', 'b']) == 2
+    assert 'usage' in capsys.readouterr().err

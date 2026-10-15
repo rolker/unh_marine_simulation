@@ -43,16 +43,20 @@ a second file.
 import fcntl
 import math
 import os
+import re
 import shutil
 import struct
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
+from launch import LaunchContext
+from launch.actions import DeclareLaunchArgument
 from launch.actions import ExecuteProcess
 from launch.actions import LogInfo
 from launch.actions import RegisterEventHandler
 from launch.event_handlers import OnProcessExit
+from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch_ros.actions import Node
 import yaml
 
@@ -475,6 +479,50 @@ def placement_actions(layout_config: str) -> list:
     placement = placement_process(layout_config)
     return [placement, RegisterEventHandler(
         OnProcessExit(target_action=placement, on_exit=placement_exit))]
+
+
+def declared_launch_arguments(launch_file: str = None) -> List[str]:
+    """
+    Return the names of the launch arguments ``launch_file`` declares (the boats launch).
+
+    Read from the launch description itself (what ``ros2 launch`` shows with ``-s``), so the
+    list cannot drift from the launch file.
+    """
+    launch_file = launch_file or os.path.join(
+        get_package_share_directory('marine_simulation'), 'launch', 'demo_boats_launch.py')
+    description = PythonLaunchDescriptionSource(launch_file).get_launch_description(
+        LaunchContext())
+    return [e.name for e in description.entities if isinstance(e, DeclareLaunchArgument)]
+
+
+_LAUNCH_ARGUMENT = re.compile(r'([A-Za-z_][A-Za-z0-9_]*):=(.*)', re.DOTALL)
+
+
+def parse_launch_arguments(items: Sequence[str], declared: Sequence[str],
+                           owned: Sequence[str]) -> Dict[str, str]:
+    """
+    Return ``{name: value}`` for extra ``name:=value`` arguments meant for the boats launch.
+
+    A name the launch does not declare is refused (a typo would otherwise vanish silently),
+    and so is one the manager sets itself from its own options (``owned``): the second
+    value would fight the first. A name given twice keeps the last value, as ``ros2 launch``
+    does.
+    """
+    result: Dict[str, str] = {}
+    for item in items:
+        match = _LAUNCH_ARGUMENT.fullmatch(item)
+        if match is None:
+            raise ValueError('%r is not a launch argument; the form is name:=value' % item)
+        name, value = match.groups()
+        if name in owned:
+            raise ValueError("%s:= is set by the demo's own options, not as a launch "
+                             'argument (%s are)' % (name, ', '.join(sorted(owned))))
+        if name not in declared:
+            known = sorted(set(declared) - set(owned))
+            raise ValueError('%s:= is not an argument of the boats launch; it has %s'
+                             % (name, ', '.join(known)))
+        result[name] = value
+    return result
 
 
 def require_file(path: str, what: str) -> None:

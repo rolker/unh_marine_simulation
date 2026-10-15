@@ -500,3 +500,27 @@ def test_placement_actions_run_the_process_and_watch_its_exit():
     from launch.actions import ExecuteProcess, RegisterEventHandler
     process, handler = demo.placement_actions('/my/layout.yaml')
     assert isinstance(process, ExecuteProcess) and isinstance(handler, RegisterEventHandler)
+
+
+DECLARED = ['boats', 'roster_file', 'tide_speed_factor', 'cell_size']
+OWNED = ['boats', 'roster_file']
+
+
+def test_launch_arguments_are_parsed_to_a_dict():
+    assert demo.parse_launch_arguments(['tide_speed_factor:=1', 'cell_size:=a=b'],
+                                       DECLARED, OWNED) == {
+        'tide_speed_factor': '1', 'cell_size': 'a=b'}
+    assert demo.parse_launch_arguments([], DECLARED, OWNED) == {}
+    assert demo.parse_launch_arguments(['cell_size:='], DECLARED, OWNED) == {'cell_size': ''}
+
+
+@pytest.mark.parametrize('item, message', [
+    ('tide_speed:=1', 'not an argument of the boats launch.*cell_size, tide_speed_factor'),
+    ('boats:=a', 'set by the demo'),
+    ('cell_size', 'name:=value'),
+    (':=1', 'name:=value'),
+    ('1x:=1', 'name:=value'),
+])
+def test_bad_launch_arguments_are_refused_with_the_reason(item, message):
+    with pytest.raises(ValueError, match=message):
+        demo.parse_launch_arguments([item], DECLARED, OWNED)

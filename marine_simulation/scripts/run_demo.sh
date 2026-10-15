@@ -17,8 +17,10 @@
 # private ROS domain (42, or $DEMO_ROS_DOMAIN_ID). When something is missing it says what,
 # in plain words, and starts nothing. Closing the map window stops everything.
 #
-# Options after the script name go to demo_manager.py (--help lists them). The ones that name
-# this machine's files (--joysticks FILE, --layout FILE, --target FILE) replace the files above.
+# Options after the script name go to demo_manager.py (--help lists them), and so do extra
+# boats-launch arguments in the launch form, e.g. tide_speed_factor:=1 (checked there). The
+# ones that name this machine's files (--joysticks FILE, --layout FILE, --target FILE)
+# replace the files above.
 #
 # Copy-and-edit examples of the two yaml files are installed in
 # share/marine_simulation/config (demo_joysticks.yaml, demo_layout.yaml).
@@ -43,7 +45,7 @@ command -v ros2 > /dev/null 2>&1 ||
 # exported ROS_DOMAIN_ID is deliberately not used: lab computers often share one.
 # When two people run the demo on one host, one of them sets DEMO_ROS_DOMAIN_ID.
 domain=${DEMO_ROS_DOMAIN_ID:-42}
-[[ "$domain" =~ ^[0-9]+$ ]] && [ "${#domain}" -le 3 ] && [ "$((10#$domain))" -le 101 ] ||
+[[ "$domain" =~ ^[0-9]+$ ]] && [ "${#domain}" -le 18 ] && [ "$((10#$domain))" -le 101 ] ||
     die "DEMO_ROS_DOMAIN_ID is '$domain'; it must be a whole number from 0 to 101."
 export ROS_DOMAIN_ID=$((10#$domain))
 
