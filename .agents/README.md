@@ -42,9 +42,9 @@ unh_marine_simulation/
 │   └── launch/                        #   harbor_launch.py, isles_of_shoals_launch.py, ...
 └── marine_simulation/                 # Scenario launch files
     ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml
-    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py
-    ├── test/                          #   pytest: demo launch fail-fast checks, graph check
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks.yaml, demo_target_polygon_camp.json
+    ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, publish_survey_area.py
+    ├── test/                          #   pytest: demo launch fail-fast checks, graph check, survey-area publisher
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes
 ```
 
@@ -128,3 +128,4 @@ Known build issues:
 - **A four-boat stack (about 50 processes) is not fully discoverable with `ROS_LOCALHOST_ONLY=1`.** Observed: a second process saw only part of the graph. Use default discovery on a private `ROS_DOMAIN_ID` for the self-test.
 - **Empty string parameters cannot be `-p` overrides** (`Failed to parse global arguments`); put them in a parameter file (the demo's `draft_dir` / `prior_store_dir` for `cube_bathymetry`).
 - **`marine_simulation` lint was already failing** (copyright, flake8 I100, pep257 D213 in `bizzyboat_massabesic_launch.py`, `gazebo_*_launch.py`, `simulator_launch.py`); new files there follow the D213 style (summary on the second line).
+- **`survey_area` is latched: a publisher must be transient_local, and `ros2 topic echo` needs `--qos-durability transient_local --qos-reliability reliable` to see it.** `publish_survey_area.py` (CAMP project file to `marine_interfaces/SurveyArea`, for the `coverage_assessment` scorer) uses reliable, transient_local, depth 100; a volatile publisher never reaches the scorer. Run it in the root namespace so the topic is `/survey_area`. It reads the file once; restart it to pick up an edit. A standard with `a = b = 0` means "not set" to the scorer (0 % meeting), so the node refuses it.
