@@ -867,7 +867,8 @@ def test_the_rqt_launch_starts_rqt_on_the_perspective_with_no_lock_and_no_placem
     # rqt runs on the operator's settings: nothing here may point XDG_CONFIG_HOME elsewhere
     assert process.additional_env is None
     words = [part[0].text for part in process.cmd]
-    assert words[1:] == ['--perspective', 'demo'] and '--lock-perspective' not in words
+    assert words[1:] == ['--force-discover', '--perspective', 'demo']
+    assert '--lock-perspective' not in words
 
 
 def test_a_missing_rqt_is_a_message_not_a_failed_demo(monkeypatch):
