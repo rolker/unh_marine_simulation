@@ -29,8 +29,8 @@
 """
 Start rqt on the demo's perspective, for the launch manager's ``rqt`` group.
 
-``rqt --perspective demo`` switches to the perspective named ``demo`` and creates it when it
-does not exist yet. Perspectives are kept by rqt in the operator's own settings
+``rqt --force-discover --perspective demo`` switches to the perspective named ``demo`` and
+creates it when it does not exist yet. Perspectives are kept by rqt in the operator's own settings
 (``ros.org/rqt_gui.ini``) and written when rqt exits, so rqt runs on the operator's normal
 settings, never on the wiped-per-start home CAMP gets: the Survey Coverage plugin added once by
 hand comes back on every later start. ``--lock-perspective`` is not used (the menu is needed to
@@ -60,7 +60,12 @@ def launch_setup(context, *args, **kwargs):
     if rqt is None:
         return [LogInfo(msg='rqt is not installed (sudo apt install ros-<distro>-rqt), '
                             'so the coverage window is not started; the demo goes on without it.')]
-    return [ExecuteProcess(cmd=[rqt, '--perspective', perspective], output='screen',
+    # rqt caches its discovered plugin list in its settings, so a plugin package built after the
+    # first rqt start never shows in the Plugins menu until a forced rediscovery (seen 2026-10-19
+    # with rqt_ping_profile after rolker/rqt_operator_tools#114 was built). It costs a second or
+    # two at start.
+    return [ExecuteProcess(cmd=[rqt, '--force-discover', '--perspective', perspective],
+                           output='screen',
                            emulate_tty=True, name='rqt')]
 
 

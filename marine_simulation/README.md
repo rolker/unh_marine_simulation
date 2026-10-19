@@ -214,7 +214,7 @@ Known limits of this approach:
 
 ### rqt and the coverage plugin
 
-The manager's `rqt` group runs `rqt --perspective demo` (`demo_rqt_launch.py`): rqt switches to
+The manager's `rqt` group runs `rqt --force-discover --perspective demo` (`demo_rqt_launch.py`): rqt switches to
 the perspective named `demo` and creates it when it does not exist. rqt keeps perspectives in the
 operator's own settings (`ros.org/rqt_gui.ini`, written when rqt exits), so it runs on those
 normal settings, not on the demo's wiped-per-start home. `--lock-perspective` is not used (the
@@ -226,7 +226,10 @@ every later start. The plugin's default topic `coverage_assessment` resolves to 
 `/coverage_assessment` (type `marine_interfaces/msg/CoverageAssessment`, transient local), which
 the headless run of this branch showed publishing with no namespace, so nothing needs to be set in
 its config dialog; the plugin tolerates a scorer that comes up late. rqt has no `requires` and
-stops with CAMP; closing rqt by itself does not stop the demo.
+stops with CAMP; closing rqt by itself does not stop the demo. rqt is started with
+`--force-discover` because it caches its plugin list in its settings: without it a plugin package
+built after the first rqt start (for example `rqt_ping_profile`) would not appear in the Plugins
+menu.
 
 ### First start on a computer
 

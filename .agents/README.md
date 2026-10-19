@@ -90,7 +90,7 @@ Data flow: `cmd_vel` → helm → `throttle`/`rudder` → `asv_sim` → position
 5. `marine_simulation/launch/sim_robot_launch.py` — Robot simulation launch file (dynamics, helm, sensors)
 6. `mbes_sim/mbes_sim/mbes_sim.py` — Sonar simulator showing lifecycle node pattern
 7. `marine_simulation/launch/demo_boats_launch.py` — Several boats at once: per-boat namespace groups built from `config/demo_roster.yaml`, one shared `asv_sim`
-8. `marine_simulation/scripts/demo_manager.py` — The one start command for the whole demo display (`scripts/run_demo.sh` calls it): fills `config/demo_manager.yaml` from the roster and runs the groups boats, camp (`demo_camp_launch.py`, CAMP on a settings file generated on every start), target_area (`demo_target_area_launch.py`), scorer, rqt (`demo_rqt_launch.py`: `rqt --perspective demo` on the operator's persistent rqt settings, not placed, `follows: [camp]`, `restart: never`) and layout (`demo_layout_launch.py`, `scripts/place_windows.py` once)
+8. `marine_simulation/scripts/demo_manager.py` — The one start command for the whole demo display (`scripts/run_demo.sh` calls it): fills `config/demo_manager.yaml` from the roster and runs the groups boats, camp (`demo_camp_launch.py`, CAMP on a settings file generated on every start), target_area (`demo_target_area_launch.py`), scorer, rqt (`demo_rqt_launch.py`: `rqt --force-discover --perspective demo` on the operator's persistent rqt settings, not placed, `follows: [camp]`, `restart: never`) and layout (`demo_layout_launch.py`, `scripts/place_windows.py` once)
 
 ## Build & Test
 
