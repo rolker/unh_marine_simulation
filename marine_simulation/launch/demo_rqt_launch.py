@@ -58,7 +58,7 @@ def launch_setup(context, *args, **kwargs):
         raise ValueError('rqt_perspective needs a name, not an empty string')
     rqt = shutil.which('rqt')
     if rqt is None:
-        return [LogInfo(msg='rqt is not installed (sudo apt install ros-${ROS_DISTRO}-rqt), '
+        return [LogInfo(msg='rqt is not installed (sudo apt install ros-<distro>-rqt), '
                             'so the coverage window is not started; the demo goes on without it.')]
     return [ExecuteProcess(cmd=[rqt, '--perspective', perspective], output='screen',
                            emulate_tty=True, name='rqt')]

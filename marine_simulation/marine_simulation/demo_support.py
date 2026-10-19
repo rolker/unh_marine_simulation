@@ -578,6 +578,23 @@ def read_saved_settings(root: str) -> Tuple[Dict[str, List[str]], str]:
             ('view', has_saved_view(saved))) if present)
 
 
+def _put_back(root: str, path: str, previous: Optional[bytes]) -> None:
+    """Best effort: recreate the root (private, with the demo's marker) and the old file."""
+    if previous is None:
+        return
+    try:
+        os.makedirs(root, mode=0o700, exist_ok=True)
+        os.makedirs(os.path.dirname(path), mode=0o700, exist_ok=True)
+        marker = os.path.join(root, ROOT_MARKER)
+        if not os.path.exists(marker):
+            with open(marker, 'w') as f:
+                f.write('Recreated by the marine_simulation demo manager on every demo start.\n')
+        with open(path, 'wb') as f:
+            f.write(previous)
+    except OSError:
+        pass
+
+
 def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> str:
     """
     Reset ``root`` and write ``profile`` where CAMP's QSettings will read it.
@@ -594,17 +611,17 @@ def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> s
         previous = None
     try:
         reset_settings_root(root, home)
+    except ValueError:
+        raise                        # a refusal: nothing was touched, nothing to put back
+    except Exception:
+        _put_back(root, path, previous)
+        raise
+    try:
         os.makedirs(os.path.dirname(path))
         with open(path, 'w', encoding='utf-8', errors='surrogateescape') as f:
             f.write(profile)
     except Exception:
-        if previous is not None:
-            try:
-                os.makedirs(os.path.dirname(path), exist_ok=True)
-                with open(path, 'wb') as f:
-                    f.write(previous)
-            except OSError:
-                pass
+        _put_back(root, path, previous)
         raise
     return path
 
@@ -747,8 +764,6 @@ def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
     # the manager must keep what CAMP saved since.
     fresh = fresh and not _FRESH_APPLIED
     if fresh:
-        _FRESH_APPLIED.append(True)
-    if fresh:
         saved, why = {}, 'discarded (--camp-fresh)'
     else:
         saved, why = read_saved_settings(root)
@@ -761,6 +776,8 @@ def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
     with open(camp_profile) as f:
         profile = build_profile(f.read(), boats, lat, lon, scale, cache_dir(), saved)
     seed_camp_settings(root, profile)
+    if fresh:
+        _FRESH_APPLIED.append(True)       # consumed only once the start has really happened
     reset_state_dir(cache_dir(), CACHE_DIR_NAME)
     camp = camp_node(root, target_file)
     view_text = ('CAMP map view: %s' % how if lat is None else

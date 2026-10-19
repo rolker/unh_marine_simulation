@@ -966,8 +966,57 @@ def test_a_failed_write_after_the_reset_puts_the_saved_file_back(tmp_path):
     assert demo.carry_over(path.read_text())['MainWindow'][0] == SAVED_GEOMETRY
 
 
-def test_a_failed_first_write_leaves_no_half_file_to_restore(tmp_path):
+def test_a_failed_first_write_has_nothing_to_restore_and_invents_nothing(tmp_path):
     root = tmp_path / '.local' / 'state' / 'marine_simulation_demo' / 'xdg_config'
     with pytest.raises(TypeError):
         demo.seed_camp_settings(str(root), None, str(tmp_path))
-    assert not pathlib.Path(demo.camp_settings_path(str(root))).read_text()
+    assert pathlib.Path(demo.camp_settings_path(str(root))).read_text() == ''
+
+
+def test_a_failure_during_the_reset_restores_the_file_with_the_marker_and_private_mode(
+        monkeypatch, tmp_path):
+    root = tmp_path / '.local' / 'state' / 'marine_simulation_demo' / 'xdg_config'
+    path = pathlib.Path(demo.camp_settings_path(str(root)))
+    path.parent.mkdir(parents=True)
+    (root / demo.ROOT_MARKER).write_text('x')
+    path.write_text(SAVED_FILE)
+
+    def deletes_then_fails(directory, home=None):
+        import shutil
+        shutil.rmtree(directory)                  # the disk fills up right after the delete
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(demo, 'reset_settings_root', deletes_then_fails)
+    with pytest.raises(OSError):
+        demo.seed_camp_settings(str(root), 'x', str(tmp_path))
+    assert path.read_text() == SAVED_FILE
+    assert (root / demo.ROOT_MARKER).is_file()      # so the next start can reset it again
+    assert (root.stat().st_mode & 0o777) == 0o700
+
+
+def test_a_refused_reset_touches_nothing(monkeypatch, tmp_path):
+    root = tmp_path / '.local' / 'state' / 'marine_simulation_demo' / 'xdg_config'
+    path = pathlib.Path(demo.camp_settings_path(str(root)))
+    path.parent.mkdir(parents=True)
+    path.write_text(SAVED_FILE)                    # no marker: the guard refuses
+    with pytest.raises(ValueError, match='marker'):
+        demo.seed_camp_settings(str(root), 'x', str(tmp_path))
+    assert path.read_text() == SAVED_FILE and not (root / demo.ROOT_MARKER).exists()
+
+
+def test_fresh_is_not_consumed_by_a_start_that_failed(monkeypatch, tmp_path, roster):
+    _write_saved(tmp_path)
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'camp_node', lambda home, project='': 'camp-node')
+    real = demo.seed_camp_settings
+
+    def failing(root, profile, home=None):
+        raise OSError(28, 'No space left on device')
+
+    monkeypatch.setattr(demo, 'seed_camp_settings', failing)
+    with pytest.raises(OSError):
+        demo.camp_actions(roster, PROFILE_TEMPLATE, str(CONFIG / 'demo_camp_view.yaml'),
+                          POLYGON, CAMP_LAYOUT, fresh=True)
+    monkeypatch.setattr(demo, 'seed_camp_settings', real)
+    conf, text = _start_camp(monkeypatch, tmp_path, roster, fresh=True)
+    assert 'geometry=' not in conf and any('--camp-fresh' in t for t in text)
