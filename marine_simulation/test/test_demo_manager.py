@@ -78,8 +78,8 @@ def spec():
 def test_the_shipped_configuration_loads_with_the_roster(spec):
     assert spec.name == 'demo_manager' and spec.default_profile == 'demo'
     assert spec.exit_when_all_stopped
-    assert set(spec.groups) == {'boats', 'camp', 'scorer', 'target_area', 'layout'}
-    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout']
+    assert set(spec.groups) == {'boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt'}
+    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt']
     assert spec.profiles['headless'] == ['boats', 'scorer', 'target_area']
     assert spec.profiles['boats'] == ['boats']
 
@@ -576,7 +576,7 @@ def test_the_default_demo_starts_every_part_with_the_installed_files(run_manager
     assert demo_manager.main(['--no-joysticks']) == 0
     (spec,) = run_manager_spy
     assert spec.default_profile == 'demo'
-    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout']
+    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt']
     share = pathlib.Path(get_package_share_directory('marine_simulation'), 'config')
     polygon = str(share / 'demo_target_polygon_camp.json')
     assert spec.groups['camp'].arguments['target_area_file'].default == polygon
@@ -601,7 +601,7 @@ def test_no_layout_takes_the_placement_out_of_every_profile(run_manager_spy):
     assert demo_manager.main(['--no-joysticks', '--no-layout']) == 0
     (spec,) = run_manager_spy
     assert all('layout' not in members for members in spec.profiles.values())
-    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area']
+    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'rqt']
 
 
 def test_the_layout_and_no_layout_switches_exclude_each_other(run_manager_spy, capsys):
@@ -838,3 +838,44 @@ def test_manager_camp_start_passes_fresh_to_the_actions(monkeypatch, tmp_path):
     _camp_start(monkeypatch, tmp_path, camp_fresh='true')
     _camp_start(monkeypatch, tmp_path)
     assert [k['fresh'] for k in seen] == [True, False]
+
+
+# --- rqt on the perspective "demo" ---------------------------------------------------------
+
+def test_the_rqt_group_needs_nothing_stops_with_camp_and_is_never_restarted(spec):
+    group = spec.groups['rqt']
+    assert (group.package, group.file) == ('marine_simulation', 'demo_rqt_launch.py')
+    assert group.requires == [] and group.follows == ['camp']
+    assert group.restart == 'never'
+    assert group.arguments['rqt_perspective'].default == 'demo'
+    # nothing waits for rqt or stops with it
+    assert not any('rqt' in other.requires or 'rqt' in other.follows
+                   for name, other in spec.groups.items() if name != 'rqt')
+    # it is part of the demo display only
+    assert 'rqt' in spec.profiles['demo']
+    assert all('rqt' not in members for name, members in spec.profiles.items()
+               if name != 'demo')
+
+
+def test_the_rqt_launch_starts_rqt_on_the_perspective_with_no_lock_and_no_placement(monkeypatch):
+    from launch.actions import ExecuteProcess
+    monkeypatch.setattr('shutil.which', lambda name: '/opt/ros/jazzy/bin/rqt')
+    (process,) = _perform_launch_setup(_launch_module('demo_rqt_launch.py'),
+                                       rqt_perspective='demo')
+    assert isinstance(process, ExecuteProcess)
+    assert process.cmd[0][0].text == '/opt/ros/jazzy/bin/rqt'
+    words = [part[0].text for part in process.cmd]
+    assert words[1:] == ['--perspective', 'demo'] and '--lock-perspective' not in words
+
+
+def test_a_missing_rqt_is_a_message_not_a_failed_demo(monkeypatch):
+    from launch.actions import LogInfo
+    monkeypatch.setattr('shutil.which', lambda name: None)
+    (message,) = _perform_launch_setup(_launch_module('demo_rqt_launch.py'),
+                                       rqt_perspective='demo')
+    assert isinstance(message, LogInfo)
+
+
+def test_an_empty_perspective_name_is_refused():
+    with pytest.raises(ValueError, match='rqt_perspective'):
+        _perform_launch_setup(_launch_module('demo_rqt_launch.py'), rqt_perspective=' ')

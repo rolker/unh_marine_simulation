@@ -92,9 +92,20 @@ groups:
     follows: [camp]
     restart: never
 
+  rqt:
+    description: rqt on the perspective "demo" (the Survey Coverage plugin, added once by hand)
+    launch: {package: marine_simulation, file: demo_rqt_launch.py}
+    arguments:
+      rqt_perspective: {type: string, default: demo}
+    # Needs nothing to exist: the coverage plugin latches and tolerates a scorer that comes
+    # later. Not placed (rqt restores its own geometry) and never restarted: closing it is an
+    # operator decision, like CAMP, and it stops with CAMP.
+    follows: [camp]
+    restart: never
+
 profiles:
   # everything the event needs
-  demo: [boats, camp, scorer, target_area, layout]
+  demo: [boats, camp, scorer, target_area, layout, rqt]
   # the boats and the scorer without a display (live checks, a head-less laptop)
   headless: [boats, scorer, target_area]
   # only the boats (what demo_boats_selftest.py drives)
