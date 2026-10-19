@@ -3,6 +3,8 @@
 import math
 from typing import List
 
+from rcl_interfaces.msg import FloatingPointRange
+from rcl_interfaces.msg import IntegerRange
 from rcl_interfaces.msg import Parameter
 from rcl_interfaces.msg import ParameterDescriptor
 import rclpy.node
@@ -118,6 +120,25 @@ class Model:
                 description='Noise applied to calculated drag, '
                 'gauss(drag*noise)'))
 
+        node.declare_parameter(
+            self.ns('max_step'), 0.1,
+            ParameterDescriptor(
+                description='Longest time step in seconds the dynamics '
+                'integrate in one go. A longer gap since the last update '
+                '(a stalled or descheduled node) is split into equal '
+                'sub-steps no longer than this.',
+                floating_point_range=[FloatingPointRange(
+                    from_value=0.001, to_value=10.0, step=0.0)]))
+        node.declare_parameter(
+            self.ns('max_substeps'), 100,
+            ParameterDescriptor(
+                description='Most sub-steps taken for one update. A gap '
+                'needing more than this is cut off at max_substeps * '
+                'max_step seconds and the rest is dropped, with a '
+                'throttled warning that the simulation fell behind.',
+                integer_range=[IntegerRange(
+                    from_value=1, to_value=10000, step=1)]))
+
         self.parameters_ready = True
         self.update_coefficients()
 
@@ -188,6 +209,10 @@ class Model:
             if param.name == self.ns('drag_noise'):
                 self.drag_noise = param.value
                 need_update = True
+            if param.name == self.ns('max_step'):
+                self.max_step = param.value
+            if param.name == self.ns('max_substeps'):
+                self.max_substeps = param.value
         if need_update:
             self.update_coefficients()
 

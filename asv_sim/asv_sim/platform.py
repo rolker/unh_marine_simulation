@@ -91,7 +91,8 @@ class Platform:
             start[k] = self.start_params[k]
 
         self.dynamics = asv_sim.dynamics.Dynamics(
-            self.model, node.environment, start)
+            self.model, node.environment, start, name=self.name,
+            logger=node.get_logger())
 
         self.diag_publishers = {}
         self.have_commands_pub = node.create_publisher(
