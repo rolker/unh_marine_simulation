@@ -148,3 +148,17 @@ issue: 102
 
 ### Verification
 - Full suite: 986 tests, 0 errors, 8 failures (baseline lint), 1 skipped.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 14:00 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed)
+
+### Done
+- [x] `run_demo.sh` prints a one-line warning (never an error, never changes the setting) when `gsettings get org.gnome.mutter auto-maximize` is `true`; README first-start procedure and helper card carry the one-time command and the reason; tests with a fake gsettings (true / false / unreadable / not installed / headless profile).
+- [x] README CAMP-memory section and `.agents/README.md` say the faithful view restore needs a CAMP with rolker/camp#242; plan.md note.
+
+### Verification
+- Full suite: 989 tests, 0 errors, 8 failures (baseline lint), 1 skipped.
