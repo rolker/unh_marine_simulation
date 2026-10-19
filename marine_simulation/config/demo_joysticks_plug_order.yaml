@@ -1,0 +1,34 @@
+# Plug-order joystick bindings for the demo boats, for a computer without labelled
+# USB ports (read by demo_boats_launch.py; use it with
+#   run_demo.sh --joysticks <share>/marine_simulation/config/demo_joysticks_plug_order.yaml
+# or copy it to ~/.config/marine_simulation_demo/joysticks.yaml).
+#
+# The kernel numbers pads in the order they are plugged in: the first pad is
+# /dev/input/js0 and drives the first boat of demo_roster.yaml (bluefin), the
+# second is js1 (clownfish), then js2 (urchin) and js3 (beluga). Any number of
+# pads works: a boat whose pad is not plugged in sits still, and a pad plugged in
+# later, even while the demo runs, drives the boat of the next free number
+# (joy_linux retries opening a missing device every second). A pad unplugged and
+# plugged back in gets the lowest free number again, so it keeps its boat unless
+# another pad was plugged in meanwhile.
+#
+# Which boat a pad drives therefore depends on plug order, not on the port. On the
+# event computer use demo_joysticks.yaml instead: its by-path links bind each boat
+# to a labelled port and the launch refuses to start on a missing pad.
+
+# A device that is not there when the demo starts: wait for it (the default,
+# refuse, stops the demo and names the pad).
+when_missing: wait
+
+devices:
+  - /dev/input/js0
+  - /dev/input/js1
+  - /dev/input/js2
+  - /dev/input/js3
+
+# Stick dead band as a fraction of travel (see demo_joysticks.yaml).
+deadzone: 0.1
+
+# Re-publish the last pad state at this rate (Hz) while nothing changes (see
+# demo_joysticks.yaml).
+autorepeat_rate: 10.0

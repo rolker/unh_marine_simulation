@@ -56,6 +56,7 @@ _spec.loader.exec_module(demo)
 
 ROSTER = PACKAGE / 'config' / 'demo_roster.yaml'
 JOYSTICKS = PACKAGE / 'config' / 'demo_joysticks.yaml'
+PLUG_ORDER_JOYSTICKS = PACKAGE / 'config' / 'demo_joysticks_plug_order.yaml'
 PARAMS = PACKAGE / 'config' / 'demo_params.yaml'
 
 
@@ -87,8 +88,9 @@ def _js(path):
     return '/dev/input/js%s' % path.rsplit('/pad', 1)[1].split('-')[0]
 
 
-def _assign(roster, boats, config, exists=lambda p: True, resolve=_js):
-    return demo.assign_joysticks(roster, boats, config, exists=exists, resolve=resolve)
+def _assign(roster, boats, config, exists=lambda p: True, resolve=_js, warn=None):
+    return demo.assign_joysticks(roster, boats, config, exists=exists, resolve=resolve,
+                                 warn=warn or (lambda message: None))
 
 
 # --- roster ------------------------------------------------------------------------
@@ -228,6 +230,111 @@ def test_shipped_joystick_config_pairs_with_the_shipped_roster(roster):
     assert all(d.endswith('-joystick') and not d.endswith('-event-joystick')
                for d in config['devices'])
     assert 0.0 <= config['deadzone'] < 0.5
+
+
+# --- plug-order mode: when_missing: wait ------------------------------------------
+
+def _wait(roster, devices=None):
+    config = _config(roster, devices)
+    config['when_missing'] = 'wait'
+    return config
+
+
+def test_a_missing_pad_is_kept_and_announced_when_the_file_says_wait(roster):
+    config = _wait(roster)
+    missing = config['devices'][1]
+    notes = []
+    assignment = _assign(roster, roster, config, exists=lambda p: p != missing, warn=notes.append)
+    assert [assignment[b.name] for b in roster] == config['devices']
+    assert len(notes) == 1
+    assert roster[1].name in notes[0] and missing in notes[0] and 'not plugged in' in notes[0]
+    assert roster[0].name not in notes[0]
+
+
+def test_no_pad_at_all_still_starts_every_boat_in_wait_mode(roster):
+    notes = []
+    assignment = _assign(roster, roster, _wait(roster), exists=lambda p: False, warn=notes.append)
+    assert set(assignment) == {b.name for b in roster}
+    assert len(notes) == len(roster)
+
+
+def test_wait_mode_says_nothing_when_every_pad_is_there(roster):
+    notes = []
+    _assign(roster, roster, _wait(roster), warn=notes.append)
+    assert notes == []
+
+
+def test_refuse_is_the_default_and_wait_must_be_spelled_out(roster):
+    config = _config(roster)
+    missing = config['devices'][1]
+    with pytest.raises(ValueError, match='not found'):
+        _assign(roster, roster, config, exists=lambda p: p != missing)
+    config['when_missing'] = 'refuse'
+    with pytest.raises(ValueError, match='not found'):
+        _assign(roster, roster, config, exists=lambda p: p != missing)
+
+
+@pytest.mark.parametrize('policy', ['Wait', 'skip', True, None, 1])
+def test_an_unknown_when_missing_value_is_refused_by_name(roster, policy):
+    config = _config(roster)
+    config['when_missing'] = policy
+    with pytest.raises(ValueError, match='when_missing'):
+        _assign(roster, roster, config)
+
+
+def test_wait_mode_still_checks_the_pads_that_are_there(roster):
+    config = _wait(roster)
+    missing = config['devices'][0]
+
+    def resolve(path):
+        return '/dev/input/event5' if path == config['devices'][1] else _js(path)
+
+    with pytest.raises(ValueError, match='-event-joystick') as error:
+        _assign(roster, roster, config, exists=lambda p: p != missing, resolve=resolve)
+    assert roster[1].name in str(error.value) and roster[0].name not in str(error.value)
+
+    with pytest.raises(ValueError, match='same device'):
+        _assign(roster, roster, config, exists=lambda p: p != missing,
+                resolve=lambda p: '/dev/input/js0')
+
+
+def test_wait_mode_refuses_a_missing_event_link_by_its_name(roster):
+    config = _wait(roster)
+    config['devices'][2] = '/dev/input/by-path/pci-usb-0:3:1.0-event-joystick'
+    with pytest.raises(ValueError, match='not plugged in') as error:
+        _assign(roster, roster, config, exists=lambda p: False)
+    assert roster[2].name in str(error.value)
+
+
+def test_wait_mode_keeps_the_shape_checks(roster):
+    with pytest.raises(ValueError, match='pair by position'):
+        _assign(roster, roster, _wait(roster, _config(roster)['devices'][:-1]),
+                exists=lambda p: False)
+    devices = _config(roster)['devices']
+    devices[-1] = devices[0]
+    with pytest.raises(ValueError, match='more than once'):
+        _assign(roster, roster, _wait(roster, devices), exists=lambda p: False)
+
+
+def test_the_default_warning_goes_to_stderr_with_the_launch_prefix(roster, capsys):
+    config = _wait(roster)
+    demo.assign_joysticks(roster, roster[:1], config, exists=lambda p: False, resolve=_js)
+    err = capsys.readouterr().err
+    assert err.startswith('[demo_boats_launch] ') and roster[0].name in err
+
+
+def test_the_shipped_plug_order_file_waits_on_js_numbers_in_roster_order(roster):
+    config = demo.load_joystick_config(str(PLUG_ORDER_JOYSTICKS))
+    assert config['when_missing'] == 'wait'
+    assert config['devices'] == ['/dev/input/js%d' % b.index for b in roster]
+    # The kernel nodes are their own real path, so the js<N> check passes on them as is.
+    notes = []
+    assignment = demo.assign_joysticks(roster, roster, config, exists=lambda p: p.endswith('0'),
+                                       resolve=lambda p: p, warn=notes.append)
+    assert assignment[roster[0].name] == '/dev/input/js0'
+    assert len(notes) == len(roster) - 1
+    demo.check_joystick_settings(config['deadzone'], config['autorepeat_rate'])
+    assert config['deadzone'] == demo.load_joystick_config(str(JOYSTICKS))['deadzone']
 
 
 # --- nav stack ---------------------------------------------------------------------
@@ -623,6 +730,31 @@ def test_the_shipped_chart_grid_passes_the_check_for_the_roster_boats(roster):
 
 
 # -- launch_setup really runs the grid check -----------------------------------------------------
+
+def test_in_wait_mode_every_boat_gets_a_joy_driver_whether_its_pad_is_there_or_not(
+        tmp_path, no_host_checks, monkeypatch, capsys):
+    monkeypatch.setattr(demo, 'require_package', lambda *a, **k: None)
+    started = []
+    real_node = demo.Node
+
+    def recording_node(**kwargs):
+        started.append(kwargs)
+        return real_node(**kwargs)
+
+    monkeypatch.setattr(demo, 'Node', recording_node)
+    devices = [str(tmp_path / ('js%d' % i)) for i in range(4)]
+    for device in devices[:2]:                       # two pads plugged in, two not
+        pathlib.Path(device).write_bytes(b'')
+    config = tmp_path / 'joysticks.yaml'
+    config.write_text(yaml.safe_dump({'when_missing': 'wait', 'devices': devices,
+                                      'deadzone': 0.1, 'autorepeat_rate': 10.0}))
+    demo.launch_setup(_setup_context(tmp_path, enable_joysticks='true',
+                                     joystick_config=str(config)))
+    joy = [n for n in started if n.get('name') == 'joy_node']
+    assert [n['parameters'][0]['dev'] for n in joy] == devices
+    err = capsys.readouterr().err
+    assert err.count('not plugged in') == 2 and devices[2] in err and devices[3] in err
+
 
 def test_launch_setup_propagates_a_refused_grid(tmp_path, no_host_checks, monkeypatch):
     def refuse(path, boats):

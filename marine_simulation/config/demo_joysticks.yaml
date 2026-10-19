@@ -22,7 +22,9 @@
 # The paths below are PLACEHOLDERS: by-path names contain the PCI address of the
 # USB controller, so they differ from host to host (and between front and rear
 # ports). Copy this file for each machine, fill in the real links, and pass
-# joystick_config:=<copy>. The launch refuses to start joysticks that do not exist.
+# joystick_config:=<copy>. The launch refuses to start joysticks that do not exist
+# (when_missing: refuse, the default; demo_joysticks_plug_order.yaml binds the boats
+# to /dev/input/js0, js1, ... in plug order instead and waits for missing pads).
 
 devices:
   - /dev/input/by-path/PLACEHOLDER-port1-blue-joystick
