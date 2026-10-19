@@ -132,3 +132,19 @@ issue: 102
 
 ### Verification
 - Full suite: see commit; 8 baseline lint failures only.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 13:10 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed beyond 273c2a9)
+
+### Done
+- [x] rqt group (`demo_rqt_launch.py`, `rqt --perspective demo`, persistent rqt settings, no placement, follows camp, restart never, missing rqt = message). Headless proof: /coverage_assessment is the scorer's topic (no namespace, transient local), matching the plugin's default `coverage_assessment`.
+- [x] `run_demo.sh` no longer requires a per-computer layout.yaml; `--camp-fresh` honoured once per manager process and only by a start that happened; the saved settings file is put back (with marker and 0700 root) when the reset or write fails.
+- [x] Review (Claude adversarial): restore edge cases, fresh consumption, rqt env test, apt hint text fixed.
+- [ ] Not done: first-start fit still assumes 1920x1080 without a CAMP layout entry; gemini review timed out in earlier rounds.
+
+### Verification
+- Full suite: 986 tests, 0 errors, 8 failures (baseline lint), 1 skipped.
