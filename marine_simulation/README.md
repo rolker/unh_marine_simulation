@@ -210,7 +210,7 @@ CAMP has nothing saved on a new computer, so its first window is the default siz
 fitted view. Start the demo (`run_demo.sh`), click the **maximise button in CAMP's title bar**,
 set the view the way it should come up (zoom and pan), and **close CAMP**, which stops the demo.
 Start it again: CAMP comes back maximised on the same view, and every later start does too.
-To forget it (a different screen, a bad view saved), start once with `--camp-fresh`. The saved
+To forget it (a different screen, a bad view saved), start once with `--camp-fresh` (it applies to every start of the CAMP group in that session). If CAMP is killed or crashes it never saves, and the next start generates the view again (the generated profile carries a marker comment that CAMP's own save removes). A computer that already has its own `~/.config/marine_simulation_demo/layout.yaml` with a `camp` entry still places CAMP: delete that entry (an empty `windows: []` is fine; `run_demo.sh` still wants the file to exist). The saved
 window and view are CAMP's own settings file under
 `~/.local/state/marine_simulation_demo/xdg_config/`.
 

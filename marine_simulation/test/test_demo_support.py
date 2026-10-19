@@ -884,7 +884,7 @@ def test_a_start_carries_over_what_camp_saved(monkeypatch, tmp_path, roster):
     conf, text = _start_camp(monkeypatch, tmp_path, roster)
     lines = conf.splitlines()
     assert SAVED_GEOMETRY in lines and SAVED_STATE in lines and SAVED_SCALE in lines
-    assert 'mapScale=0.40625' in lines
+    assert 'mapView\\scale=0.40625' in lines and SAVED_CENTER in lines
     assert any('saved: window, view' in t for t in text)
     assert any('the view CAMP saved' in t for t in text)
     assert 'somechart' not in conf and 'openstreetmap\\visible=false' not in conf   # layers reset
@@ -913,11 +913,29 @@ def test_an_unusable_saved_file_makes_it_a_first_start(monkeypatch, tmp_path, ro
 
 def test_a_second_start_restores_what_the_first_one_wrote(monkeypatch, tmp_path, roster):
     first, _ = _start_camp(monkeypatch, tmp_path, roster)
-    # CAMP closes maximised and saves its window next to the generated view
+    # CAMP closes maximised, rewriting the file (no comments) with its window and its own view
     path = pathlib.Path(demo.camp_settings_path(demo.settings_root(str(tmp_path))))
-    path.write_text(first.replace('[MainWindow]\n', '[MainWindow]\n%s\n%s\n' % (
-        SAVED_GEOMETRY, SAVED_STATE)))
-    second, _ = _start_camp(monkeypatch, tmp_path, roster)
-    assert SAVED_GEOMETRY in second.splitlines()
-    assert demo.parse_profile(second)['MainWindow'] == demo.parse_profile(
-        path.read_text())['MainWindow']
+    closed = '[MainWindow]\n%s\n%s\n%s\n%s\n' % (
+        SAVED_GEOMETRY, SAVED_STATE, SAVED_CENTER, SAVED_SCALE)
+    path.write_text(closed)
+    second, text = _start_camp(monkeypatch, tmp_path, roster)
+    assert demo.parse_profile(second)['MainWindow'] == demo.parse_profile(closed)['MainWindow']
+    assert demo.GENERATED_VIEW_MARKER not in second.splitlines()
+    assert any('saved: window, view' in t for t in text)
+
+
+def test_a_view_the_demo_generated_is_not_read_back_after_an_unclean_exit(
+        monkeypatch, tmp_path, roster):
+    first, _ = _start_camp(monkeypatch, tmp_path, roster)
+    assert demo.GENERATED_VIEW_MARKER in first.splitlines()
+    # CAMP was killed: the file is still the one the demo wrote, plus whatever it carried
+    second, text = _start_camp(monkeypatch, tmp_path, roster)
+    assert any('fitted' in t for t in text) and not any('view CAMP saved' in t for t in text)
+    assert demo.GENERATED_VIEW_MARKER in second.splitlines()
+
+
+@pytest.mark.parametrize('scale', ['0', '-1', '', 'nan', 'inf', 'abc'])
+def test_a_saved_scale_that_is_not_positive_and_finite_is_not_a_saved_view(scale):
+    text = '[MainWindow]\n%s\n%s\nmapScale=%s\n' % (SAVED_GEOMETRY, SAVED_CENTER, scale)
+    saved = demo.carry_over(text)
+    assert not demo.has_saved_view(saved) and saved == {'MainWindow': [SAVED_GEOMETRY]}
