@@ -73,3 +73,19 @@ issue: 102
 ### Verification
 - `./simulation_ws/test.sh launch_manager_proto marine_simulation mbes_sim`: 890 tests, 0 errors, 8 failures (baseline lint), 1 skipped (host-only live test).
 - Live headless test, ROS_DOMAIN_ID=174: 1 passed in 75 s; no processes left.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 08:50 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed beyond 273c2a9)
+
+### Done
+- [x] Fitted CAMP view: the starting view is fitted to the target polygon's bounding box (12.5 % margin, window from the layout's CAMP rect or its monitor via xrandr, 1920x1080 fallback, logged); `demo_camp_view.yaml` with a `scale` is an exact override; no target file falls back to the boats' centre at scale 1.0.
+- [x] Pre-push review of the delta since de6e0ff (Claude adversarial: 11 suggestions; codex: 2 must-fix; gemini timed out at 420 s). Fixed: CAMP entry matched like place_windows, named layout-file errors, empty layout path, standalone launch without a target, clamp test, stray print removed.
+- [ ] Not done: antimeridian/latitude guard (unreachable for the demo), one shared xrandr parser with place_windows, note on logical vs physical pixels under desktop scaling.
+
+### Verification
+- Full suite: 938 tests, 0 errors, 8 failures (the baseline lint), 1 skipped.
+- Headless demo (ROS_DOMAIN_ID=88, 85 s): publisher sent area0000, scorer configured at cell_size=2 m, "Assessments: 36 published", no Rejecting, no process left.
