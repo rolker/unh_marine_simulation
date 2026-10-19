@@ -103,3 +103,17 @@ issue: 102
 
 ### Verification
 - Full suite: 944 tests, 0 errors, 8 failures (the baseline lint), 1 skipped.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 10:05 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed beyond 273c2a9)
+
+### Done
+- [x] Second live run: mutter maximized CAMP correctly (3774x2091+66+346, frame 0,0,37,0) but place_windows rejected it, because wmctrl -lG offsets the top by the frame once more. The check now takes `_NET_FRAME_EXTENTS` out (one xprop call with the state), judges the monitor by the window centre, and the failure says state, coverage or position. Tests: the exact live geometry accepted and logged, the same size on DP-2 rejected, FULLSCREEN still rejected.
+- [ ] View-fit scale/centre problem left to the host's live diagnosis (not touched).
+
+### Verification
+- Full suite: 949 tests, 0 errors, 8 failures (baseline lint), 1 skipped.
