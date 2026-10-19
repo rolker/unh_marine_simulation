@@ -79,4 +79,4 @@ Live runs showed the seeded view applied at CAMP's initial size and then disturb
 - `--camp-fresh` (`demo_manager.py`, `camp_fresh` argument of `demo_camp_launch.py`) discards the saved window and view for one start.
 - The placer's maximised mode, state check and frame handling stay in `place_windows.py` for the scoreboard window later.
 - The tile cache is still emptied every start; layers still come from the template every start.
-
+- Also added the same day: an `rqt` manager group (`demo_rqt_launch.py`, `rqt --perspective demo` on the operator's persistent rqt settings, no placement, `follows: [camp]`, `restart: never`) for the Survey Coverage plugin; `run_demo.sh` no longer requires a per-computer `layout.yaml` (none = nothing to place); `--camp-fresh` is honoured once per manager process; `seed_camp_settings` restores the old file on a failed write.

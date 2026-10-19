@@ -939,3 +939,35 @@ def test_a_saved_scale_that_is_not_positive_and_finite_is_not_a_saved_view(scale
     text = '[MainWindow]\n%s\n%s\nmapScale=%s\n' % (SAVED_GEOMETRY, SAVED_CENTER, scale)
     saved = demo.carry_over(text)
     assert not demo.has_saved_view(saved) and saved == {'MainWindow': [SAVED_GEOMETRY]}
+
+
+def test_fresh_applies_to_the_first_start_only_so_a_restart_keeps_what_camp_saved(
+        monkeypatch, tmp_path, roster):
+    _write_saved(tmp_path)
+    first, _ = _start_camp(monkeypatch, tmp_path, roster, fresh=True)
+    assert 'geometry=' not in first
+    # CAMP closes and saves its window; the manager restarts the group with the same arguments
+    pathlib.Path(demo.camp_settings_path(demo.settings_root(str(tmp_path)))).write_text(
+        '[MainWindow]\n%s\n%s\n%s\n' % (SAVED_GEOMETRY, SAVED_CENTER, SAVED_SCALE))
+    second, text = _start_camp(monkeypatch, tmp_path, roster, fresh=True)
+    assert SAVED_GEOMETRY in second.splitlines()
+    assert any('saved: window, view' in t for t in text)
+
+
+def test_a_failed_write_after_the_reset_puts_the_saved_file_back(tmp_path):
+    root = tmp_path / '.local' / 'state' / 'marine_simulation_demo' / 'xdg_config'
+    path = pathlib.Path(demo.camp_settings_path(str(root)))
+    path.parent.mkdir(parents=True)
+    (root / demo.ROOT_MARKER).write_text('x')
+    path.write_text(SAVED_FILE)
+    with pytest.raises(TypeError):
+        demo.seed_camp_settings(str(root), None, str(tmp_path))     # f.write(None) fails
+    assert path.read_text() == SAVED_FILE
+    assert demo.carry_over(path.read_text())['MainWindow'][0] == SAVED_GEOMETRY
+
+
+def test_a_failed_first_write_leaves_no_half_file_to_restore(tmp_path):
+    root = tmp_path / '.local' / 'state' / 'marine_simulation_demo' / 'xdg_config'
+    with pytest.raises(TypeError):
+        demo.seed_camp_settings(str(root), None, str(tmp_path))
+    assert not pathlib.Path(demo.camp_settings_path(str(root))).read_text()

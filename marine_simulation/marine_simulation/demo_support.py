@@ -579,12 +579,33 @@ def read_saved_settings(root: str) -> Tuple[Dict[str, List[str]], str]:
 
 
 def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> str:
-    """Reset ``root`` and write ``profile`` where CAMP's QSettings will read it."""
-    reset_settings_root(root, home)
+    """
+    Reset ``root`` and write ``profile`` where CAMP's QSettings will read it.
+
+    The file CAMP saved last time is held in memory across the reset; when resetting or writing
+    fails it is put back (best effort) before the error goes on, so a full disk or a bad
+    permission does not cost the operator the saved window and view.
+    """
     path = camp_settings_path(root)
-    os.makedirs(os.path.dirname(path))
-    with open(path, 'w', encoding='utf-8', errors='surrogateescape') as f:
-        f.write(profile)
+    try:
+        with open(path, 'rb') as f:
+            previous = f.read()
+    except OSError:
+        previous = None
+    try:
+        reset_settings_root(root, home)
+        os.makedirs(os.path.dirname(path))
+        with open(path, 'w', encoding='utf-8', errors='surrogateescape') as f:
+            f.write(profile)
+    except Exception:
+        if previous is not None:
+            try:
+                os.makedirs(os.path.dirname(path), exist_ok=True)
+                with open(path, 'wb') as f:
+                    f.write(previous)
+            except OSError:
+                pass
+        raise
     return path
 
 
@@ -705,6 +726,9 @@ def camp_node(settings_home: str, project_file: str = '') -> Node:
                 additional_env={'XDG_CONFIG_HOME': settings_home})
 
 
+_FRESH_APPLIED: List[bool] = []   # set once --camp-fresh has been honoured in this process
+
+
 def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
                  target_file: str = '', layout_config: str = '', fresh: bool = False) -> list:
     """
@@ -719,6 +743,11 @@ def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
     """
     require_file(camp_profile, 'camp_profile')
     root = settings_root()
+    # --camp-fresh is for the first start of the session only: a restart of the camp group by
+    # the manager must keep what CAMP saved since.
+    fresh = fresh and not _FRESH_APPLIED
+    if fresh:
+        _FRESH_APPLIED.append(True)
     if fresh:
         saved, why = {}, 'discarded (--camp-fresh)'
     else:

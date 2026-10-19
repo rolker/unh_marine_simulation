@@ -33,3 +33,19 @@ import pathlib
 import sys
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1]))
+
+
+import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _each_test_is_a_first_start():
+    """Forget that --camp-fresh was honoured, so tests do not see each other's starts."""
+    try:
+        from marine_simulation import demo_support
+    except ImportError:
+        yield
+        return
+    demo_support._FRESH_APPLIED.clear()
+    yield
+    demo_support._FRESH_APPLIED.clear()

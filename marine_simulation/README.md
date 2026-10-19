@@ -38,6 +38,10 @@ TO START THE DEMO
      (a window in the wrong place, a frozen map): close the map window, wait
      for the prompt, UP ARROW, ENTER. Still wrong: call.
 
+  6. A second window, rqt ("rqt"), may be open: it shows the coverage score
+     (the perspective "demo"). The first time on a computer it is empty: Plugins >
+     Robot Tools > Survey Coverage, arrange it, close it; it is remembered.
+
 TO STOP EVERYTHING: close the map window (the big one). Everything else
 shuts down by itself; wait until the terminal prompt comes back. (If that does
 not work: click the terminal and press CTRL and C together.)
@@ -58,8 +62,9 @@ The up-arrow command is the one typed last, so type it once yourself first:
    - `env.bash`: the line(s) that source the workspace `setup.bash`.
    - `joysticks.yaml`: a copy of `config/demo_joysticks.yaml` with this
      computer's by-path device links (see Gamepads below).
-   - `layout.yaml`: a copy of `config/demo_layout.yaml` with the monitor names
-     from `xrandr --listmonitors`.
+   - `layout.yaml`: optional; only for windows that need placing (the installed layout
+     places none): a copy of `config/demo_layout.yaml` with the monitor names from
+     `xrandr --listmonitors`.
    - `target.json`: optional, the saved CAMP file holding the target survey area
      (see "Target area" below).
 3. Rehearse from a cold boot: start the computer, open a terminal, run
@@ -128,7 +133,7 @@ is unknown or is one the manager sets itself; the layout is
 malformed, names a monitor that is not connected, or the session is not X11 or `wmctrl` is
 missing (the same `place_windows.py --check` that `run_demo.sh` makes first and reports as
 one sentence). `run_demo.sh` itself refuses, with the same phrase and exit status 1, when
-this computer's `joysticks.yaml` or `layout.yaml` is missing, the domain override is not
+this computer's `joysticks.yaml` is missing (`layout.yaml` is optional), the domain override is not
 0 to 101, ROS is not set up, or a map window is open. The scorer's parameters are
 generated from the roster (so `--boats a,b` scores exactly those boats) into a temporary
 directory (`/tmp/demo_manager_*`) the manager removes on exit. The lock does not outlive the manager: after a
@@ -204,13 +209,29 @@ Known limits of this approach:
 - `camp_launch.py` takes no arguments, so `demo_camp_launch.py` starts the CAMP
   executable itself (rolker/camp#240 asks for launch arguments).
 
+### rqt and the coverage plugin
+
+The manager's `rqt` group runs `rqt --perspective demo` (`demo_rqt_launch.py`): rqt switches to
+the perspective named `demo` and creates it when it does not exist. rqt keeps perspectives in the
+operator's own settings (`ros.org/rqt_gui.ini`, written when rqt exits), so it runs on those
+normal settings, not on the demo's wiped-per-start home. `--lock-perspective` is not used (the
+menu is needed to add a plugin, and the close button is how the operator closes the window), and
+the window is not placed: rqt restores its own geometry per perspective. First start on a new
+computer: in rqt choose **Plugins > Robot Tools > Survey Coverage** (`rqt_coverage/CoveragePlugin`,
+package `rqt_coverage` in `rqt_operator_tools`), arrange it, close rqt; it comes back the same on
+every later start. The plugin's default topic `coverage_assessment` resolves to the scorer's
+`/coverage_assessment` (type `marine_interfaces/msg/CoverageAssessment`, transient local), which
+the headless run of this branch showed publishing with no namespace, so nothing needs to be set in
+its config dialog; the plugin tolerates a scorer that comes up late. rqt has no `requires` and
+stops with CAMP; closing rqt by itself does not stop the demo.
+
 ### First start on a computer
 
 CAMP has nothing saved on a new computer, so its first window is the default size with the
 fitted view. Start the demo (`run_demo.sh`), click the **maximise button in CAMP's title bar**,
 set the view the way it should come up (zoom and pan), and **close CAMP**, which stops the demo.
 Start it again: CAMP comes back maximised on the same view, and every later start does too.
-To forget it (a different screen, a bad view saved), start once with `--camp-fresh` (it applies to every start of the CAMP group in that session). If CAMP is killed or crashes it never saves, and the next start generates the view again (the generated profile carries a marker comment that CAMP's own save removes). A computer that already has its own `~/.config/marine_simulation_demo/layout.yaml` with a `camp` entry still places CAMP: delete that entry (an empty `windows: []` is fine; `run_demo.sh` still wants the file to exist). The saved
+To forget it (a different screen, a bad view saved), start once with `--camp-fresh` (it applies to the first start of the CAMP group in that session only; a manager restart of the group keeps what CAMP saved since). If CAMP is killed or crashes it never saves, and the next start generates the view again (the generated profile carries a marker comment that CAMP's own save removes). A computer that already has its own `~/.config/marine_simulation_demo/layout.yaml` with a `camp` entry still places CAMP: delete that entry (an empty `windows: []` is fine; `run_demo.sh` no longer needs the file at all: without `~/.config/marine_simulation_demo/layout.yaml` nothing is placed). The saved
 window and view are CAMP's own settings file under
 `~/.local/state/marine_simulation_demo/xdg_config/`.
 
@@ -615,6 +636,7 @@ ros2 run launch_manager_proto launch_manager_proto status       # what is it doi
 | `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, via `marine_simulation.demo_support.camp_actions`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
 | `target_area` | `demo_target_area_launch.py` (`publish_survey_area.py`, latched, on the target file) | READY when `/survey_area_publisher` is in the graph; `follows: [camp]` |
 | `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_support.scorer_parameters` (map frame = the first boat's) | `requires: [boats, target_area]`, `follows: [camp]`, lifecycle node `/coverage_assessment` to `active` |
+| `rqt` | `demo_rqt_launch.py` (`rqt --perspective demo`; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
 | `layout` | `demo_layout_launch.py` (`place_windows.py`, once) | `requires: [camp]`, `follows: [camp]`, `restart: never` (run once, see "Window layout") |
 
 Profiles: `demo` (all five), `headless` (boats, target area and scorer), `boats` (boats

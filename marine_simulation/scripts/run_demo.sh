@@ -8,8 +8,8 @@
 #   env.bash       sources the ROS workspace (optional when ros2 is already on PATH)
 #   joysticks.yaml the gamepad device links of this host (required unless
 #                  --no-joysticks is given)
-#   layout.yaml    where the windows go on this host (required unless
-#                  --no-layout is given)
+#   layout.yaml    where the windows go on this host (optional: without it nothing
+#                  is placed; CAMP and rqt remember their own windows)
 #   target.json    the saved CAMP file holding the target area (optional; the installed
 #                  demo polygon is used without it)
 # then checks that the display can be laid out and starts demo_manager.py, which brings up
@@ -141,18 +141,21 @@ if [ "$want_help" -ne 0 ]; then
         fi
     fi
     if [ "$display" -eq 0 ] && [ "$no_layout" -ne 0 ]; then
+        layout=
         if [ -n "$given_layout" ]; then
             layout=$given_layout
             [ -f "$layout" ] || die "the layout file $layout is missing."
-        else
+        elif [ -f "$CONFIG_DIR/layout.yaml" ]; then
             layout=$CONFIG_DIR/layout.yaml
-            [ -f "$layout" ] ||
-                die "$layout is missing. Copy the example from the marine_simulation config directory and edit it for this computer."
             args+=(--layout "$layout")
         fi
-        checker=$(place_windows_tool) || exit 1
-        problem=$("$checker" --check --layout "$layout" 2>&1) ||
-            die "the windows cannot be laid out: ${problem#place_windows: }"
+        # No layout.yaml on this computer means nothing to place (the installed layout places
+        # no window: CAMP remembers its own).
+        if [ -n "$layout" ]; then
+            checker=$(place_windows_tool) || exit 1
+            problem=$("$checker" --check --layout "$layout" 2>&1) ||
+                die "the windows cannot be laid out: ${problem#place_windows: }"
+        fi
     fi
     if [ "$display" -eq 0 ] && command -v pgrep > /dev/null 2>&1 &&
         pgrep -x CCOMAutonomousM > /dev/null 2>&1; then

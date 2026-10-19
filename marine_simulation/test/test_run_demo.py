@@ -151,13 +151,20 @@ def test_without_a_target_file_the_manager_uses_its_installed_polygon(machine):
     assert '--target' not in _record(machine)
 
 
-@pytest.mark.parametrize('missing', ['joysticks.yaml', 'layout.yaml'])
-def test_a_missing_machine_file_stops_with_a_plain_message(machine, missing):
-    _files(machine, *({'joysticks.yaml', 'layout.yaml'} - {missing}))
+def test_a_missing_joystick_file_stops_with_a_plain_message(machine):
+    _files(machine, 'layout.yaml')
     result = _run(machine)
     assert result.returncode == 1
-    assert 'DID NOT START' in result.stderr and missing in result.stderr
+    assert 'DID NOT START' in result.stderr and 'joysticks.yaml' in result.stderr
     assert not (machine / 'record').exists()
+
+
+def test_a_missing_layout_file_means_nothing_to_place_not_an_error(machine):
+    _files(machine, 'joysticks.yaml')
+    result = _run(machine)
+    assert result.returncode == 0, result.stderr
+    assert '--layout' not in _record(machine)
+    assert not (machine / 'record.check').exists()          # nothing to check either
 
 
 def test_a_machine_file_is_not_needed_when_its_part_is_switched_off(machine):
@@ -206,7 +213,8 @@ def test_the_demo_profile_named_out_loud_is_the_default_demo(machine):
     result = _run(machine, '--profile=demo')
     assert result.returncode == 1 and 'joysticks.yaml' in result.stderr
     _files(machine, 'joysticks.yaml')
-    assert 'layout.yaml' in _run(machine, '--profile', 'demo').stderr
+    result = _run(machine, '--profile', 'demo')
+    assert result.returncode == 0 and '--layout' not in _record(machine)
 
 
 def test_no_ros_says_how_to_set_it_up(machine):
