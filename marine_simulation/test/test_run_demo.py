@@ -378,3 +378,48 @@ def test_no_warning_without_the_display(machine):
     _gsettings(machine, 'true')
     result = _run(machine, '--profile', 'headless')
     assert result.returncode == 0 and 'auto-maximize' not in result.stderr
+
+
+# --- --hold: the desktop shortcut's terminal closes when the script ends -------------
+
+def test_hold_waits_for_enter_after_the_manager_and_keeps_its_exit_status(machine):
+    _files(machine, 'joysticks.yaml')
+    result = subprocess.run(
+        ['bash', str(SCRIPT), '--hold'], input='\n', capture_output=True, text=True,
+        timeout=30, env=_env(machine, FAKE_MANAGER_STATUS='3'))
+    assert result.returncode == 3
+    assert result.stderr.rstrip().endswith('Press ENTER to close this window.')
+    assert '--hold' not in _record(machine)
+
+
+def test_hold_also_keeps_a_did_not_start_message_readable(machine):
+    result = subprocess.run(
+        ['bash', str(SCRIPT), '--hold'], input='\n', capture_output=True, text=True,
+        timeout=30, env=_env(machine))
+    assert result.returncode == 1
+    assert 'DID NOT START' in result.stderr and 'joysticks.yaml' in result.stderr
+    assert result.stderr.rstrip().endswith('Press ENTER to close this window.')
+
+
+def test_hold_does_not_hang_when_there_is_no_terminal_to_read_from(machine):
+    _files(machine, 'joysticks.yaml')
+    result = subprocess.run(
+        ['bash', str(SCRIPT), '--hold'], stdin=subprocess.DEVNULL, capture_output=True,
+        text=True, timeout=30, env=_env(machine))
+    assert result.returncode == 0, result.stderr
+
+
+def test_without_hold_nothing_waits(machine):
+    _files(machine, 'joysticks.yaml')
+    result = _run(machine)
+    assert result.returncode == 0
+    assert 'Press ENTER' not in result.stderr
+
+
+def _env(machine, **extra):
+    env = {'PATH': str(machine / 'bin') + ':/usr/bin:/bin', 'HOME': str(machine),
+           'RECORD': str(machine / 'record'), 'DEMO_CONFIG_DIR': str(machine / 'config'),
+           'DEMO_PLACE_WINDOWS': str(machine / 'place_windows.py'),
+           'DEMO_MANAGER': str(machine / 'demo_manager.py')}
+    env.update(extra)
+    return env

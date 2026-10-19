@@ -20,14 +20,30 @@
 # Options after the script name go to demo_manager.py (--help lists them), and so do extra
 # boats-launch arguments in the launch form, e.g. tide_speed_factor:=1 (checked there). The
 # ones that name this machine's files (--joysticks FILE, --layout FILE, --target FILE)
-# replace the files above.
+# replace the files above. One option is this script's own: --hold waits for ENTER
+# before the script ends, so a terminal that closes with it (the desktop shortcut
+# install_demo_shortcut.sh makes) keeps the last message readable.
 #
-# Copy-and-edit examples of the two yaml files are installed in
-# share/marine_simulation/config (demo_joysticks.yaml, demo_layout.yaml).
+# Copy-and-edit examples of the yaml files are installed in share/marine_simulation/config
+# (demo_joysticks.yaml for labelled ports, demo_joysticks_plug_order.yaml for any pads
+# in plug order, demo_layout.yaml).
+
+hold=1
+for arg in "$@"; do
+    [ "$arg" = --hold ] && hold=0
+done
+
+finish() { # finish <status>: with --hold, wait for ENTER first (stdin is the terminal)
+    if [ "$hold" -eq 0 ]; then
+        printf '\nPress ENTER to close this window.\n' >&2
+        read -r _ || true
+    fi
+    exit "$1"
+}
 
 die() {
     printf 'THE DEMO DID NOT START: %s\n' "$*" >&2
-    exit 1
+    finish 1
 }
 
 [ -n "${HOME:-}" ] || die "HOME is not set."
@@ -120,6 +136,7 @@ while [ $# -gt 0 ]; do
             ;;
     esac
     case "$arg" in
+        --hold) continue ;; # this script's own, read above
         --no-joysticks) no_joysticks=0 ;;
         --no-layout) no_layout=0 ;;
         -h | --help) want_help=0 ;;
@@ -183,5 +200,9 @@ if [ "$want_help" -ne 0 ]; then
     fi
 fi
 
-manager=$(manager_tool) || exit 1
+manager=$(manager_tool) || finish 1
+if [ "$hold" -eq 0 ]; then
+    "$manager" "${args[@]}" "${passed[@]}"
+    finish $?
+fi
 exec "$manager" "${args[@]}" "${passed[@]}"
