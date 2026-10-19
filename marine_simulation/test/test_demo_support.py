@@ -469,7 +469,7 @@ def test_camp_actions_seed_the_private_settings_and_empty_the_tile_cache(
     def start(target=''):
         return demo.camp_actions(roster, str(CONFIG / 'demo_camp_profile.conf'),
                                  str(CONFIG / 'demo_camp_view.yaml'), target,
-                                 str(CONFIG / 'demo_layout.yaml'))
+                                 CAMP_LAYOUT)
 
     actions = start(POLYGON)
     assert started == [(demo.settings_root(str(tmp_path)), POLYGON)]
@@ -664,12 +664,13 @@ def test_target_bounds_report_a_bad_file_plainly(tmp_path):
         demo.target_bounds(str(bad), str(tmp_path / 'missing'))
 
 
+CAMP_LAYOUT = str(pathlib.Path(__file__).resolve().parent / 'camp_maximized_layout.yaml')
 XRANDR_BIG = (' 0: +*HDMI-0 3840/800x2160/450+0+240  HDMI-0\n'
               ' 1: +DP-2 1920/519x1200/320+4966+0  DP-2\n')
 
 
 def test_the_window_size_is_the_monitor_of_the_layouts_camp_entry():
-    size, note = demo.camp_window_size(str(CONFIG / 'demo_layout.yaml'), lambda c: XRANDR_BIG)
+    size, note = demo.camp_window_size(CAMP_LAYOUT, lambda c: XRANDR_BIG)
     assert size == BIG_SCREEN and 'HDMI-0' in note
 
 
@@ -688,7 +689,7 @@ def test_a_rect_entry_gives_the_rect_size(tmp_path):
     (XRANDR_BIG, 'nonsense'),
 ])
 def test_an_unreadable_window_size_is_none_with_a_reason(tmp_path, xrandr, layout_text):
-    layout = CONFIG / 'demo_layout.yaml'
+    layout = pathlib.Path(CAMP_LAYOUT)
     if layout_text is not None:
         layout = tmp_path / 'layout.yaml'
         layout.write_text(layout_text)
@@ -701,13 +702,13 @@ def test_a_missing_layout_file_or_xrandr_is_none_with_a_reason(tmp_path):
 
     def boom(command):
         raise OSError('xrandr: not found')
-    size, note = demo.camp_window_size(str(CONFIG / 'demo_layout.yaml'), boom)
+    size, note = demo.camp_window_size(CAMP_LAYOUT, boom)
     assert size is None and 'xrandr' in note
 
 
 def _start_view(view, target=POLYGON, layout=None, runner=lambda c: XRANDR_BIG, boats=None):
     return demo.camp_start_view(boats or [_boat('one', lat=43.0, lon=-70.0)], view, target,
-                                layout or str(CONFIG / 'demo_layout.yaml'),
+                                layout or CAMP_LAYOUT,
                                 str(PACKAGE / 'scripts' / 'publish_survey_area.py'), runner)
 
 
@@ -767,7 +768,7 @@ def test_camp_actions_fit_the_view_to_the_polygon_in_the_settings_it_writes(
     monkeypatch.setattr(demo, 'camp_window_size', lambda layout, runner=None: (BIG_SCREEN, 'x'))
     demo.camp_actions(roster, str(CONFIG / 'demo_camp_profile.conf'),
                       str(CONFIG / 'demo_camp_view.yaml'), POLYGON,
-                      str(CONFIG / 'demo_layout.yaml'))
+                      CAMP_LAYOUT)
     conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
                         'CCOMAutonomousMissionPlanner.conf').read_text()
     # the publisher prints the bounds to nine decimals, so fit what it prints
@@ -776,3 +777,147 @@ def test_camp_actions_fit_the_view_to_the_polygon_in_the_settings_it_writes(
     written = float(re.search(r'^mapScale=(\S+)$', conf, re.M).group(1))
     assert written == pytest.approx(scale, rel=1e-6)
     assert demo.qt_point_variant(*demo.web_mercator(lat, lon)) in conf
+
+
+# --- CAMP remembers its own window and view between starts ------------------------------
+
+# What CAMP's QSettings wrote when it closed maximised: a Qt-escaped byte array (backslashes,
+# a doubled quote, parentheses, commas) that must come back byte for byte.
+SAVED_GEOMETRY = (r'geometry="@ByteArray(\x1\xd9\xd0\xcb\0\x3\0\0\0\0\0\x42\0\0\xf\xff'
+                  r'\0\0\b\x97,\"q\";\0\0\0\0\0\0\0\x18\0\0\xf\xff\0\0\b\x97)"')
+SAVED_STATE = r'state="@ByteArray(\0\0\0\xff\0\0\0\0\xfd\0\0\0\x2\0\0\0\0\0\0\x1\x5c)"'
+SAVED_CENTER = r'mapCenter="@Variant(\0\0\0\x1a\x41\x8b\xc9\x80\0\0\0\0\xc1\x54\x34\x1\0\0\0\0)"'
+SAVED_SCALE = 'mapScale=0.40625'
+SAVED_FILE = """[General]
+recentProjects=a.json, b.json
+
+[MainWindow]
+%s
+%s
+%s
+%s
+sidePanelWidth=300
+
+[MapView]
+mapView\\center="@Variant(\\0\\0\\0\\x1a\\x41\\x8b)"
+mapView\\scale=0.40625
+
+[MapItem]
+openstreetmap\\visible=false
+somechart\\visible=true
+""" % (SAVED_GEOMETRY, SAVED_STATE, SAVED_CENTER, SAVED_SCALE)
+PROFILE_TEMPLATE = str(CONFIG / 'demo_camp_profile.conf')
+
+
+def _write_saved(home, text=SAVED_FILE):
+    path = pathlib.Path(demo.camp_settings_path(demo.settings_root(str(home))))
+    path.parent.mkdir(parents=True)
+    (path.parent.parent / demo.ROOT_MARKER).write_text('x')
+    path.write_text(text)
+    return path
+
+
+def test_carry_over_keeps_only_the_window_and_view_lines_exactly_as_written():
+    saved = demo.carry_over(SAVED_FILE)
+    assert saved['MainWindow'] == [SAVED_GEOMETRY, SAVED_STATE, SAVED_CENTER, SAVED_SCALE]
+    assert saved['MapView'] == [
+        'mapView\\center="@Variant(\\0\\0\\0\\x1a\\x41\\x8b)"', 'mapView\\scale=0.40625']
+    assert set(saved) == {'MainWindow', 'MapView'}          # layers and the rest are not kept
+
+
+def test_a_half_a_view_is_not_kept_and_a_window_alone_is():
+    only_center = '[MainWindow]\n%s\n%s\n[MapView]\nmapView\\scale=1\n' % (
+        SAVED_GEOMETRY, SAVED_CENTER)
+    saved = demo.carry_over(only_center)
+    assert saved == {'MainWindow': [SAVED_GEOMETRY]} and not demo.has_saved_view(saved)
+    assert demo.carry_over('[MainWindow]\nsidePanelWidth=3\n') == {}
+
+
+def test_a_saved_window_and_view_round_trip_through_the_profile_byte_for_byte(roster):
+    with open(PROFILE_TEMPLATE) as f:
+        template = f.read()
+    saved = demo.carry_over(SAVED_FILE)
+    profile = demo.build_profile(template, roster, None, None, None, '/cache', saved)
+    sections = demo.parse_profile(profile)
+    assert sections['MainWindow'] == saved['MainWindow']
+    assert sections['MapView'] == saved['MapView']
+    assert SAVED_GEOMETRY in profile.splitlines()
+    # and what the next start reads back is the same again
+    assert demo.carry_over(profile) == saved
+    # the layers still come from the template and the boats, not from what CAMP saved
+    assert 'somechart' not in profile and 'openstreetmap\\visible=false' not in profile
+    assert 'openstreetmap\\visible=true' in profile
+    assert 'cache_dir=/cache' in profile
+
+
+def test_without_a_saved_view_the_view_is_generated_and_a_saved_window_still_kept(roster):
+    with open(PROFILE_TEMPLATE) as f:
+        template = f.read()
+    saved = demo.carry_over('[MainWindow]\n%s\n%s\n' % (SAVED_GEOMETRY, SAVED_STATE))
+    profile = demo.build_profile(template, roster, 43.0, -70.0, 0.8, None, saved)
+    window = demo.parse_profile(profile)['MainWindow']
+    assert window[:2] == [SAVED_GEOMETRY, SAVED_STATE]
+    assert any(line.startswith('mapScale=0.8') for line in window)
+    assert 'mapView\\scale=0.8' in profile
+    with pytest.raises(ValueError, match='view_scale'):
+        demo.build_profile(template, roster, 43.0, -70.0, None, None, saved)
+
+
+def _start_camp(monkeypatch, tmp_path, roster, fresh=False):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'camp_node', lambda home, project='': 'camp-node')
+    actions = demo.camp_actions(roster, PROFILE_TEMPLATE,
+                                str(CONFIG / 'demo_camp_view.yaml'), POLYGON, CAMP_LAYOUT,
+                                fresh=fresh)
+    conf = pathlib.Path(demo.camp_settings_path(demo.settings_root(str(tmp_path)))).read_text()
+    text = [''.join(getattr(part, 'text', '') for part in a.msg)
+            for a in actions if isinstance(a, LogInfo)]
+    return conf, text
+
+
+def test_a_start_carries_over_what_camp_saved(monkeypatch, tmp_path, roster):
+    _write_saved(tmp_path)
+    cache = pathlib.Path(demo.cache_dir(str(tmp_path)))
+    cache.mkdir(parents=True)
+    (cache / demo.ROOT_MARKER).write_text('x')
+    (cache / 'old_tile.bin').write_text('stale coverage')
+    conf, text = _start_camp(monkeypatch, tmp_path, roster)
+    lines = conf.splitlines()
+    assert SAVED_GEOMETRY in lines and SAVED_STATE in lines and SAVED_SCALE in lines
+    assert 'mapScale=0.40625' in lines
+    assert any('saved: window, view' in t for t in text)
+    assert any('the view CAMP saved' in t for t in text)
+    assert 'somechart' not in conf and 'openstreetmap\\visible=false' not in conf   # layers reset
+    assert not (cache / 'old_tile.bin').exists()                  # the tile cache is emptied
+
+
+def test_a_first_start_has_no_geometry_and_the_fitted_view(monkeypatch, tmp_path, roster):
+    conf, text = _start_camp(monkeypatch, tmp_path, roster)
+    assert 'geometry=' not in conf and 'state=' not in conf
+    assert any('nothing saved yet' in t for t in text)
+    assert any('fitted' in t for t in text)
+
+
+def test_fresh_discards_the_saved_window_and_view(monkeypatch, tmp_path, roster):
+    _write_saved(tmp_path)
+    conf, text = _start_camp(monkeypatch, tmp_path, roster, fresh=True)
+    assert 'geometry=' not in conf and 'mapScale=0.40625' not in conf
+    assert any('--camp-fresh' in t for t in text) and any('fitted' in t for t in text)
+
+
+def test_an_unusable_saved_file_makes_it_a_first_start(monkeypatch, tmp_path, roster):
+    _write_saved(tmp_path, 'this is not a settings file\n')
+    conf, text = _start_camp(monkeypatch, tmp_path, roster)
+    assert 'geometry=' not in conf and any('not using' in t for t in text)
+
+
+def test_a_second_start_restores_what_the_first_one_wrote(monkeypatch, tmp_path, roster):
+    first, _ = _start_camp(monkeypatch, tmp_path, roster)
+    # CAMP closes maximised and saves its window next to the generated view
+    path = pathlib.Path(demo.camp_settings_path(demo.settings_root(str(tmp_path))))
+    path.write_text(first.replace('[MainWindow]\n', '[MainWindow]\n%s\n%s\n' % (
+        SAVED_GEOMETRY, SAVED_STATE)))
+    second, _ = _start_camp(monkeypatch, tmp_path, roster)
+    assert SAVED_GEOMETRY in second.splitlines()
+    assert demo.parse_profile(second)['MainWindow'] == demo.parse_profile(
+        path.read_text())['MainWindow']

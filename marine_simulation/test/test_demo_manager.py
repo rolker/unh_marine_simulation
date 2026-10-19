@@ -239,7 +239,7 @@ def _camp_start(monkeypatch, tmp_path, **arguments):
     values = {'boats': '', 'roster_file': str(ROSTER),
               'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
               'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
-              'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'),
+              'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'), 'camp_fresh': 'false',
               'target_area_file': str(POLYGON)}
     values.update(arguments)
     context.launch_configurations.update(values)
@@ -328,7 +328,7 @@ def test_manager_camp_restarts_keep_the_manager_lock(monkeypatch, tmp_path, held
             'boats': '', 'roster_file': str(ROSTER),
             'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
             'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
-            'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'),
+            'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'), 'camp_fresh': 'false',
             'target_area_file': str(POLYGON)})
         assert module.launch_setup(context)[-1] == 'camp-node'
     del first, second
@@ -812,3 +812,29 @@ def test_the_headless_profile_skips_nothing_about_the_target(run_manager_spy, tm
 def test_the_target_check_reports_a_tool_that_cannot_run(tmp_path):
     with pytest.raises(ValueError, match='cannot run the target area check'):
         demo_manager.check_target_tool('/t.json', str(tmp_path / 'missing'))
+
+
+# --- the camp_fresh option ---------------------------------------------------------------
+
+def test_the_fresh_option_reaches_the_camp_group_and_defaults_off():
+    off = demo_manager.substitutions(['a'], '', True, '/s', '/r', '/j', '/l', '/t')
+    on = demo_manager.substitutions(['a'], '', True, '/s', '/r', '/j', '/l', '/t', True)
+    assert (off['camp_fresh'], on['camp_fresh']) == ('false', 'true')
+    loaded = config.load_config(str(CONFIG), on)
+    assert loaded.groups['camp'].arguments['camp_fresh'].default == 'true'
+
+
+def test_the_parser_knows_camp_fresh():
+    parser = demo_manager.build_parser()
+    assert parser.parse_args([]).camp_fresh is False
+    assert parser.parse_args(['--camp-fresh']).camp_fresh is True
+
+
+def test_manager_camp_start_passes_fresh_to_the_actions(monkeypatch, tmp_path):
+    seen = []
+    import marine_simulation.demo_support as support
+    real = support.camp_actions
+    monkeypatch.setattr(support, 'camp_actions', lambda *a, **k: seen.append(k) or real(*a, **k))
+    _camp_start(monkeypatch, tmp_path, camp_fresh='true')
+    _camp_start(monkeypatch, tmp_path)
+    assert [k['fresh'] for k in seen] == [True, False]

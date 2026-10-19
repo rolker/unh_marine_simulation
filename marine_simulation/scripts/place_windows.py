@@ -40,6 +40,8 @@ maximised and full screen state, moves and sizes it on the named monitor (or mak
 full screen or maximised there), then reads the geometry back and, because an application may
 resize itself after its first show, applies it once more when it does not match.
 
+A layout with no windows is a no-op: exit 0 at once, with no session, tool or wait needed.
+
 Exit status 0 when every window is in place, 1 when one is not (the reason is
 printed), 2 for a layout, session or tool that cannot be used at all. The
 ``wmctrl`` and ``xrandr`` calls go through one function (``run``) so the logic is
@@ -169,8 +171,10 @@ def load_layout(path: str):
             or not math.isfinite(timeout) or timeout <= 0):
         raise LayoutError('%s: timeout_seconds must be a positive number' % path)
     entries = data.get('windows')
-    if not isinstance(entries, list) or not entries:
-        raise LayoutError("%s: expected a non-empty 'windows' list" % path)
+    if entries is None:
+        entries = []                 # no windows to place is a valid layout (a no-op)
+    if not isinstance(entries, list):
+        raise LayoutError("%s: 'windows' must be a list" % path)
     placements = []
     for index, entry in enumerate(entries):
         where = '%s: windows[%d]' % (path, index)
@@ -419,6 +423,8 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
     The wait for windows is one deadline for the whole layout, so a window that
     never appears costs ``timeout`` seconds once, not once per window.
     """
+    if not placements:
+        return []
     geometries = {p.name: target_geometry(p, monitors) for p in placements}
     problems = []
     pending = list(placements)
@@ -533,8 +539,10 @@ def check_layout(path: str, environ=os.environ, runner=None):
     connected. Raises LayoutError with the reason otherwise.
     """
     runner = runner or run
-    check_session(environ)
     placements, timeout = load_layout(os.path.expanduser(path))
+    if not placements:
+        return placements, timeout, {}       # nothing to place: no session or tool needed
+    check_session(environ)
     runner(['wmctrl', '-m'])
     if any(p.maximized for p in placements):
         runner(['xprop', '-root', '_NET_SUPPORTED'])      # the state check needs xprop

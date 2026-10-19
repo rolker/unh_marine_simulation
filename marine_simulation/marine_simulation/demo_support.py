@@ -173,29 +173,87 @@ def live_layer_key(boat: str) -> str:
     return inner.replace('%', '%25').replace(':', '%3A')
 
 
-def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: float,
-                  view_scale: float, tile_cache_dir: Optional[str] = None) -> str:
+# What CAMP writes about its own window and map when it closes (mainwindow.cpp, camp#90), and
+# what the demo keeps from one start to the next. Everything else (layers, sources) comes
+# from the template every start.
+SAVED_WINDOW_KEYS = ('geometry', 'state')
+SAVED_VIEW_KEYS = ('mapCenter', 'mapScale')
+
+
+def _key_of(line: str) -> str:
+    return line.split('=', 1)[0].strip()
+
+
+def carry_over(saved_text: str) -> Dict[str, List[str]]:
+    """
+    Return the part of a settings file CAMP wrote that the next start keeps.
+
+    ``{'MainWindow': [raw lines of geometry, state, mapCenter, mapScale that are present],
+    'MapView': [every raw line of that section]}``, with the empty ones left out. The lines
+    are kept exactly as CAMP wrote them (``geometry`` is a Qt-escaped byte array that must not
+    be re-encoded). The view is kept only whole: a ``mapCenter`` without a ``mapScale``, or the
+    reverse, is dropped (together with ``[MapView]``), so the start falls back to the fitted view.
+    Raises ValueError when the text is not a settings file.
+    """
+    sections = parse_profile(saved_text)
+    window = sections.get('MainWindow', [])
+    kept: Dict[str, List[str]] = {}
+    lines = [line for line in window if _key_of(line) in SAVED_WINDOW_KEYS]
+    view = [line for line in window if _key_of(line) in SAVED_VIEW_KEYS]
+    if {_key_of(line) for line in view} == set(SAVED_VIEW_KEYS):
+        lines.extend(view)
+        if sections.get('MapView'):
+            kept['MapView'] = list(sections['MapView'])
+    if lines:
+        kept['MainWindow'] = lines
+    return kept
+
+
+def has_saved_view(saved: Optional[Dict[str, List[str]]]) -> bool:
+    """Return True when ``saved`` (from ``carry_over``) holds a whole map view."""
+    keys = {_key_of(line) for line in (saved or {}).get('MainWindow', [])}
+    return set(SAVED_VIEW_KEYS) <= keys
+
+
+def build_profile(template: str, boats: Sequence, view_lat: Optional[float] = None,
+                  view_lon: Optional[float] = None, view_scale: Optional[float] = None,
+                  tile_cache_dir: Optional[str] = None,
+                  saved: Optional[Dict[str, List[str]]] = None) -> str:
     """
     Return the settings file CAMP starts from.
 
     ``template`` holds the fixed part (background maps); this adds the map view and a
     live coverage layer, switched on, for each boat. Everything else CAMP would
-    restore (chart lists, vector layers, window geometry) is left out on purpose, so
-    a fresh profile shows exactly these layers and nothing else.
+    restore (chart lists, vector layers) is left out on purpose, so a fresh profile shows
+    exactly these layers and nothing else.
+
+    ``saved`` (``carry_over`` of the file CAMP wrote last time) is the exception: its window
+    geometry and state, and its map view when it holds a whole one, are written back exactly as
+    CAMP wrote them. Only without a saved view is the view generated from ``view_lat``,
+    ``view_lon`` and ``view_scale`` (the first start on a computer).
     """
-    if not view_scale > 0.0 or not math.isfinite(view_scale):
+    saved = saved or {}
+    keep_view = has_saved_view(saved)
+    if not keep_view and not (view_scale is not None and view_scale > 0.0
+                              and math.isfinite(view_scale)):
         raise ValueError('view_scale must be a positive number, got %r' % view_scale)
     sections = parse_profile(template)
     for forbidden in ('MainWindow', 'MapView', 'LiveTileCache'):
         if forbidden in sections:
             raise ValueError('the profile template must not set [%s]: the view is '
                              'generated from the view settings' % forbidden)
-    center = qt_point_variant(*web_mercator(view_lat, view_lon))
-    scale = repr(float(view_scale))
-    # MainWindow's deferred restore (mainwindow.cpp) runs after the map view's own
-    # and wins; both are set to the same view so neither can disagree.
-    sections['MainWindow'] = ['mapCenter=' + center, 'mapScale=' + scale]
-    sections['MapView'] = [r'mapView\center=' + center, r'mapView\scale=' + scale]
+    if keep_view:
+        sections['MainWindow'] = list(saved['MainWindow'])
+        if saved.get('MapView'):
+            sections['MapView'] = list(saved['MapView'])
+    else:
+        center = qt_point_variant(*web_mercator(view_lat, view_lon))
+        scale = repr(float(view_scale))
+        # MainWindow's deferred restore (mainwindow.cpp) runs after the map view's own
+        # and wins; both are set to the same view so neither can disagree.
+        sections['MainWindow'] = (list(saved.get('MainWindow', [])) +
+                                  ['mapCenter=' + center, 'mapScale=' + scale])
+        sections['MapView'] = [r'mapView\center=' + center, r'mapView\scale=' + scale]
     if tile_cache_dir:
         # Keep the live tile cache where the launch can empty it, so tiles from an
         # earlier session are not warm-loaded into this one.
@@ -205,8 +263,8 @@ def build_profile(template: str, boats: Sequence, view_lat: float, view_lon: flo
         key = live_layer_key(boat.name)
         items.append('%s\\live_enabled=true' % key)
         items.append('%s\\visible=true' % key)
-    lines = ['; Generated by marine_simulation (the demo manager) on every start. Edit',
-             '; config/demo_camp_profile.conf, not this file.']
+    lines = ['; Generated by marine_simulation (the demo manager) on every start, except the',
+             '; window and map view CAMP saved. Edit config/demo_camp_profile.conf, not this.']
     for section, entries in sections.items():
         lines.append('')
         lines.append('[%s]' % section)
@@ -469,13 +527,44 @@ def cache_dir(home: Optional[str] = None) -> str:
     return os.path.join(state_dir(home), CACHE_DIR_NAME)
 
 
+def camp_settings_path(root: str) -> str:
+    """Return where CAMP's QSettings keeps its file under the demo's settings root."""
+    return os.path.join(root, CAMP_ORGANISATION, CAMP_APPLICATION + '.conf')
+
+
+def read_saved_settings(root: str) -> Tuple[Dict[str, List[str]], str]:
+    """
+    Return ``(carry_over of the file CAMP wrote last time, note)``; empty when there is none.
+
+    The note says why nothing was carried over (no file, unreadable, not a settings file) or
+    what was. A file that cannot be used never stops the start: the start is then a first one.
+    """
+    path = camp_settings_path(root)
+    try:
+        with open(path, encoding='utf-8', errors='surrogateescape') as f:
+            text = f.read()
+    except FileNotFoundError:
+        return {}, 'nothing saved yet'
+    except OSError as error:
+        return {}, 'cannot read %s: %s' % (path, error)
+    try:
+        saved = carry_over(text)
+    except ValueError as error:
+        return {}, 'not using %s: %s' % (path, error)
+    if not saved:
+        return {}, 'CAMP saved no window or view'
+    return saved, 'saved: %s' % ', '.join(
+        name for name, present in (
+            ('window', any(_key_of(x) in SAVED_WINDOW_KEYS for x in saved.get('MainWindow', []))),
+            ('view', has_saved_view(saved))) if present)
+
+
 def seed_camp_settings(root: str, profile: str, home: Optional[str] = None) -> str:
     """Reset ``root`` and write ``profile`` where CAMP's QSettings will read it."""
     reset_settings_root(root, home)
-    directory = os.path.join(root, CAMP_ORGANISATION)
-    os.makedirs(directory)
-    path = os.path.join(directory, CAMP_APPLICATION + '.conf')
-    with open(path, 'w') as f:
+    path = camp_settings_path(root)
+    os.makedirs(os.path.dirname(path))
+    with open(path, 'w', encoding='utf-8', errors='surrogateescape') as f:
         f.write(profile)
     return path
 
@@ -598,26 +687,39 @@ def camp_node(settings_home: str, project_file: str = '') -> Node:
 
 
 def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
-                 target_file: str = '', layout_config: str = '') -> list:
+                 target_file: str = '', layout_config: str = '', fresh: bool = False) -> list:
     """
     Return the actions that start CAMP on the demo's own settings and tile cache.
 
     Seeds the private ``XDG_CONFIG_HOME`` with the generated profile and empties the demo's
-    live tile cache, so nothing of the operator's settings or of an earlier session shows.
-    Used by the launch manager's ``camp`` group (``demo_camp_launch.py``); the last action
-    is the CAMP node.
+    live tile cache, so nothing of the operator's settings or of an earlier session's coverage
+    shows. What CAMP saved of its own window (geometry, state) and map view when it last closed
+    is carried over, unless ``fresh``; the view is generated (fitted to the target) only when
+    none is saved. Used by the launch manager's ``camp`` group (``demo_camp_launch.py``); the
+    last action is the CAMP node.
     """
     require_file(camp_profile, 'camp_profile')
-    view = load_view(camp_view_config)
-    lat, lon, scale, how = camp_start_view(boats, view, target_file, layout_config)
-    with open(camp_profile) as f:
-        profile = build_profile(f.read(), boats, lat, lon, scale, cache_dir())
     root = settings_root()
+    if fresh:
+        saved, why = {}, 'discarded (--camp-fresh)'
+    else:
+        saved, why = read_saved_settings(root)
+    if has_saved_view(saved):
+        lat = lon = scale = None
+        how = 'the view CAMP saved'
+    else:
+        view = load_view(camp_view_config)
+        lat, lon, scale, how = camp_start_view(boats, view, target_file, layout_config)
+    with open(camp_profile) as f:
+        profile = build_profile(f.read(), boats, lat, lon, scale, cache_dir(), saved)
     seed_camp_settings(root, profile)
     reset_state_dir(cache_dir(), CACHE_DIR_NAME)
     camp = camp_node(root, target_file)
+    view_text = ('CAMP map view: %s' % how if lat is None else
+                 'CAMP map view: %.6f, %.6f at scale %.4f, %s' % (lat, lon, scale, how))
     return [LogInfo(msg='CAMP settings: %s' % root),
-            LogInfo(msg='CAMP map view: %.6f, %.6f at scale %.4f, %s' % (lat, lon, scale, how)),
+            LogInfo(msg='CAMP window and view from its last run: %s' % why),
+            LogInfo(msg=view_text),
             camp]
 
 

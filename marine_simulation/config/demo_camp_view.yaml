@@ -1,9 +1,12 @@
-# Where CAMP's map starts in the demo.
+# Where CAMP's map starts in the demo, the FIRST time only: once CAMP has been closed it saves
+# its own window and map view and the next start restores those (start with --camp-fresh to
+# throw them away); this file and the fit below only apply while nothing is saved.
 #
 # By default (nothing set here) the view is FITTED to the target survey area: the middle of
 # the polygon's bounding box, at the scale that shows all of it with a margin on every side,
 # in the window the layout file gives CAMP (its rect, or the monitor it is maximised or full
-# screen on, read with xrandr; 1920x1080 when that cannot be read). The target is the same
+# screen on, read with xrandr; 1920x1080 when that cannot be read, which is the case now that the
+# shipped layout places no CAMP window). The target is the same
 # file CAMP opens and the publisher sends to the scorer (--target, else the shipped polygon),
 # so a new polygon needs no change here.
 #

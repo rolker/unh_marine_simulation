@@ -1,0 +1,9 @@
+# A layout that places CAMP maximised on the big display (the old shipped example), for tests
+# of the placement and of the first-start view fit. The shipped layout places no CAMP window.
+timeout_seconds: 90
+
+windows:
+  - name: camp
+    match: {wm_class: CCOMAutonomousMissionPlanner}
+    monitor: HDMI-0
+    maximized: true

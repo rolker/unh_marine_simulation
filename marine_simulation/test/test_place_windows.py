@@ -91,8 +91,11 @@ def test_a_window_without_a_geometry_line_gets_zeros():
     assert all(w.width == 0 for w in windows) and len(windows) == 2
 
 
-def test_the_shipped_example_layout_loads_and_maximises_camp():
-    placements, timeout = pw.load_layout(str(PACKAGE / 'config' / 'demo_layout.yaml'))
+CAMP_LAYOUT = str(pathlib.Path(__file__).resolve().parent / 'camp_maximized_layout.yaml')
+
+
+def test_a_maximised_camp_layout_loads():
+    placements, timeout = pw.load_layout(CAMP_LAYOUT)
     assert [p.name for p in placements] == ['camp']
     assert placements[0].maximized and not placements[0].fullscreen
     assert placements[0].rect is None and placements[0].wm_class
@@ -134,7 +137,7 @@ def test_the_newest_matching_window_wins():
 # --- layout refusals ----------------------------------------------------------------
 
 @pytest.mark.parametrize('overrides', [
-    {'windows': []},
+    {'windows': 'camp'},
     {'windows': [_window_entry(fullscreen=False)]},
     {'windows': [_window_entry(rect={'x': 0, 'y': 0, 'width': 10, 'height': 10})]},
     {'windows': [_window_entry(fullscreen=False, rect={'x': 0, 'y': 0, 'width': 10})]},
@@ -157,7 +160,8 @@ def test_the_newest_matching_window_wins():
     {'timeout_seconds': float('nan')},
     {'timeout_seconds': float('inf')},
     {'surprise': 1},
-], ids=['no-windows', 'neither', 'both', 'rect-short', 'rect-negative', 'fullscreen-string',
+], ids=['windows-not-a-list', 'neither', 'both', 'rect-short', 'rect-negative',
+        'fullscreen-string',
         'fullscreen-and-maximized', 'maximized-and-rect', 'maximized-string', 'maximized-false',
         'match-empty', 'match-unknown', 'monitor-empty', 'name-empty', 'duplicate-name',
         'unknown-key', 'timeout-zero', 'timeout-text', 'timeout-nan', 'timeout-inf',
@@ -435,14 +439,13 @@ class Tools:
 X11 = {'XDG_SESSION_TYPE': 'x11', 'DISPLAY': ':0'}
 
 
-def test_check_layout_accepts_the_shipped_example_on_a_matching_desktop():
-    placements, timeout, monitors = pw.check_layout(
-        str(PACKAGE / 'config' / 'demo_layout.yaml'), X11, Tools())
+def test_check_layout_accepts_a_maximised_camp_layout_on_a_matching_desktop():
+    placements, timeout, monitors = pw.check_layout(CAMP_LAYOUT, X11, Tools())
     assert placements[0].monitor in monitors and timeout > 0
 
 
 def test_check_layout_names_what_is_wrong(tmp_path):
-    path = str(PACKAGE / 'config' / 'demo_layout.yaml')
+    path = CAMP_LAYOUT
     with pytest.raises(pw.LayoutError, match='X11'):
         pw.check_layout(path, {'XDG_SESSION_TYPE': 'wayland', 'DISPLAY': ':0'}, Tools())
     with pytest.raises(pw.LayoutError, match='apt install wmctrl'):
@@ -699,3 +702,32 @@ def test_fullscreen_placement_is_unchanged_by_the_maximized_mode():
     problems, _ = _place(desktop)
     assert problems == [] and desktop.geometry == (0, 240, 3840, 2160)
     assert not any(c[-1:] == ['add,maximized_vert,maximized_horz'] for c in desktop.calls)
+
+
+# --- a layout with no windows is a no-op ---------------------------------------------
+
+@pytest.mark.parametrize('text', ['windows: []\n', 'timeout_seconds: 5\n', 'windows:\n'])
+def test_a_layout_with_no_windows_loads_empty(tmp_path, text):
+    path = tmp_path / 'layout.yaml'
+    path.write_text(text)
+    assert pw.load_layout(str(path))[0] == []
+
+
+def test_the_shipped_layout_places_no_window_and_checks_without_a_session_or_tools():
+    path = str(PACKAGE / 'config' / 'demo_layout.yaml')
+    assert pw.load_layout(path)[0] == []
+    calls = []
+    placements, _, monitors = pw.check_layout(path, {}, lambda c: calls.append(c) or '')
+    assert placements == [] and monitors == {} and calls == []      # not even wmctrl is needed
+
+
+def test_placing_nothing_does_not_list_windows_or_wait():
+    calls = []
+    assert pw.place_all([], {}, 90.0, runner=lambda c: calls.append(c) or '',
+                        sleep=lambda s: calls.append(s)) == []
+    assert calls == []
+
+
+def test_main_exits_zero_at_once_for_the_shipped_layout(capsys):
+    assert pw.main(['--layout', str(PACKAGE / 'config' / 'demo_layout.yaml')]) == 0
+    assert pw.main(['--check', '--layout', str(PACKAGE / 'config' / 'demo_layout.yaml')]) == 0

@@ -67,7 +67,8 @@ def launch_setup(context, *args, **kwargs):
     demo_support.refuse_running_camp()
     return demo_support.camp_actions(
         boats, arg('camp_profile'), arg('camp_view_config'), target_file,
-        os.path.abspath(os.path.expanduser(arg('layout_config'))) if arg('layout_config') else '')
+        os.path.abspath(os.path.expanduser(arg('layout_config'))) if arg('layout_config') else '',
+        fresh=roster.parse_bool(arg('camp_fresh'), 'camp_fresh'))
 
 
 def generate_launch_description():
@@ -91,6 +92,9 @@ def generate_launch_description():
             'layout_config',
             default_value=PathJoinSubstitution([share, 'config', 'demo_layout.yaml']),
             description='Window layout; its CAMP window size is what the map view is fitted to.'),
+        DeclareLaunchArgument(
+            'camp_fresh', default_value='false',
+            description='true: discard the window and view CAMP saved last time (a first start).'),
         DeclareLaunchArgument('target_area_file', default_value=TextSubstitution(text=''),
                               description='Saved CAMP .json to open (optional).'),
         OpaqueFunction(function=launch_setup),

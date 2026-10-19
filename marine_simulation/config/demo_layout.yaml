@@ -9,29 +9,32 @@
 # How long to wait for the windows to appear, in seconds (default 90).
 timeout_seconds: 90
 
-windows:
-  # CAMP, maximised on the big display. Maximised keeps the title bar and its Close button on
-  # screen, which is how the operator ends the demo without any keyboard shortcut. The window
-  # is verified by its window-manager state (maximised, not full screen), not by size alone. (Use
-  # `fullscreen: true` instead to cover the whole monitor with no title bar, or a `rect`.)
-  - name: camp
-    match: {wm_class: CCOMAutonomousMissionPlanner}
-    monitor: HDMI-0
-    maximized: true
+# CAMP is deliberately NOT placed. It saves its own window (size, position, maximised or not)
+# and map view when it closes and restores them the next time, so the operator maximises it once
+# with the title bar button and it comes back the same; a resize from here would only fight
+# that (and move the map under the fitted/saved view). The first start on a new computer: start
+# the demo, maximise CAMP, set the view, close CAMP (which stops the demo), start again. To
+# forget what CAMP saved, start with --camp-fresh.
+#
+# What this file is for: the windows CAMP does not remember. Mechanism notes for an entry:
+# `maximized: true` keeps the title bar and is verified by its window-manager state (maximised,
+# not full screen, read with xprop), not by size alone; `fullscreen: true` covers the monitor
+# with no title bar; a `rect` puts a window at a given place.
+windows: []
 
-  # The second display is reserved for the scoreboard (not built yet), so nothing
-  # is placed there now. When it exists, add an entry for it:
-  #
-  # - name: scoreboard
-  #   match: {title: Scoreboard}
-  #   monitor: DP-2
-  #   fullscreen: true
-
-# One display only (a laptop, say)? Keep the camp entry, point it at that monitor,
-# and put a window in a corner instead of maximised with a rectangle, measured in
+# The second display is reserved for the scoreboard (not built yet), so nothing
+# is placed there now. When it exists, replace `windows: []` above with an entry for it:
+#
+# windows:
+#   - name: scoreboard
+#     match: {title: Scoreboard}
+#     monitor: DP-2
+#     fullscreen: true
+#
+# or, to put a window in a corner of one display (a laptop, say), a rectangle measured in
 # pixels from the monitor's top left corner:
 #
-#   - name: camp
-#     match: {wm_class: CCOMAutonomousMissionPlanner}
+#   - name: scoreboard
+#     match: {title: Scoreboard}
 #     monitor: eDP-1
 #     rect: {x: 0, y: 0, width: 1600, height: 900}
