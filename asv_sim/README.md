@@ -8,8 +8,9 @@ ROS Nodes that simulates a generic ASV.
 - Drag (cubic in the speed, sign-preserving) and the jet model's yaw damping
   are integrated implicitly, so a step can at most bring the speed or yaw
   rate to rest, never past it. A long step cannot diverge. At the node's
-  0.05 s step the result is the same as the earlier explicit scheme to well
-  under 1 % (same terminal speed under constant thrust, `max_speed`).
+  0.05 s step the terminal speed under constant thrust is exactly the same
+  as with the earlier explicit scheme (`max_speed`), and the acceleration
+  transient differs by up to about 2 % where the speed curve bends.
 - A gap longer than `max_step` is integrated as equal sub-steps of at most
   `max_step` seconds. At most `max_substeps` sub-steps are taken per update;
   the rest of a longer gap is dropped, with a warning that the platform fell

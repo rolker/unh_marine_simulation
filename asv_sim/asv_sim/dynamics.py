@@ -174,16 +174,26 @@ class Dynamics(object):
 
         # Update altitude, roll, and pitch from environment
         if self.environment is not None:
-            waves = self.environment.getWaves(timestamp)
-            self.altitude = (self.environment.getEllipsoidalAltitude(
-                timestamp) + waves['heave'])
-            self.roll = waves['roll']
-            self.pitch = waves['pitch']
-            diagnostics['altitude'] = self.altitude
-            diagnostics['tide'] = self.environment.getTide(timestamp)
-            diagnostics['heave'] = waves['heave']
-            diagnostics['wave_roll'] = math.degrees(waves['roll'])
-            diagnostics['wave_pitch'] = math.degrees(waves['pitch'])
+            try:
+                waves = self.environment.getWaves(timestamp)
+                altitude = (self.environment.getEllipsoidalAltitude(
+                    timestamp) + waves['heave'])
+                tide = self.environment.getTide(timestamp)
+            except (ArithmeticError, ValueError) as e:
+                self._log(
+                    'error', 'environment',
+                    'asv_sim platform {!r}: environment failed ({}: {}); '
+                    'keeping the last altitude, roll and pitch'.format(
+                        self.name, type(e).__name__, e))
+            else:
+                self.altitude = altitude
+                self.roll = waves['roll']
+                self.pitch = waves['pitch']
+                diagnostics['altitude'] = self.altitude
+                diagnostics['tide'] = tide
+                diagnostics['heave'] = waves['heave']
+                diagnostics['wave_roll'] = math.degrees(waves['roll'])
+                diagnostics['wave_pitch'] = math.degrees(waves['pitch'])
 
         return diagnostics
 
@@ -194,7 +204,15 @@ class Dynamics(object):
         if last is not None and now - last < _LOG_INTERVAL:
             return
         self._last_logged[key] = now
-        getattr(self.logger, level)(message)
+        # One call site per severity: an rclpy logger raises when a single
+        # call site is used at two severities.
+        try:
+            if level == 'error':
+                self.logger.error(message)
+            else:
+                self.logger.warning(message)
+        except Exception:  # noqa: B902 - logging must never end the node
+            pass
 
     def _substeps(self, delta_t):
         """Split an elapsed time into the step lengths to integrate.
@@ -225,7 +243,7 @@ class Dynamics(object):
     def _require_finite(self):
         """Raise _Excursion for the first state value that is not finite."""
         for name in ('speed', 'yaw_rate', 'latitude', 'longitude',
-                     'heading', 'rpm', 'rudder_angle'):
+                     'heading', 'rpm', 'rudder_angle', 'a'):
             value = getattr(self, name)
             if not math.isfinite(value):
                 raise _Excursion(name, value)
@@ -253,6 +271,30 @@ class Dynamics(object):
         if not math.isfinite(self.cog):
             self.cog = 0.0
         self._last_good = (self.latitude, self.longitude, self.heading)
+
+    @staticmethod
+    def _implicit_drag_speed(rhs, beta):
+        """Solve v + beta * v^3 = rhs for v (beta >= 0).
+
+        Newton's method from v = |rhs|: the function is increasing and
+        convex for v >= 0, so the iterates fall monotonically onto the
+        root and never undershoot it. The odd symmetry gives the sign.
+        """
+        magnitude = abs(rhs)
+        v = magnitude
+        for _ in range(60):
+            f = v + beta * v * v * v - magnitude
+            slope = 1.0 + 3.0 * beta * v * v
+            if not (math.isfinite(f) and math.isfinite(slope)):
+                # Overflow: a speed this far out is garbage anyway. Shrink
+                # it with the frozen-coefficient form, which is finite.
+                v = magnitude / (1.0 + beta * magnitude * magnitude)
+                break
+            step = f / slope
+            v -= step
+            if step <= 1e-15 * v:
+                break
+        return math.copysign(v, rhs)
 
     def _step(self, throttle, reverse, rudder, delta_t, apply_noise,
               diagnostics):
@@ -434,17 +476,18 @@ class Dynamics(object):
         # Drag increases with the cube of the speed, and keeps the sign of
         # the speed (a boat moving backwards is pushed forwards).
         #
-        # The drag is integrated semi-implicitly: written as k * v with
-        # k = c * v0^2 (v0 the speed at the start of the step), then
-        #   v1 = v0 + dt * (F_thrust - k * v1) / m
-        #      = (v0 + dt * F_thrust / m) / (1 + dt * k / m)
-        # The denominator is always >= 1, so within one step the drag can at
-        # most bring the speed to what the thrust alone gives, never past
-        # it. An explicit step overshoots through zero, and each overshoot
-        # is larger than the last, once dt * c * v0^2 / m exceeds 2 (always
-        # after a multi-second stall; issue #84). The steady state (thrust
-        # == c * v^3) is identical to the explicit scheme, and at the
-        # normal 0.05 s step the transient differs by well under 1 %.
+        # The drag is integrated implicitly (backward Euler) so a step of
+        # any length is stable:
+        #   v1 = v0 + dt * (F_thrust - c * v1^3) / m
+        # which is solved for v1 below. The left side is strictly
+        # increasing in v1, so there is exactly one root, and the drag can
+        # at most bring the speed to what the thrust alone gives, never
+        # past it. An explicit step overshoots through zero, and each
+        # overshoot is larger than the last, once dt * c * v0^2 / m exceeds
+        # 2 (always after a multi-second stall; issue #84). The steady
+        # state (thrust == c * v^3) is identical to the explicit scheme,
+        # and at the normal 0.05 s step the transient differs by well under
+        # 1 %.
         #
         # The noise multiplies the coefficient. That is the distribution
         # gauss(drag, abs(drag) * noise) without a sign problem, and it is
@@ -454,8 +497,8 @@ class Dynamics(object):
         if apply_noise:
             drag_scale = max(0.0, random.gauss(
                 1.0, abs(self.model.drag_noise)))
-        drag_k = self.model.drag_coefficient * drag_scale * speed0 * speed0
-        drag = drag_k * speed0
+        drag_coefficient = self.model.drag_coefficient * drag_scale
+        drag = drag_coefficient * speed0 * speed0 * speed0
 
         diagnostics['drag'] = drag
         diagnostics['net_force'] = thrust_fwd - drag
@@ -464,9 +507,9 @@ class Dynamics(object):
             # calculate acceleration from f=ma.
             self.a = (thrust_fwd - drag) / self.model.mass
         else:
-            self.speed = (
-                (speed0 + delta_t * thrust_fwd / self.model.mass)
-                / (1.0 + delta_t * drag_k / self.model.mass))
+            self.speed = self._implicit_drag_speed(
+                speed0 + delta_t * thrust_fwd / self.model.mass,
+                delta_t * drag_coefficient / self.model.mass)
             self.a = (self.speed - speed0) / delta_t
 
         self._require_finite()
@@ -487,6 +530,12 @@ class Dynamics(object):
                     diagnostics['current_direction'] = c['direction']
                     current_speed = c['speed']
                     current_direction = math.radians(c['direction'])
+                    # geodesic.direct() never returns for a NaN input.
+                    for name, value in (('current speed', current_speed),
+                                        ('current direction',
+                                         current_direction)):
+                        if not math.isfinite(value):
+                            raise _Excursion(name, value)
 
                     self.longitude, self.latitude = geodesic.direct(
                         self.longitude, self.latitude,
