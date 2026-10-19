@@ -69,3 +69,14 @@ CAMP now opens the shipped demo polygon by default (it is also the published tar
 - `place_windows.py` stays a script; the manager's preflight runs `place_windows.py --check` as a subprocess instead of importing it.
 - `demo_boats_selftest.py --demo` now starts `demo_manager.py --profile headless`.
 - Defaults changed on purpose: the publisher is always part of the demo and CAMP opens the same target file (installed demo polygon by default).
+
+## Change of approach (2026-10-19): CAMP remembers its own window and view
+
+Live runs showed the seeded view applied at CAMP's initial size and then disturbed by the placer's resize (rolker/camp#242), and the window placer needed three fixes for a maximised CAMP. Roland decided:
+
+- CAMP saves its window (`MainWindow/geometry`, `state`) and view (`mapCenter`, `mapScale`, `[MapView]`) when it closes and restores them itself; the demo carries those lines over from the previous settings file byte for byte (`demo_support.carry_over`, `read_saved_settings`, `build_profile(saved=...)`) and no longer places the CAMP window (the shipped `demo_layout.yaml` has no windows; a layout with none is a clean no-op in `place_windows.py` and the `layout` group).
+- The fitted view stays as the first-start default only (nothing saved, or `--camp-fresh`).
+- `--camp-fresh` (`demo_manager.py`, `camp_fresh` argument of `demo_camp_launch.py`) discards the saved window and view for one start.
+- The placer's maximised mode, state check and frame handling stay in `place_windows.py` for the scoreboard window later.
+- The tile cache is still emptied every start; layers still come from the template every start.
+
