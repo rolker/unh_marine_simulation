@@ -14,6 +14,7 @@ install(PROGRAMS
   scripts/check_multi_boat_graph.py
   scripts/demo_boats_selftest.py
   scripts/demo_manager.py
+  scripts/install_demo_shortcut.sh
   scripts/place_windows.py
   scripts/run_demo.sh
   scripts/publish_survey_area.py
