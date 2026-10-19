@@ -89,3 +89,17 @@ issue: 102
 ### Verification
 - Full suite: 938 tests, 0 errors, 8 failures (the baseline lint), 1 skipped.
 - Headless demo (ROS_DOMAIN_ID=88, 85 s): publisher sent area0000, scorer configured at cell_size=2 m, "Assessments: 36 published", no Rejecting, no process left.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 09:30 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed beyond 273c2a9)
+
+### Done
+- [x] Live-run defect: CAMP's title bar was off screen because place_windows sent a monitor-sized `wmctrl -e`, which mutter takes for full screen (the later maximise is ignored). Maximized mode now moves to the centred half-size rectangle first and is accepted only when `_NET_WM_STATE` (xprop) has both maximized flags and no fullscreen; the fake desktop reproduces the heuristic; a missing xprop is named; `--check` probes xprop for maximized layouts.
+- [ ] Not verifiable without a live window: that mutter ends up MAXIMIZED with the title bar from this exact sequence (the host reproduced it by hand on an xterm).
+
+### Verification
+- Full suite: 944 tests, 0 errors, 8 failures (the baseline lint), 1 skipped.
