@@ -39,6 +39,7 @@ After #100 and #101 the demo has two start paths, each lacking what the other ha
 6. Delete `demo_launch.py`, its start-path tests and registrations; no-load-by-path test.
 7. Documentation.
 8. Review rounds and their fixes (each its own commit).
+9. Added after the first live run: CAMP's starting view is fitted to the target polygon (bounds from `publish_survey_area.py --bounds`, window from the layout file's CAMP entry), with `demo_camp_view.yaml` as an explicit override; the scorer scores on a 2 m lattice; `place_windows.py` gained a `maximized` mode.
 
 ## Tests
 

@@ -716,8 +716,6 @@ def test_without_an_override_the_view_is_fitted_to_the_polygon_on_the_big_screen
     assert (lat, lon, scale) == pytest.approx(demo.fit_view(_bounds(_polygon_points()),
                                                             BIG_SCREEN))
     assert 'fitted' in how and '3840x2160' in how and 'HDMI-0' in how
-    # the numbers for the shipped polygon, the owner asked to see them
-    print('fitted view on 3840x2160: lat %.6f lon %.6f scale %.4f' % (lat, lon, scale))
 
 
 def test_an_explicit_view_is_used_verbatim_and_the_polygon_is_not_even_read():
@@ -734,9 +732,32 @@ def test_an_unreadable_window_falls_back_to_a_named_size():
     assert 'assuming a 1920x1080 window' in how
 
 
-def test_fitting_needs_a_target_file():
-    with pytest.raises(ValueError, match='no target area file'):
-        _start_view({}, target='')
+def test_without_a_target_the_view_is_the_boats_at_a_fixed_scale():
+    lat, lon, scale, how = _start_view({}, target='')
+    assert (lat, lon, scale) == (43.0, -70.0, demo.UNFITTED_SCALE) and 'no target' in how
+
+
+@pytest.mark.parametrize('wm_class', ['CCOMAutonomousMissionPlanner', 'CCOM', 'Planner'])
+def test_the_camp_entry_is_found_the_way_place_windows_matches(wm_class):
+    entries = [{'match': {'wm_class': 'other'}}, {'match': {'wm_class': wm_class}, 'n': 1}]
+    assert demo._camp_layout_entry(entries)['n'] == 1
+
+
+def test_a_lone_title_only_entry_is_taken_for_camps_and_two_are_ambiguous():
+    assert demo._camp_layout_entry([{'match': {'title': 'Mission'}}]) is not None
+    assert demo._camp_layout_entry([{'match': {'title': 'a'}}, {'match': {'title': 'b'}}]) is None
+
+
+def test_layout_file_problems_are_named(tmp_path):
+    assert 'cannot read' in demo.camp_window_size(str(tmp_path))[1]
+    bad = tmp_path / 'l.yaml'
+    bad.write_text('windows: 3\n')
+    assert 'no list of windows' in demo.camp_window_size(str(bad))[1]
+
+
+def test_the_scale_is_clamped_to_camps_limits():
+    tiny = (43.0, -70.0, 43.00001, -69.99999)
+    assert demo.fit_view(tiny, BIG_SCREEN)[2] == demo.MAX_CAMP_SCALE
 
 
 def test_camp_actions_fit_the_view_to_the_polygon_in_the_settings_it_writes(

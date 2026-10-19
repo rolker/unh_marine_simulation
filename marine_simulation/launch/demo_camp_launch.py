@@ -67,7 +67,7 @@ def launch_setup(context, *args, **kwargs):
     demo_support.refuse_running_camp()
     return demo_support.camp_actions(
         boats, arg('camp_profile'), arg('camp_view_config'), target_file,
-        os.path.abspath(os.path.expanduser(arg('layout_config'))))
+        os.path.abspath(os.path.expanduser(arg('layout_config'))) if arg('layout_config') else '')
 
 
 def generate_launch_description():

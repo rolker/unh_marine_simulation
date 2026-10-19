@@ -275,6 +275,9 @@ CHROME_HEIGHT_PIXELS = 200
 FIT_MARGIN = 0.125
 # Used when the monitor CAMP is placed on cannot be read (no layout, no xrandr).
 FALLBACK_WINDOW = (1920, 1080)
+# The scale when there is nothing to fit to (CAMP started without a target file): roughly
+# 2.6 km of harbour across a 3840 pixel wide map.
+UNFITTED_SCALE = 1.0
 # Below this many map units (about a metre) the target is a point or a line, not an area.
 MIN_TARGET_EXTENT = 1.0
 
@@ -342,6 +345,21 @@ _MONITOR_LINE = re.compile(
     r'^\s*\d+:\s+[+*]*(\S+)\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)\s*(.*)$')
 
 
+def _camp_layout_entry(entries: Sequence[dict]) -> Optional[dict]:
+    """
+    Return the layout entry that places CAMP, or None.
+
+    ``place_windows.py`` matches by substring of the window's class and title, so an entry
+    whose ``wm_class`` is part of CAMP's executable name matches, as does one that holds it.
+    A lone entry (for example one that matches by title only) is taken to be CAMP's.
+    """
+    for entry in entries:
+        wm_class = (entry.get('match') or {}).get('wm_class') or ''
+        if wm_class and (wm_class in CAMP_EXECUTABLE or CAMP_EXECUTABLE in wm_class):
+            return entry
+    return entries[0] if len(entries) == 1 else None
+
+
 def camp_window_size(layout_config: str, runner=None) -> Tuple[Optional[Tuple[int, int]], str]:
     """
     Return ``((width, height) or None, note)``: the size CAMP's window will have.
@@ -353,10 +371,13 @@ def camp_window_size(layout_config: str, runner=None) -> Tuple[Optional[Tuple[in
     try:
         with open(layout_config) as f:
             data = yaml.safe_load(f)
-        entries = data['windows']
-        entry = next(e for e in entries
-                     if CAMP_EXECUTABLE in (e.get('match') or {}).get('wm_class', ''))
-    except (OSError, yaml.YAMLError, KeyError, TypeError, StopIteration, AttributeError):
+    except (OSError, yaml.YAMLError) as error:
+        return None, 'cannot read the layout file %s: %s' % (layout_config, error)
+    entries = data.get('windows') if isinstance(data, dict) else None
+    if not isinstance(entries, list) or not all(isinstance(e, dict) for e in entries):
+        return None, 'the layout file %s has no list of windows' % layout_config
+    entry = _camp_layout_entry(entries)
+    if entry is None:
         return None, 'no CAMP window entry in the layout file %s' % layout_config
     rect = entry.get('rect')
     if isinstance(rect, dict) and all(isinstance(rect.get(k), int) for k in ('width', 'height')):
@@ -387,8 +408,10 @@ def camp_start_view(boats: Sequence, view: dict, target_file: str, layout_config
         lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
         return lat, lon, view['scale'], 'the explicit view of the view config'
     if not target_file:
-        raise ValueError('the view config gives no scale and there is no target area file to '
-                         'fit the map view to')
+        # CAMP started on its own, with nothing to fit to: the boats, at a fixed scale.
+        lat, lon = view_center(boats)
+        return (lat, lon, UNFITTED_SCALE,
+                'no target area file to fit to; the boats at a fixed scale')
     window, note = camp_window_size(layout_config, runner) if layout_config else (
         None, 'no layout file')
     if window is None:
