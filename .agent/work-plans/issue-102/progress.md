@@ -117,3 +117,18 @@ issue: 102
 
 ### Verification
 - Full suite: 949 tests, 0 errors, 8 failures (baseline lint), 1 skipped.
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-19 11:40 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-102 (not pushed beyond 273c2a9)
+
+### Done
+- [x] CAMP remembers its own window and view (Roland 10-19): `carry_over` copies MainWindow geometry/state/mapCenter/mapScale and [MapView] raw from the previous settings file; fitted view only on a first start or with `--camp-fresh`; layers from the template and tile cache emptied every start; shipped `demo_layout.yaml` places no window and an empty layout is a no-op.
+- [x] Review of the delta (Claude adversarial + codex; gemini timed out). Fixed: a generated view was read back as CAMP's after an unclean exit (marker comment), saved scale validated (finite, > 0), a tautological test, README migration note for old per-computer layout.yaml files.
+- [ ] Not done: backup of the old settings file before reset (a failed write after the reset loses it), `--camp-fresh` is not one-shot across a manager restart of the camp group, run_demo.sh still requires a per-computer layout.yaml file, first-start fit assumes 1920x1080 without a CAMP layout entry.
+
+### Verification
+- Full suite: see commit; 8 baseline lint failures only.
