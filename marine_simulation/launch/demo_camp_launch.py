@@ -66,7 +66,8 @@ def launch_setup(context, *args, **kwargs):
         demo_support.require_file(target_file, 'target_area_file')
     demo_support.refuse_running_camp()
     return demo_support.camp_actions(
-        boats, arg('camp_profile'), arg('camp_view_config'), target_file)
+        boats, arg('camp_profile'), arg('camp_view_config'), target_file,
+        os.path.abspath(os.path.expanduser(arg('layout_config'))))
 
 
 def generate_launch_description():
@@ -86,6 +87,10 @@ def generate_launch_description():
             'camp_view_config',
             default_value=PathJoinSubstitution([share, 'config', 'demo_camp_view.yaml']),
             description='Where and how far in CAMP starts.'),
+        DeclareLaunchArgument(
+            'layout_config',
+            default_value=PathJoinSubstitution([share, 'config', 'demo_layout.yaml']),
+            description='Window layout; its CAMP window size is what the map view is fitted to.'),
         DeclareLaunchArgument('target_area_file', default_value=TextSubstitution(text=''),
                               description='Saved CAMP .json to open (optional).'),
         OpaqueFunction(function=launch_setup),

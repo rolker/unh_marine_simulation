@@ -1,13 +1,19 @@
-# Where CAMP's map starts in the demo, and how far in.
+# Where CAMP's map starts in the demo.
 #
-# scale is CAMP's own number: screen pixels per map unit, where a map unit is one
-# Web Mercator metre (about 0.73 ground metres at Portsmouth). 1.0 puts roughly
-# 2.6 km of harbour across a 3840 pixel wide window. Tune it at the rehearsal: run
-# CAMP, zoom to taste, and read MainWindow/mapScale from CAMP's settings file.
+# By default (nothing set here) the view is FITTED to the target survey area: the middle of
+# the polygon's bounding box, at the scale that shows all of it with a margin on every side,
+# in the window the layout file gives CAMP (its rect, or the monitor it is maximised or full
+# screen on, read with xrandr; 1920x1080 when that cannot be read). The target is the same
+# file CAMP opens and the publisher sends to the scorer (--target, else the shipped polygon),
+# so a new polygon needs no change here.
 #
-# The centre is the middle of the boats' start positions in the roster. Give lat and
-# lon (both) only to look somewhere else.
-camp_view:
-  scale: 1.0
-  # lat: 43.0743
-  # lon: -70.7105
+# To override it, give a scale, and optionally a centre; the values are then used exactly as
+# written. scale is CAMP's own number: screen pixels per map unit, where a map unit is one
+# Web Mercator metre (about 0.73 ground metres at Portsmouth). 1.0 puts roughly 2.6 km of
+# harbour across a 3840 pixel wide map. To find a value: run CAMP, zoom to taste, and read
+# MainWindow/mapScale and MainWindow/mapCenter from CAMP's settings file after closing it.
+# Without lat and lon the centre is the middle of the boats' start positions.
+camp_view: {}
+#  scale: 1.0
+#  lat: 43.0743
+#  lon: -70.7105

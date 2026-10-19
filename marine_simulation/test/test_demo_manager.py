@@ -51,6 +51,7 @@ PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = PACKAGE / 'scripts' / 'demo_manager.py'
 CONFIG = PACKAGE / 'config' / 'demo_manager.yaml'
 ROSTER = PACKAGE / 'config' / 'demo_roster.yaml'
+POLYGON = PACKAGE / 'config' / 'demo_target_polygon_camp.json'
 _spec = importlib.util.spec_from_file_location('demo_manager', SCRIPT)
 demo_manager = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(demo_manager)
@@ -238,7 +239,8 @@ def _camp_start(monkeypatch, tmp_path, **arguments):
     values = {'boats': '', 'roster_file': str(ROSTER),
               'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
               'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
-              'target_area_file': ''}
+              'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'),
+              'target_area_file': str(POLYGON)}
     values.update(arguments)
     context.launch_configurations.update(values)
     try:
@@ -256,7 +258,7 @@ def test_the_camp_group_runs_the_demo_camp_launch(spec):
 
 def test_manager_camp_gets_the_private_settings_directory(monkeypatch, tmp_path):
     demo, actions, started = _camp_start(monkeypatch, tmp_path)
-    assert started == [(demo.settings_root(str(tmp_path)), '')]
+    assert started == [(demo.settings_root(str(tmp_path)), str(POLYGON))]
     assert actions[-1] == 'camp-node'
     conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
                         'CCOMAutonomousMissionPlanner.conf')
@@ -326,7 +328,8 @@ def test_manager_camp_restarts_keep_the_manager_lock(monkeypatch, tmp_path, held
             'boats': '', 'roster_file': str(ROSTER),
             'camp_profile': str(PACKAGE / 'config' / 'demo_camp_profile.conf'),
             'camp_view_config': str(PACKAGE / 'config' / 'demo_camp_view.yaml'),
-            'target_area_file': ''})
+            'layout_config': str(PACKAGE / 'config' / 'demo_layout.yaml'),
+            'target_area_file': str(POLYGON)})
         assert module.launch_setup(context)[-1] == 'camp-node'
     del first, second
     import gc

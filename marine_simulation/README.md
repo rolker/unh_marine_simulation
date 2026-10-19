@@ -92,7 +92,8 @@ profiles are in "Demo launch manager" below.
 | `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
 
 The CAMP profile and view are `config/demo_camp_profile.conf` and
-`config/demo_camp_view.yaml` (CAMP's starting scale and optional centre).
+`config/demo_camp_view.yaml` (an optional override of CAMP's starting view; by default the view
+is fitted to the target area, see below).
 
 **Other boats-launch arguments** go after the options in the launch form `name:=value`, to
 `run_demo.sh` or `demo_manager.py` alike:
@@ -147,7 +148,17 @@ generated at launch:
 - the map view: `MainWindow/mapCenter`, `MainWindow/mapScale` and the matching
   `MapView/mapView/*` keys. The centre is the middle of the boats' start
   positions (or `lat`/`lon` in `config/demo_camp_view.yaml`), converted with
-  CAMP's own Web Mercator formula; the scale is `scale` in that file. CAMP stores
+  CAMP's own Web Mercator formula; the scale is `scale` in that file. By default
+  (`camp_view: {}`, as shipped) neither is used: the view is **fitted** to the target
+  area, the centre being the middle of the polygon's bounding box and the scale the
+  largest that shows all of it with a 12.5 % margin on every side, for the window the
+  layout file gives CAMP (its `rect`, or the size of the monitor it is maximised or full
+  screen on, read with `xrandr`; 1920x1080 is assumed, and logged, when that cannot be
+  read). The map widget is taken as the window minus 15 % of the width for CAMP's side
+  panel and 200 px for the bars above it, on purpose a little small. The target is the
+  file CAMP opens and the publisher sends to the scorer. Giving `scale` (with optional
+  `lat`/`lon`) in the view file overrides the fit and is used exactly as written. The
+  chosen view is logged as `CAMP map view: ...` at start. CAMP stores
   the centre in map units, so the value in the settings file is exact and the same
   on every start. What the helper sees can differ: CAMP applies the centre at its
   first window size and the window is then maximised, which may shift the
@@ -168,8 +179,9 @@ Known limits of this approach:
 - `XDG_CONFIG_HOME` is changed for the whole CAMP process, not only its settings, so
   anything else CAMP or Qt reads from `~/.config` (platform theme, fonts) is not
   seen; look and feel can differ from the operator's CAMP. Check at the rehearsal.
-- The first scale in `config/demo_camp_view.yaml` is a starting value; tune it at
-  the rehearsal (see the file).
+- The fitted view assumes CAMP's panel and bars take 15 % of the width and 200 px of the
+  height; check at the rehearsal that the whole polygon shows with a margin, and set
+  `scale` in `config/demo_camp_view.yaml` if it does not.
 - The live layer key pattern was read from a real CAMP settings file; the
   rehearsal confirms it matches this graph.
 - The file is only the first source of truth for the layers: an operator who

@@ -48,6 +48,8 @@ groups:
       roster_file: {type: string, default: '${roster_file}'}
       # CAMP opens the same file the publisher sends to the scorer, so the outline shows.
       target_area_file: {type: string, default: '${target_file}'}
+      # the starting view is fitted to the target in the window the layout gives CAMP
+      layout_config: {type: string, default: '${layout_config}'}
     requires: [boats]
     # Closing the window is an operator decision, not a crash: never restarted, and the
     # groups that follow it are stopped.

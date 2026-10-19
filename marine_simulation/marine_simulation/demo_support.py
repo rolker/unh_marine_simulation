@@ -46,6 +46,7 @@ import os
 import re
 import shutil
 import struct
+import subprocess
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from ament_index_python.packages import get_package_prefix
@@ -221,7 +222,7 @@ def view_center(boats: Sequence) -> Tuple[float, float]:
 
 
 def load_view(path: str) -> dict:
-    """Read and validate the CAMP view settings (``scale``, and ``lat``/``lon`` to override)."""
+    """Read and validate the CAMP view override (``scale``, with ``lat``/``lon``); {} means fit."""
     with open(path) as f:
         data = yaml.safe_load(f)
     view = data.get('camp_view') if isinstance(data, dict) else None
@@ -230,10 +231,11 @@ def load_view(path: str) -> dict:
     unknown = set(view) - {'scale', 'lat', 'lon'}
     if unknown:
         raise ValueError('%s: unknown camp_view key(s) %s' % (path, ', '.join(sorted(unknown))))
-    if 'scale' not in view:
-        raise ValueError("%s: camp_view needs 'scale'" % path)
     if ('lat' in view) != ('lon' in view):
         raise ValueError("%s: camp_view needs both 'lat' and 'lon' or neither" % path)
+    if 'lat' in view and 'scale' not in view:
+        raise ValueError("%s: camp_view 'lat' and 'lon' need a 'scale' too (leave all three "
+                         'out to fit the view to the target area)' % path)
 
     def number(key, low, high):
         value = view[key]
@@ -246,14 +248,155 @@ def load_view(path: str) -> dict:
                              % (path, key, value, low, high))
         return float(value)
 
-    view['scale'] = number('scale', 0.0, 1e9)
-    if view['scale'] <= 0.0:
-        raise ValueError('%s: camp_view scale must be greater than zero' % path)
+    if 'scale' in view:
+        view['scale'] = number('scale', 0.0, 1e9)
+        if view['scale'] <= 0.0:
+            raise ValueError('%s: camp_view scale must be greater than zero' % path)
     if 'lat' in view:
         # Web Mercator stops being finite at the poles.
         view['lat'] = number('lat', -85.0, 85.0)
         view['lon'] = number('lon', -180.0, 180.0)
     return view
+
+
+# --- fitting CAMP's starting view to the target area ---------------------------------
+
+# CAMP's map scale (``MainWindow/mapScale``, the QGraphicsView transform's m11) is screen pixels
+# per scene unit; a scene unit is one Web Mercator metre (camp_map/map_view/map_view.cpp,
+# web_mercator.cpp), and the view is limited to 1/50000 .. 50.
+MIN_CAMP_SCALE = 1 / 50000.0
+MAX_CAMP_SCALE = 50.0
+# The map widget is the window minus CAMP's panel on the left and the title bar, top bar,
+# menu and tool bars above it. Overestimated on purpose: a smaller viewport only zooms out a
+# little, a larger one cuts the polygon off. The target also gets this much empty margin on
+# each side.
+PANEL_WIDTH_FRACTION = 0.15
+CHROME_HEIGHT_PIXELS = 200
+FIT_MARGIN = 0.125
+# Used when the monitor CAMP is placed on cannot be read (no layout, no xrandr).
+FALLBACK_WINDOW = (1920, 1080)
+# Below this many map units (about a metre) the target is a point or a line, not an area.
+MIN_TARGET_EXTENT = 1.0
+
+
+def target_bounds(target_file: str, tool: str = None) -> Tuple[float, float, float, float]:
+    """
+    Return ``(min_lat, min_lon, max_lat, max_lon)`` of the vertices in the target file.
+
+    Asks ``publish_survey_area.py --bounds`` so the file is read by the one parser the
+    publisher uses (the file CAMP and the scorer get is the same one). Raises ValueError with
+    the reason when the file cannot be used.
+    """
+    tool = tool or os.path.join(get_package_prefix('marine_simulation'), 'lib',
+                                'marine_simulation', TARGET_AREA_EXECUTABLE)
+    try:
+        result = subprocess.run([tool, '--bounds', target_file], capture_output=True,
+                                text=True, timeout=60)
+    except (OSError, subprocess.SubprocessError) as error:
+        raise ValueError('cannot run %s: %s' % (tool, error)) from None
+    if result.returncode != 0:
+        raise ValueError('the target area file cannot be used: %s' % (
+            (result.stderr or result.stdout).strip().replace('publish_survey_area: ', '', 1)))
+    try:
+        lat0, lon0, lat1, lon1 = (float(v) for v in result.stdout.split())
+    except ValueError:
+        raise ValueError('unexpected answer of %s --bounds: %r' % (tool, result.stdout)) from None
+    return lat0, lon0, lat1, lon1
+
+
+def inverse_web_mercator(x: float, y: float) -> Tuple[float, float]:
+    """Return the (latitude, longitude) of CAMP map coordinates (inverse of ``web_mercator``)."""
+    return (math.degrees(math.atan(math.sinh(y / _EARTH_RADIUS))),
+            math.degrees(x / _EARTH_RADIUS))
+
+
+def fit_view(bounds: Tuple[float, float, float, float], window: Tuple[int, int],
+             margin: float = FIT_MARGIN) -> Tuple[float, float, float]:
+    """
+    Return ``(lat, lon, scale)`` that shows all of ``bounds`` with ``margin`` on every side.
+
+    ``window`` is the CAMP window in pixels (width, height); the map widget in it is smaller
+    by CAMP's side panel and the bars above. The centre is the middle of the box in CAMP's own
+    map coordinates. Raises ValueError for a target with no extent (one vertex, a line).
+    """
+    lat0, lon0, lat1, lon1 = bounds
+    x0, y0 = web_mercator(lat0, lon0)
+    x1, y1 = web_mercator(lat1, lon1)
+    width, height = abs(x1 - x0), abs(y1 - y0)
+    if not (width >= MIN_TARGET_EXTENT and height >= MIN_TARGET_EXTENT):
+        raise ValueError('the target area has no extent to fit the map view to (%.1f x %.1f '
+                         'map units); it needs at least three vertices that are not in a line'
+                         % (width, height))
+    view_width = window[0] * (1.0 - PANEL_WIDTH_FRACTION)
+    view_height = window[1] - CHROME_HEIGHT_PIXELS
+    if view_width <= 0 or view_height <= 0:
+        raise ValueError('the CAMP window %dx%d is too small to fit a view into' % window)
+    scale = min(view_width / (width * (1.0 + 2.0 * margin)),
+                view_height / (height * (1.0 + 2.0 * margin)))
+    scale = max(MIN_CAMP_SCALE, min(MAX_CAMP_SCALE, scale))
+    lat, lon = inverse_web_mercator((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+    return lat, lon, scale
+
+
+_MONITOR_LINE = re.compile(
+    r'^\s*\d+:\s+[+*]*(\S+)\s+(\d+)/\d+x(\d+)/\d+\+(-?\d+)\+(-?\d+)\s*(.*)$')
+
+
+def camp_window_size(layout_config: str, runner=None) -> Tuple[Optional[Tuple[int, int]], str]:
+    """
+    Return ``((width, height) or None, note)``: the size CAMP's window will have.
+
+    Read from the layout file's CAMP entry: its ``rect``, else (maximised or full screen) the
+    monitor it names as ``xrandr --listmonitors`` reports it. None, with the reason in the
+    note, when that cannot be found; the caller then uses ``FALLBACK_WINDOW``.
+    """
+    try:
+        with open(layout_config) as f:
+            data = yaml.safe_load(f)
+        entries = data['windows']
+        entry = next(e for e in entries
+                     if CAMP_EXECUTABLE in (e.get('match') or {}).get('wm_class', ''))
+    except (OSError, yaml.YAMLError, KeyError, TypeError, StopIteration, AttributeError):
+        return None, 'no CAMP window entry in the layout file %s' % layout_config
+    rect = entry.get('rect')
+    if isinstance(rect, dict) and all(isinstance(rect.get(k), int) for k in ('width', 'height')):
+        return (rect['width'], rect['height']), "the layout's CAMP rect"
+    try:
+        output = (runner or (lambda c: subprocess.run(
+            c, capture_output=True, text=True, timeout=20, check=True).stdout))(
+                ['xrandr', '--listmonitors'])
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, 'cannot ask xrandr for the monitors: %s' % error
+    for line in output.splitlines():
+        match = _MONITOR_LINE.match(line)
+        if match and entry.get('monitor') in [match.group(1)] + match.group(6).split():
+            return (int(match.group(2)), int(match.group(3))), 'monitor %s' % entry.get('monitor')
+    return None, 'monitor %r of the layout is not connected' % entry.get('monitor')
+
+
+def camp_start_view(boats: Sequence, view: dict, target_file: str, layout_config: str,
+                    bounds_tool: str = None, runner=None) -> Tuple[float, float, float, str]:
+    """
+    Return ``(lat, lon, scale, how)`` for CAMP's starting view.
+
+    ``view`` (``demo_camp_view.yaml``) with a ``scale`` is an explicit override and is used as
+    written (centre: its lat/lon, else the middle of the boats). Without one the view is
+    fitted to the target area in the window CAMP is placed on.
+    """
+    if 'scale' in view:
+        lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
+        return lat, lon, view['scale'], 'the explicit view of the view config'
+    if not target_file:
+        raise ValueError('the view config gives no scale and there is no target area file to '
+                         'fit the map view to')
+    window, note = camp_window_size(layout_config, runner) if layout_config else (
+        None, 'no layout file')
+    if window is None:
+        window = FALLBACK_WINDOW
+        note = 'assuming a %dx%d window (%s)' % (window + (note,))
+    lat, lon, scale = fit_view(target_bounds(target_file, bounds_tool), window)
+    return lat, lon, scale, 'fitted to %s in a %dx%d window (%s)' % (
+        os.path.basename(target_file), window[0], window[1], note)
 
 
 def state_dir(home: Optional[str] = None) -> str:
@@ -432,7 +575,7 @@ def camp_node(settings_home: str, project_file: str = '') -> Node:
 
 
 def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
-                 target_file: str = '') -> list:
+                 target_file: str = '', layout_config: str = '') -> list:
     """
     Return the actions that start CAMP on the demo's own settings and tile cache.
 
@@ -443,14 +586,16 @@ def camp_actions(boats: Sequence, camp_profile: str, camp_view_config: str,
     """
     require_file(camp_profile, 'camp_profile')
     view = load_view(camp_view_config)
-    lat, lon = (view['lat'], view['lon']) if 'lat' in view else view_center(boats)
+    lat, lon, scale, how = camp_start_view(boats, view, target_file, layout_config)
     with open(camp_profile) as f:
-        profile = build_profile(f.read(), boats, lat, lon, view['scale'], cache_dir())
+        profile = build_profile(f.read(), boats, lat, lon, scale, cache_dir())
     root = settings_root()
     seed_camp_settings(root, profile)
     reset_state_dir(cache_dir(), CACHE_DIR_NAME)
     camp = camp_node(root, target_file)
-    return [LogInfo(msg='CAMP settings: %s' % root), camp]
+    return [LogInfo(msg='CAMP settings: %s' % root),
+            LogInfo(msg='CAMP map view: %.6f, %.6f at scale %.4f, %s' % (lat, lon, scale, how)),
+            camp]
 
 
 def target_area_node(target_file: str = '') -> Node:

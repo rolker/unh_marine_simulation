@@ -50,7 +50,7 @@ unh_marine_simulation/
 └── marine_simulation/                 # Scenario launch files
     ├── marine_simulation/             #   installed Python package: roster.py (boats), demo_support.py (CAMP settings, demo lock, scorer parameters, CAMP/placement/publisher actions)
     ├── launch/                        #   sim_test, sim_demo, sim_drix, demo_boats_launch.py, and the manager's groups: demo_camp_launch.py, demo_target_area_launch.py, demo_layout_launch.py, ...
-    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout/manager.yaml, demo_camp_profile.conf, demo_camp_view.yaml, demo_target_polygon_camp.json
+    ├── config/                        #   bob_platform.yaml, udp_bridge.yaml, demo_roster/params/joysticks/layout/manager.yaml, demo_camp_profile.conf, demo_camp_view.yaml (optional view override; default = fit to the target), demo_target_polygon_camp.json
     ├── scripts/                       #   demo_boats_selftest.py, check_multi_boat_graph.py, demo_manager.py, place_windows.py, run_demo.sh, publish_survey_area.py
     ├── test/                          #   pytest: boats launch fail-fast checks, demo_support helpers, graph check, demo manager and its groups, run_demo.sh, survey-area publisher
     └── README.md                      #   demo boats: arguments, pad checklist, reset notes

@@ -38,9 +38,11 @@ are synthetic), never quoted.
 import os
 import pathlib
 import random
+import re
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch import LaunchContext
+from launch.actions import LogInfo
 from marine_simulation import demo_support as demo
 from marine_simulation import roster as roster_module
 import pytest
@@ -61,6 +63,9 @@ def _installed(package):
 needs_camp = pytest.mark.skipif(not _installed('camp'), reason='camp is not installed')
 needs_scorer = pytest.mark.skipif(not _installed('coverage_assessment'),
                                   reason='coverage_assessment is not installed')
+
+
+POLYGON = str(CONFIG / 'demo_target_polygon_camp.json')
 
 
 def _boat(name, index=0, lat=43.0, lon=-70.7):
@@ -198,13 +203,13 @@ def test_view_centre_is_the_mean_of_the_boat_starts():
     assert demo.view_center(boats) == (44.0, -71.0)
 
 
-def test_shipped_view_config_loads():
-    view = demo.load_view(str(CONFIG / 'demo_camp_view.yaml'))
-    assert view['scale'] > 0 and 'lat' not in view
+def test_shipped_view_config_is_an_empty_override_so_the_view_is_fitted():
+    assert demo.load_view(str(CONFIG / 'demo_camp_view.yaml')) == {}
 
 
 @pytest.mark.parametrize('body', [
-    'camp_view: {}\n', 'camp_view: {scale: 1, lat: 43.0}\n', 'camp_view: {scale: 1, zoom: 2}\n',
+    'camp_view: {lat: 43.0, lon: -70.0}\n', 'camp_view: {scale: 1, lat: 43.0}\n',
+    'camp_view: {scale: 1, zoom: 2}\n',
     'nothing: 1\n', '- a\n'])
 def test_view_config_rejects_a_malformed_file(tmp_path, body):
     path = tmp_path / 'view.yaml'
@@ -463,11 +468,14 @@ def test_camp_actions_seed_the_private_settings_and_empty_the_tile_cache(
 
     def start(target=''):
         return demo.camp_actions(roster, str(CONFIG / 'demo_camp_profile.conf'),
-                                 str(CONFIG / 'demo_camp_view.yaml'), target)
+                                 str(CONFIG / 'demo_camp_view.yaml'), target,
+                                 str(CONFIG / 'demo_layout.yaml'))
 
-    actions = start('/some/target.json')
-    assert started == [(demo.settings_root(str(tmp_path)), '/some/target.json')]
+    actions = start(POLYGON)
+    assert started == [(demo.settings_root(str(tmp_path)), POLYGON)]
     assert actions[-1] == 'camp-node'
+    assert any(isinstance(a, LogInfo) and 'CAMP map view' in ''.join(
+        getattr(part, 'text', '') for part in a.msg) for a in actions)
     conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
                         'CCOMAutonomousMissionPlanner.conf').read_text()
     assert 'cache_dir=' in conf and demo.cache_dir(str(tmp_path)) in conf
@@ -573,3 +581,177 @@ def test_the_limit_check_would_have_caught_the_one_metre_failure():
     # what the scorer logged at 1 m: 2.49846e+06 cells (the estimate is within 0.1 %)
     assert abs(_lattice_cells(points, 1.0) - 2.49846e6) < 2.5e3
     assert _lattice_cells(points, 1.0) > 1000000 > _lattice_cells(points, 2.0)
+
+
+# --- the starting view is fitted to the target polygon -----------------------------------
+
+BIG_SCREEN = (3840, 2160)          # HDMI-0 of the demo computer
+
+
+def _polygon_points():
+    (label, points), = _shipped_polygon()
+    return points
+
+
+def _bounds(points):
+    lats = [lat for lat, _ in points]
+    lons = [lon for _, lon in points]
+    return min(lats), min(lons), max(lats), max(lons)
+
+
+def test_the_fitted_view_contains_every_vertex_with_a_margin_on_the_big_screen():
+    points = _polygon_points()
+    lat, lon, scale = demo.fit_view(_bounds(points), BIG_SCREEN)
+    cx, cy = demo.web_mercator(lat, lon)
+    view_width = BIG_SCREEN[0] * (1 - demo.PANEL_WIDTH_FRACTION)
+    view_height = BIG_SCREEN[1] - demo.CHROME_HEIGHT_PIXELS
+    for vertex in points:
+        x, y = demo.web_mercator(*vertex)
+        assert abs(x - cx) * scale <= 0.45 * view_width, vertex
+        assert abs(y - cy) * scale <= 0.45 * view_height, vertex
+    assert demo.MIN_CAMP_SCALE < scale <= demo.MAX_CAMP_SCALE
+
+
+def test_the_fit_is_centred_on_the_polygon_and_tight_in_the_limiting_direction():
+    points = _polygon_points()
+    lat, lon, scale = demo.fit_view(_bounds(points), BIG_SCREEN)
+    xs, ys = zip(*(demo.web_mercator(*p) for p in points))
+    cx, cy = demo.web_mercator(lat, lon)
+    assert cx == pytest.approx((min(xs) + max(xs)) / 2, abs=0.01)
+    assert cy == pytest.approx((min(ys) + max(ys)) / 2, abs=0.01)
+    view_width = BIG_SCREEN[0] * (1 - demo.PANEL_WIDTH_FRACTION)
+    extent_px = max((max(xs) - min(xs)) * scale / view_width,
+                    (max(ys) - min(ys)) * scale / (BIG_SCREEN[1] - demo.CHROME_HEIGHT_PIXELS))
+    assert extent_px == pytest.approx(1 / (1 + 2 * demo.FIT_MARGIN))     # margin each side
+
+
+def test_a_smaller_window_zooms_out_so_the_polygon_still_fits():
+    bounds = _bounds(_polygon_points())
+    assert demo.fit_view(bounds, (1600, 900))[2] < demo.fit_view(bounds, BIG_SCREEN)[2]
+
+
+def test_the_inverse_projection_round_trips():
+    for lat, lon in [(43.07, -70.71), (-33.0, 151.2), (0.0, 0.0)]:
+        back = demo.inverse_web_mercator(*demo.web_mercator(lat, lon))
+        assert back == pytest.approx((lat, lon), abs=1e-9)
+
+
+@pytest.mark.parametrize('bounds', [(43.0, -70.0, 43.0, -70.0),            # one vertex
+                                    (43.0, -70.0, 43.0, -69.99),           # a line, east-west
+                                    (43.0, -70.0, 43.01, -70.0)])          # a line, north-south
+def test_a_target_without_extent_is_refused_plainly(bounds):
+    with pytest.raises(ValueError, match='no extent to fit the map view to'):
+        demo.fit_view(bounds, BIG_SCREEN)
+
+
+def test_a_window_too_small_for_the_panel_and_bars_is_refused():
+    with pytest.raises(ValueError, match='too small'):
+        demo.fit_view(_bounds(_polygon_points()), (1000, 150))
+
+
+def test_the_shipped_polygons_bounds_come_from_the_publisher(tmp_path):
+    lat0, lon0, lat1, lon1 = demo.target_bounds(POLYGON, str(PACKAGE / 'scripts' /
+                                                             'publish_survey_area.py'))
+    assert (lat0, lon0, lat1, lon1) == pytest.approx(_bounds(_polygon_points()), abs=1e-8)
+
+
+def test_target_bounds_report_a_bad_file_plainly(tmp_path):
+    bad = tmp_path / 'bad.json'
+    bad.write_text('{ nope')
+    with pytest.raises(ValueError, match='target area file cannot be used.*not valid JSON'):
+        demo.target_bounds(str(bad), str(PACKAGE / 'scripts' / 'publish_survey_area.py'))
+    with pytest.raises(ValueError, match='cannot run'):
+        demo.target_bounds(str(bad), str(tmp_path / 'missing'))
+
+
+XRANDR_BIG = (' 0: +*HDMI-0 3840/800x2160/450+0+240  HDMI-0\n'
+              ' 1: +DP-2 1920/519x1200/320+4966+0  DP-2\n')
+
+
+def test_the_window_size_is_the_monitor_of_the_layouts_camp_entry():
+    size, note = demo.camp_window_size(str(CONFIG / 'demo_layout.yaml'), lambda c: XRANDR_BIG)
+    assert size == BIG_SCREEN and 'HDMI-0' in note
+
+
+def test_a_rect_entry_gives_the_rect_size(tmp_path):
+    layout = tmp_path / 'layout.yaml'
+    layout.write_text(
+        'windows:\n  - name: camp\n    match: {wm_class: CCOMAutonomousMissionPlanner}\n'
+        '    monitor: HDMI-0\n    rect: {x: 0, y: 0, width: 1600, height: 900}\n')
+    assert demo.camp_window_size(str(layout), lambda c: 1 / 0)[0] == (1600, 900)
+
+
+@pytest.mark.parametrize('xrandr, layout_text', [
+    (' 1: +DP-2 1920/519x1200/320+4966+0  DP-2\n', None),        # monitor not connected
+    ('', None),
+    (XRANDR_BIG, 'windows: []\n'),                                # no CAMP entry
+    (XRANDR_BIG, 'nonsense'),
+])
+def test_an_unreadable_window_size_is_none_with_a_reason(tmp_path, xrandr, layout_text):
+    layout = CONFIG / 'demo_layout.yaml'
+    if layout_text is not None:
+        layout = tmp_path / 'layout.yaml'
+        layout.write_text(layout_text)
+    size, note = demo.camp_window_size(str(layout), lambda c: xrandr)
+    assert size is None and note
+
+
+def test_a_missing_layout_file_or_xrandr_is_none_with_a_reason(tmp_path):
+    assert demo.camp_window_size(str(tmp_path / 'nope.yaml'))[0] is None
+
+    def boom(command):
+        raise OSError('xrandr: not found')
+    size, note = demo.camp_window_size(str(CONFIG / 'demo_layout.yaml'), boom)
+    assert size is None and 'xrandr' in note
+
+
+def _start_view(view, target=POLYGON, layout=None, runner=lambda c: XRANDR_BIG, boats=None):
+    return demo.camp_start_view(boats or [_boat('one', lat=43.0, lon=-70.0)], view, target,
+                                layout or str(CONFIG / 'demo_layout.yaml'),
+                                str(PACKAGE / 'scripts' / 'publish_survey_area.py'), runner)
+
+
+def test_without_an_override_the_view_is_fitted_to_the_polygon_on_the_big_screen():
+    lat, lon, scale, how = _start_view({})
+    assert (lat, lon, scale) == pytest.approx(demo.fit_view(_bounds(_polygon_points()),
+                                                            BIG_SCREEN))
+    assert 'fitted' in how and '3840x2160' in how and 'HDMI-0' in how
+    # the numbers for the shipped polygon, the owner asked to see them
+    print('fitted view on 3840x2160: lat %.6f lon %.6f scale %.4f' % (lat, lon, scale))
+
+
+def test_an_explicit_view_is_used_verbatim_and_the_polygon_is_not_even_read():
+    assert _start_view({'scale': 0.7, 'lat': 43.5, 'lon': -70.5}, target='/nope.json')[:3] == (
+        43.5, -70.5, 0.7)
+    lat, lon, scale, how = _start_view({'scale': 0.7}, target='')      # boats' centre
+    assert (lat, lon, scale) == (43.0, -70.0, 0.7) and 'explicit' in how
+
+
+def test_an_unreadable_window_falls_back_to_a_named_size():
+    lat, lon, scale, how = _start_view({}, runner=lambda c: '')
+    assert scale == pytest.approx(demo.fit_view(_bounds(_polygon_points()),
+                                                demo.FALLBACK_WINDOW)[2])
+    assert 'assuming a 1920x1080 window' in how
+
+
+def test_fitting_needs_a_target_file():
+    with pytest.raises(ValueError, match='no target area file'):
+        _start_view({}, target='')
+
+
+def test_camp_actions_fit_the_view_to_the_polygon_in_the_settings_it_writes(
+        monkeypatch, tmp_path, roster):
+    monkeypatch.setenv('HOME', str(tmp_path))
+    monkeypatch.setattr(demo, 'camp_node', lambda home, project='': 'camp-node')
+    monkeypatch.setattr(demo, 'camp_window_size', lambda layout, runner=None: (BIG_SCREEN, 'x'))
+    demo.camp_actions(roster, str(CONFIG / 'demo_camp_profile.conf'),
+                      str(CONFIG / 'demo_camp_view.yaml'), POLYGON,
+                      str(CONFIG / 'demo_layout.yaml'))
+    conf = pathlib.Path(demo.settings_root(str(tmp_path)), 'UNH-CCOMJHC',
+                        'CCOMAutonomousMissionPlanner.conf').read_text()
+    # the publisher prints the bounds to nine decimals, so fit what it prints
+    bounds = tuple(round(v, 9) for v in _bounds(_polygon_points()))
+    lat, lon, scale = demo.fit_view(bounds, BIG_SCREEN)
+    written = float(re.search(r'^mapScale=(\S+)$', conf, re.M).group(1))
+    assert written == pytest.approx(scale, rel=1e-6)
+    assert demo.qt_point_variant(*demo.web_mercator(lat, lon)) in conf
