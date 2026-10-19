@@ -335,8 +335,51 @@ def make_node(args: Optional[Sequence[str]] = None) -> Any:
     return node
 
 
+def check_file(path: str) -> int:
+    """
+    Dry run: parse ``path`` as ``make_node`` would; return 0 or 2 and say why.
+
+    The launch manager's preflight runs this (``publish_survey_area.py --check FILE``), so a
+    malformed target stops the demo before anything starts instead of leaving a publisher
+    node that appears in the graph and then exits.
+    """
+    try:
+        areas = load_survey_areas(path)
+        ids = area_ids(areas)
+    except SurveyAreaFileError as error:
+        print('publish_survey_area: refused: %s' % error, file=sys.stderr)
+        return 2
+    print('publish_survey_area: %s holds %d survey area(s) %s' % (path, len(ids), ids))
+    return 0
+
+
+def bounds_of(path: str) -> Tuple[float, float, float, float]:
+    """Return ``(min_lat, min_lon, max_lat, max_lon)`` over every vertex of every area."""
+    areas = load_survey_areas(path)
+    lats = [lat for _, points in areas for lat, _ in points]
+    lons = [lon for _, points in areas for _, lon in points]
+    return min(lats), min(lons), max(lats), max(lons)
+
+
 def main(args: Optional[Sequence[str]] = None) -> int:
     """Run the node; return a non-zero exit status when the inputs are refused."""
+    argv = sys.argv[1:] if args is None else list(args)
+    if argv[:1] == ['--bounds']:
+        # For the demo: CAMP's starting view is fitted to this box (demo_support.target_bounds).
+        if len(argv) != 2:
+            print('usage: publish_survey_area.py --bounds FILE', file=sys.stderr)
+            return 2
+        try:
+            print('%.9f %.9f %.9f %.9f' % bounds_of(argv[1]))
+        except SurveyAreaFileError as error:
+            print('publish_survey_area: refused: %s' % error, file=sys.stderr)
+            return 2
+        return 0
+    if argv[:1] == ['--check']:
+        if len(argv) != 2:
+            print('usage: publish_survey_area.py --check FILE', file=sys.stderr)
+            return 2
+        return check_file(argv[1])
     import rclpy
     from rclpy.executors import ExternalShutdownException
 

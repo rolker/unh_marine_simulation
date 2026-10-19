@@ -698,3 +698,81 @@ def test_clear_failure_does_not_hold_the_manager_open_forever():
     w2.runner.finish_stop('boats')
     w2.run(1)
     assert w2.core.finished                              # an explicit STOP clears the hold
+
+
+# -- a run-once group (a window placement, a one-shot setup step) ----------------------------
+
+RUN_ONCE = copy.deepcopy(DATA)
+RUN_ONCE['groups']['layout'] = {'launch': {'package': 'l', 'file': 'l.py'}, 'requires': ['camp'],
+                                'follows': ['camp'], 'restart': 'never'}
+RUN_ONCE['profiles']['demo'] = ['boats', 'camp', 'scorer', 'layout']
+
+
+def _booted_with_layout():
+    w = World(data=RUN_ONCE)
+    w.core.begin()
+    started = set()
+
+    def step():
+        for g in w.runner.started:
+            if g not in started:
+                started.add(g)
+                w.runner.launch_process(g)
+        return all(w.state(g) == mc.READY for g in ('boats', 'camp', 'scorer', 'layout'))
+    assert w.run(60, until=step), w.core.status()
+    return w
+
+
+def test_a_run_once_group_waits_for_the_group_it_requires():
+    w = World(data=RUN_ONCE)
+    w.core.begin()
+    w.run(0.5)
+    assert w.state('layout') == mc.BLOCKED
+    assert 'waiting for camp' in w.core._groups['layout'].detail
+    assert 'layout' not in w.runner.started
+
+
+def test_a_run_once_group_that_finishes_is_not_a_failure_and_stops_nothing():
+    w = _booted_with_layout()
+    pid = list(w.core._groups['layout'].alive)[0]
+    w.core.on_process_exited('layout', pid, 'place_windows', 0)
+    w.run(2)
+    assert w.state('layout') == mc.STOPPED
+    assert w.core.status()['groups'][3]['detail'] == 'exited(0)'
+    assert not any('FAILED' in line for line in w.logs)
+    for name in ('boats', 'camp', 'scorer'):
+        assert w.state(name) == mc.READY and w.core.desired(name) == mc.DESIRED_RUNNING
+    assert w.runner.stopped == [] and not w.core.finished
+
+
+def test_a_run_once_group_can_be_started_again_and_runs_once_more():
+    w = _booted_with_layout()
+    w.core.on_process_exited('layout', list(w.core._groups['layout'].alive)[0], 'place', 0)
+    w.run(1)
+    assert w.core.handle_command({'request_id': 'again', 'type': 'START',
+                                  'groups': ['layout']})['result'] == mc.ACCEPTED
+    w.run(1)
+    assert w.runner.started.count('layout') == 2
+    w.runner.launch_process('layout')
+    w.run(1)
+    assert w.state('layout') == mc.READY
+
+
+def test_a_run_once_group_that_fails_is_named_and_the_rest_keeps_running():
+    w = _booted_with_layout()
+    w.core.on_process_exited('layout', list(w.core._groups['layout'].alive)[0], 'place', 1)
+    w.run(2)
+    assert w.state('layout') == mc.FAILED
+    assert 'exited with code 1' in w.core._groups['layout'].detail
+    assert any('group layout FAILED' in line for line in w.logs)
+    for name in ('boats', 'camp', 'scorer'):
+        assert w.state(name) == mc.READY
+
+
+def test_closing_camp_stops_a_run_once_group_that_is_still_running():
+    w = _booted_with_layout()
+    camp_pid = list(w.core._groups['camp'].alive)[0]
+    w.core.on_process_exited('camp', camp_pid, 'camp', 0)
+    w.run(1)
+    assert 'layout' in w.runner.stopped
+    assert w.core.desired('layout') == mc.DESIRED_STOPPED

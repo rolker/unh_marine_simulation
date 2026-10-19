@@ -32,17 +32,15 @@ Start CAMP on the demo's own settings and an emptied tile cache, for the launch 
 
 The manager's ``camp`` group uses this instead of CAMP's plain ``camp_launch.py``, which runs
 on the operator's own settings and the shared live tile cache (stale coverage from an earlier
-session shows). Everything is done by ``demo_launch.camp_actions``, the same code the
-one-launch demo uses, so the two cannot drift. Unlike ``demo_launch.py`` nothing here shuts
-the launch down when CAMP closes: the manager treats that exit as the operator closing the
-demo.
+session shows). Everything is done by ``marine_simulation.demo_support.camp_actions``. Nothing
+here shuts the launch down when CAMP closes: the manager treats that exit as the operator
+closing the demo.
 
-The one-demo-at-a-time lock is NOT taken here: this file is loaded afresh by path on every
-group start, so a lock kept in its module would be lost or refused on a restart. The
-manager (``demo_manager.py``) takes it once for the process lifetime, before any group starts.
+The one-demo-at-a-time lock is NOT taken here: this file runs afresh on every group start, and
+a lock taken per start would be refused on a restart. The manager (``demo_manager.py``) takes
+it once for the process lifetime, before any group starts.
 """
 
-import importlib.util
 import os
 
 from launch import LaunchDescription
@@ -52,18 +50,8 @@ from launch.substitutions import LaunchConfiguration
 from launch.substitutions import PathJoinSubstitution
 from launch.substitutions import TextSubstitution
 from launch_ros.substitutions import FindPackageShare
-
-
-def _load_demo_launch():
-    """Load the sibling ``demo_launch.py`` (a launch file is not a package)."""
-    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'demo_launch.py')
-    spec = importlib.util.spec_from_file_location('demo_launch', path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-demo_launch = _load_demo_launch()
+from marine_simulation import demo_support
+from marine_simulation import roster
 
 
 def launch_setup(context, *args, **kwargs):
@@ -71,16 +59,16 @@ def launch_setup(context, *args, **kwargs):
     def arg(name: str) -> str:
         return LaunchConfiguration(name).perform(context)
 
-    boats_launch = demo_launch.boats_launch
-    boats = boats_launch.select_boats(boats_launch.load_roster(arg('roster_file')),
-                                      arg('boats'))
+    boats = roster.select_boats(roster.load_roster(arg('roster_file')), arg('boats'))
     target_file = arg('target_area_file')
     if target_file:
         target_file = os.path.abspath(os.path.expanduser(target_file))
-        demo_launch.require_file(target_file, 'target_area_file')
-    demo_launch.refuse_running_camp()
-    return demo_launch.camp_actions(boats, arg('camp_profile'), arg('camp_view_config'),
-                                    target_file)
+        demo_support.require_file(target_file, 'target_area_file')
+    demo_support.refuse_running_camp()
+    return demo_support.camp_actions(
+        boats, arg('camp_profile'), arg('camp_view_config'), target_file,
+        os.path.abspath(os.path.expanduser(arg('layout_config'))) if arg('layout_config') else '',
+        fresh=roster.parse_bool(arg('camp_fresh'), 'camp_fresh'))
 
 
 def generate_launch_description():
@@ -100,6 +88,13 @@ def generate_launch_description():
             'camp_view_config',
             default_value=PathJoinSubstitution([share, 'config', 'demo_camp_view.yaml']),
             description='Where and how far in CAMP starts.'),
+        DeclareLaunchArgument(
+            'layout_config',
+            default_value=PathJoinSubstitution([share, 'config', 'demo_layout.yaml']),
+            description='Window layout; its CAMP window size is what the map view is fitted to.'),
+        DeclareLaunchArgument(
+            'camp_fresh', default_value='false',
+            description='true: discard the window and view CAMP saved last time (a first start).'),
         DeclareLaunchArgument('target_area_file', default_value=TextSubstitution(text=''),
                               description='Saved CAMP .json to open (optional).'),
         OpaqueFunction(function=launch_setup),

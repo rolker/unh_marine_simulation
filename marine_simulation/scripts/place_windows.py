@@ -37,8 +37,10 @@ Put the demo's windows where the layout file says (X11, needs ``wmctrl``).
 The layout file is described in ``config/demo_layout.yaml``. For every window it
 names, this waits for the window to appear (up to ``timeout_seconds``, default 90 s), clears its
 maximised and full screen state, moves and sizes it on the named monitor (or makes it
-full screen there), then reads the geometry back and, because an application may
+full screen or maximised there), then reads the geometry back and, because an application may
 resize itself after its first show, applies it once more when it does not match.
+
+A layout with no windows is a no-op: exit 0 at once, with no session, tool or wait needed.
 
 Exit status 0 when every window is in place, 1 when one is not (the reason is
 printed), 2 for a layout, session or tool that cannot be used at all. The
@@ -109,6 +111,7 @@ class Placement:
     monitor: str
     fullscreen: bool
     rect: Optional[Sequence[int]]  # x, y, width, height from the monitor's top left
+    maximized: bool = False  # fills the monitor's work area and keeps its title bar
 
 
 def parse_monitors(text: str) -> Dict[str, Monitor]:
@@ -168,14 +171,16 @@ def load_layout(path: str):
             or not math.isfinite(timeout) or timeout <= 0):
         raise LayoutError('%s: timeout_seconds must be a positive number' % path)
     entries = data.get('windows')
-    if not isinstance(entries, list) or not entries:
-        raise LayoutError("%s: expected a non-empty 'windows' list" % path)
+    if entries is None:
+        entries = []                 # no windows to place is a valid layout (a no-op)
+    if not isinstance(entries, list):
+        raise LayoutError("%s: 'windows' must be a list" % path)
     placements = []
     for index, entry in enumerate(entries):
         where = '%s: windows[%d]' % (path, index)
         if not isinstance(entry, dict):
             raise LayoutError('%s: expected a mapping' % where)
-        extra = set(entry) - {'name', 'match', 'monitor', 'fullscreen', 'rect'}
+        extra = set(entry) - {'name', 'match', 'monitor', 'fullscreen', 'maximized', 'rect'}
         if extra:
             raise LayoutError('%s: unknown key(s) %s' % (where, ', '.join(sorted(extra))))
         name = entry.get('name')
@@ -194,9 +199,13 @@ def load_layout(path: str):
         fullscreen = entry.get('fullscreen', False)
         if not isinstance(fullscreen, bool):
             raise LayoutError('%s: fullscreen must be true or false' % where)
+        maximized = entry.get('maximized', False)
+        if not isinstance(maximized, bool):
+            raise LayoutError('%s: maximized must be true or false' % where)
         rect = entry.get('rect')
-        if fullscreen == (rect is not None):
-            raise LayoutError("%s: give exactly one of 'fullscreen: true' or 'rect'" % where)
+        if int(fullscreen) + int(maximized) + int(rect is not None) != 1:
+            raise LayoutError("%s: give exactly one of 'fullscreen: true', 'maximized: true' "
+                              "or 'rect'" % where)
         if rect is not None:
             if not isinstance(rect, dict) or set(rect) != {'x', 'y', 'width', 'height'}:
                 raise LayoutError('%s: rect needs exactly x, y, width and height' % where)
@@ -207,7 +216,7 @@ def load_layout(path: str):
                 raise LayoutError('%s: rect needs x, y >= 0 and width, height >= 1' % where)
             rect = tuple(values)
         placements.append(Placement(name, match.get('wm_class', ''), match.get('title', ''),
-                                    monitor, fullscreen, rect))
+                                    monitor, fullscreen, rect, maximized))
     names = [p.name for p in placements]
     if len(set(names)) != len(names):
         raise LayoutError('%s: window names must be unique' % path)
@@ -221,7 +230,7 @@ def target_geometry(placement: Placement, monitors: Dict[str, Monitor]):
         raise LayoutError('window %r: monitor %r is not connected (xrandr lists %s)'
                           % (placement.name, placement.monitor,
                              ', '.join(sorted(monitors)) or 'none'))
-    if placement.fullscreen:
+    if placement.fullscreen or placement.maximized:
         return monitor.x, monitor.y, monitor.width, monitor.height
     x, y, width, height = placement.rect
     if x + width > monitor.width or y + height > monitor.height:
@@ -259,6 +268,101 @@ def in_place(window: Window, geometry) -> bool:
             abs(window.y - y) <= POSITION_TOLERANCE)
 
 
+# A maximised window fills the monitor's work area, not the monitor: the top bar and a dock
+# take space and the title bar and border take more. It counts as in place when it lies on
+# its monitor and covers most of it AND the window manager reports it maximised and not full
+# screen (``_NET_WM_STATE``, read with ``xprop``). The state matters: mutter treats a client
+# resized to exactly the monitor's geometry as a full screen request, which hides the title
+# bar and the Close button, and ignores a later maximise; that window still covers 100 % of
+# the monitor, so geometry alone accepts it.
+MAXIMIZED_MIN_COVERAGE = 0.85
+STATE_FULLSCREEN = '_NET_WM_STATE_FULLSCREEN'
+STATE_MAXIMIZED = ('_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ')
+
+
+NO_FRAME = (0, 0, 0, 0)
+
+
+def _unframed(window: Window, frame) -> tuple:
+    """
+    Return the window's ``(left, top, right, bottom)`` edges with the frame taken out.
+
+    On a reparenting window manager ``wmctrl -lG`` reports the client's position offset by the
+    frame once more (a maximised window under mutter shows its top at the work area top plus
+    the title bar height twice), so a decorated window always seems to overrun the monitor
+    bottom by the title bar height. ``frame`` is ``_NET_FRAME_EXTENTS``: left, right, top,
+    bottom.
+    """
+    left, right, top, bottom = frame
+    return (window.x - left, window.y - top,
+            window.x - left + window.width, window.y - top + window.height)
+
+
+def maximized_covers(window: Window, monitor_geometry) -> bool:
+    """Return True when ``window`` is at least ``MAXIMIZED_MIN_COVERAGE`` of the monitor."""
+    _, _, width, height = monitor_geometry
+    return (window.width >= MAXIMIZED_MIN_COVERAGE * width and
+            window.height >= MAXIMIZED_MIN_COVERAGE * height)
+
+
+def maximized_on_monitor(window: Window, monitor_geometry, frame=NO_FRAME) -> bool:
+    """Return True when the window's centre is on the monitor and it does not spill off it."""
+    x, y, width, height = monitor_geometry
+    left, top, right, bottom = _unframed(window, frame)
+    return (x <= (left + right) / 2 < x + width and y <= (top + bottom) / 2 < y + height and
+            left >= x - SIZE_TOLERANCE and top >= y - SIZE_TOLERANCE and
+            right <= x + width + SIZE_TOLERANCE and bottom <= y + height + SIZE_TOLERANCE)
+
+
+def maximized_in_place(window: Window, monitor_geometry, frame=NO_FRAME) -> bool:
+    """Return True when ``window`` lies on the monitor and covers most of it."""
+    return (maximized_on_monitor(window, monitor_geometry, frame) and
+            maximized_covers(window, monitor_geometry))
+
+
+def parse_window_state(text: str) -> frozenset:
+    """Return the ``_NET_WM_STATE_*`` names in ``xprop -id ... _NET_WM_STATE`` output."""
+    names = set()
+    for line in text.splitlines():
+        if line.startswith('_NET_WM_STATE') and '=' in line:
+            names.update(re.findall(r'_NET_WM_STATE_[A-Z_]+', line.split('=', 1)[1]))
+    return frozenset(names)
+
+
+def parse_frame_extents(text: str) -> tuple:
+    """Return ``_NET_FRAME_EXTENTS`` (left, right, top, bottom) from xprop output, else zeros."""
+    for line in text.splitlines():
+        if line.startswith('_NET_FRAME_EXTENTS') and '=' in line:
+            numbers = re.findall(r'-?\d+', line.split('=', 1)[1])
+            if len(numbers) == 4:
+                return tuple(int(n) for n in numbers)
+    return NO_FRAME
+
+
+def maximized_problem(window: Window, monitor_geometry, state: frozenset,
+                      frame=NO_FRAME) -> Optional[str]:
+    """Return why a maximised placement is not right (state, coverage or position), or None."""
+    if STATE_FULLSCREEN in state:
+        return 'state: it is full screen (no title bar), not maximised'
+    missing = [name.rsplit('_', 1)[-1].lower() for name in STATE_MAXIMIZED if name not in state]
+    if missing:
+        return 'state: it is not maximised (%s not set)' % ' and '.join(missing)
+    if not maximized_covers(window, monitor_geometry):
+        return 'coverage: it is %dx%d, under %d %% of the %dx%d monitor' % (
+            window.width, window.height, round(100 * MAXIMIZED_MIN_COVERAGE),
+            monitor_geometry[2], monitor_geometry[3])
+    if not maximized_on_monitor(window, monitor_geometry, frame):
+        return 'position: it is not on the monitor (frame %s taken out of its reported place)' \
+            % (frame,)
+    return None
+
+
+def window_state(runner, ident: str) -> tuple:
+    """Return ``(state flags, frame extents)`` for a window (needs ``xprop``)."""
+    text = runner(['xprop', '-id', ident, '_NET_WM_STATE', '_NET_FRAME_EXTENTS'])
+    return parse_window_state(text), parse_frame_extents(text)
+
+
 def clear_commands(window: Window) -> List[List[str]]:
     """
     Return the wmctrl calls that clear full screen and maximised state.
@@ -270,13 +374,22 @@ def clear_commands(window: Window) -> List[List[str]]:
             ['wmctrl', '-i', '-r', window.ident, '-b', 'remove,maximized_vert,maximized_horz']]
 
 
-def move_commands(window: Window, geometry, fullscreen: bool) -> List[List[str]]:
+def move_commands(window: Window, geometry, fullscreen: bool,
+                  maximized: bool = False) -> List[List[str]]:
     """Return the wmctrl calls that put a window at ``geometry`` (after clearing it)."""
     x, y, width, height = geometry
+    if maximized:
+        # Never resize a window to exactly the monitor: mutter reads that as a full screen
+        # request and then ignores the maximise below. Move it to the centred half-size
+        # rectangle, strictly inside the monitor, and let the maximise size it.
+        x, y, width, height = x + width // 4, y + height // 4, width // 2, height // 2
     commands = [['wmctrl', '-i', '-r', window.ident, '-e',
                  '0,%d,%d,%d,%d' % (x, y, width, height)]]
     if fullscreen:
         commands.append(['wmctrl', '-i', '-r', window.ident, '-b', 'add,fullscreen'])
+    if maximized:
+        commands.append(['wmctrl', '-i', '-r', window.ident, '-b',
+                         'add,maximized_vert,maximized_horz'])
     return commands
 
 
@@ -286,7 +399,9 @@ def run(command: Sequence[str]) -> str:
         return subprocess.run(command, check=True, capture_output=True, text=True,
                               timeout=20).stdout
     except FileNotFoundError:
-        raise LayoutError('%s is not installed (sudo apt install wmctrl)' % command[0]) \
+        packages = {'xprop': 'x11-utils', 'xrandr': 'x11-xserver-utils'}
+        package = packages.get(command[0], command[0])
+        raise LayoutError('%s is not installed (sudo apt install %s)' % (command[0], package)) \
             from None
     except subprocess.SubprocessError as error:
         raise LayoutError('%s failed: %s' % (' '.join(command), error)) from None
@@ -308,6 +423,8 @@ def place_all(placements: Sequence[Placement], monitors: Dict[str, Monitor],
     The wait for windows is one deadline for the whole layout, so a window that
     never appears costs ``timeout`` seconds once, not once per window.
     """
+    if not placements:
+        return []
     geometries = {p.name: target_geometry(p, monitors) for p in placements}
     problems = []
     pending = list(placements)
@@ -358,7 +475,8 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
             for command in clear_commands(window):
                 runner(command)
             sleep(CLEAR_SECONDS)
-            for command in move_commands(window, geometry, placement.fullscreen):
+            for command in move_commands(window, geometry, placement.fullscreen,
+                                         placement.maximized):
                 runner(command)
             sleep(SETTLE_SECONDS)
             now = next((w for w in list_windows(runner) if w.ident == window.ident), None)
@@ -368,14 +486,26 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
         if now is None:
             return 'window %r disappeared while it was being placed' % placement.name
         window = now
-        if in_place(window, geometry):
+        why = ''
+        if placement.maximized:
+            try:
+                state, frame = window_state(runner, window.ident)
+                reason = maximized_problem(window, geometry, state, frame)
+            except LayoutError as error:
+                return 'window %r could not be checked: %s' % (placement.name, error)
+            why = '; %s' % reason if reason else ''
+            in_position = reason is None
+        else:
+            in_position = in_place(window, geometry)
+        if in_position:
             log('placed %s on %s at %s' % (placement.name, placement.monitor, wanted))
             return None
-        log('%s is at %s, wanted %s (attempt %d)' % (
+        log('%s is at %s, wanted %s (attempt %d)%s' % (
             placement.name, geometry_text(window.x, window.y, window.width, window.height),
-            wanted, attempt))
-    return 'window %r did not stay at %s; it is at %s' % (
-        placement.name, wanted, geometry_text(window.x, window.y, window.width, window.height))
+            wanted, attempt, why))
+    return 'window %r did not stay at %s; it is at %s%s' % (
+        placement.name, wanted, geometry_text(window.x, window.y, window.width, window.height),
+        why)
 
 
 def check_session(environ=os.environ) -> None:
@@ -409,9 +539,13 @@ def check_layout(path: str, environ=os.environ, runner=None):
     connected. Raises LayoutError with the reason otherwise.
     """
     runner = runner or run
-    check_session(environ)
     placements, timeout = load_layout(os.path.expanduser(path))
+    if not placements:
+        return placements, timeout, {}       # nothing to place: no session or tool needed
+    check_session(environ)
     runner(['wmctrl', '-m'])
+    if any(p.maximized for p in placements):
+        runner(['xprop', '-root', '_NET_SUPPORTED'])      # the state check needs xprop
     monitors = parse_monitors(runner(['xrandr', '--listmonitors']))
     for placement in placements:
         target_geometry(placement, monitors)

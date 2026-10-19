@@ -146,7 +146,10 @@ launched) is not a failure; it comes back `unconfigured` and the loop repairs it
 exit of one process among several is a note. A non-zero exit fails the group. When the last
 process of a `restart: never` group exits cleanly (CAMP closed by its window), that is an
 operator decision: the group's desired state becomes `STOPPED` and the groups that `follow`
-it are stopped. The same exit under `restart: on-failure` is a failure, because automatic
+it are stopped. The same rule makes a **run-once group** (a window placement, a setup step: `restart:
+never`, nothing follows it): it ends `STOPPED` with detail `exited(0)`, no group is stopped, a
+non-zero exit is a `FAILED` group that leaves the others running, and `command start <group>`
+runs it again. The same exit under `restart: on-failure` is a failure, because automatic
 restart is not implemented.
 
 ### What a helper sees when the boats go FAILED

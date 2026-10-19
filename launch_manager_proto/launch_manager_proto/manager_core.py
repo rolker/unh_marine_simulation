@@ -232,9 +232,9 @@ class ManagerCore:
             if returncode == 0 and g.spec.restart == 'never':
                 g.desired = DESIRED_STOPPED
                 g.left_by_exit = True
-                self._set(g, STOPPED, 'exited(0): closed by the operator', now)
+                self._set(g, STOPPED, 'exited(0)', now)
                 self._drop_converger(g)
-                self._log('group %s exited cleanly; treating it as closed' % group)
+                self._log('group %s exited cleanly; treating it as closed or finished' % group)
             elif returncode == 0:
                 self._fail(g, 'every process exited cleanly but the group should keep running '
                               '(restart is not implemented)', now)

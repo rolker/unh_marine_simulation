@@ -151,21 +151,30 @@ def test_main_refuses_overriding_launch_args_before_starting_anything(capsys):
 
 # --- --demo: the whole display's launch, and the scorer check ---------------------------
 
-def test_demo_launch_command_switches_off_what_needs_a_display():
-    cmd = selftest.launch_command(['a'], None, False, ['tide_speed_factor:=1'], demo=True)
-    assert cmd[:4] == ['ros2', 'launch', 'marine_simulation', 'demo_launch.py']
-    assert 'enable_camp:=false' in cmd and 'enable_window_layout:=false' in cmd
-    assert cmd[-1] == 'tide_speed_factor:=1' and 'boats:=a' in cmd
+def test_demo_command_starts_the_manager_without_a_display():
+    cmd = selftest.launch_command(['a'], None, False, ['--config', '/x.yaml'], demo=True)
+    assert cmd[:5] == ['ros2', 'run', 'marine_simulation', 'demo_manager.py', '--profile']
+    assert cmd[5] == 'headless'
+    assert '--no-joysticks' in cmd and cmd[cmd.index('--boats') + 1] == 'a'
+    assert cmd[-2:] == ['--config', '/x.yaml']
+    assert 'demo_launch.py' not in ' '.join(cmd) and 'camp' not in ' '.join(cmd).replace(
+        'marine_simulation', '')
+
+
+def test_demo_command_forwards_the_roster_and_the_pads():
+    cmd = selftest.launch_command(None, '/r.yaml', True, [], demo=True)
+    assert cmd[cmd.index('--roster') + 1] == '/r.yaml'
+    assert '--no-joysticks' not in cmd and '--boats' not in cmd
 
 
 def test_the_plain_command_is_unchanged_without_demo():
     cmd = selftest.launch_command(None, None, False, [])
-    assert 'demo_launch.py' not in cmd and 'enable_camp:=false' not in cmd
+    assert cmd[:4] == ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py']
+    assert 'demo_manager.py' not in cmd
 
 
-def test_demo_fixes_which_parts_of_the_display_run():
-    extra = ['enable_camp:=true', 'enable_scorer:=false', 'enable_window_layout:=true',
-             'enable_boats:=false', 'tide_speed_factor:=1']
+def test_demo_fixes_which_manager_options_are_the_self_tests_own():
+    extra = ['--profile=demo', '--boats', '--no-joysticks', '--roster=/x', '--config', 'y']
     assert selftest.overridden_launch_args(extra, demo=True) == extra[:4]
     assert selftest.overridden_launch_args(extra) == []
 

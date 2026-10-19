@@ -5,8 +5,8 @@
 # starts the default profile, converges every boat's lifecycle nodes to active (the fix for
 # the lost change_state reply of issue #96), and stops the whole demo when CAMP is closed.
 #
-# The target-area publisher (issue #93) is not a group yet; add one here, `requires:
-# [boats]` and `follows: [camp]`, when it lands.
+# One command starts the whole display (issue #102): the boats, CAMP, the target-area publisher
+# the scorer needs, the scorer, and a run-once window placement after CAMP is up.
 manager:
   name: demo_manager
   default_profile: demo
@@ -27,6 +27,7 @@ groups:
       boats: {type: string, default: '${boats}'}
       roster_file: {type: string, default: '${roster_file}'}
       enable_joysticks: {type: bool, default: '${enable_joysticks}'}
+      joystick_config: {type: string, default: '${joystick_config}'}
       # The manager is the one convergence loop; the launch's own guard stays off.
       lifecycle_guard: {type: bool, default: false}
     follows: [camp]
@@ -40,32 +41,72 @@ groups:
   camp:
     description: CAMP, the operator display; closing it stops the demo
     # Not CAMP's own camp_launch.py: that runs on the operator's settings and the shared live
-    # tile cache. demo_camp_launch.py starts CAMP on the demo profile, like demo_launch.py.
+    # tile cache. demo_camp_launch.py starts CAMP on the demo profile.
     launch: {package: marine_simulation, file: demo_camp_launch.py}
     arguments:
       boats: {type: string, default: '${boats}'}
       roster_file: {type: string, default: '${roster_file}'}
+      # CAMP opens the same file the publisher sends to the scorer, so the outline shows.
+      target_area_file: {type: string, default: '${target_file}'}
+      # the first start's view is fitted to the target in the window the layout gives CAMP
+      layout_config: {type: string, default: '${layout_config}'}
+      # true (--camp-fresh): discard the window and view CAMP saved when it last closed
+      camp_fresh: {type: bool, default: '${camp_fresh}'}
     requires: [boats]
     # Closing the window is an operator decision, not a crash: never restarted, and the
     # groups that follow it are stopped.
     restart: never
+
+  target_area:
+    description: publishes the target survey area (latched) for the scorer
+    launch: {package: marine_simulation, file: demo_target_area_launch.py}
+    arguments:
+      target_area_file: {type: string, default: '${target_file}'}
+    follows: [camp]
+    # READY once the node is up; a file that cannot be published exits non-zero (FAILED), and
+    # the scorer then waits, BLOCKED, naming this group.
+    ready: {nodes: [/survey_area_publisher], timeout: 60}
+    restart: on-failure
 
   scorer:
     description: the coverage scorer (coverage_assessment)
     launch: {package: coverage_assessment, file: coverage_assessment_launch.py}
     arguments:
       params_file: {type: string, default: '${scorer_params}'}
-    requires: [boats]
+    # The scorer scores against the target area, so that is published first.
+    requires: [boats, target_area]
     follows: [camp]
     lifecycle:
       nodes: [/coverage_assessment]
       target: active
     restart: on-failure
 
+  layout:
+    description: moves the windows to the places layout_config names (run once)
+    launch: {package: marine_simulation, file: demo_layout_launch.py}
+    arguments:
+      layout_config: {type: string, default: '${layout_config}'}
+    # place_windows.py waits for the CAMP window (up to its own timeout), so CAMP only has to
+    # be running. A clean exit ends the group quietly; a failure is FAILED and loud.
+    requires: [camp]
+    follows: [camp]
+    restart: never
+
+  rqt:
+    description: rqt on the perspective "demo" (the Survey Coverage plugin, added once by hand)
+    launch: {package: marine_simulation, file: demo_rqt_launch.py}
+    arguments:
+      rqt_perspective: {type: string, default: demo}
+    # Needs nothing to exist: the coverage plugin latches and tolerates a scorer that comes
+    # later. Not placed (rqt restores its own geometry) and never restarted: closing it is an
+    # operator decision, like CAMP, and it stops with CAMP.
+    follows: [camp]
+    restart: never
+
 profiles:
   # everything the event needs
-  demo: [boats, camp, scorer]
+  demo: [boats, camp, scorer, target_area, layout, rqt]
   # the boats and the scorer without a display (live checks, a head-less laptop)
-  headless: [boats, scorer]
+  headless: [boats, scorer, target_area]
   # only the boats (what demo_boats_selftest.py drives)
   boats: [boats]

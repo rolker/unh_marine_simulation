@@ -56,7 +56,7 @@ PACKAGE_ROOT = os.path.dirname(HERE)
 FIXTURES = os.path.join(HERE, 'fixtures')
 
 
-def config_text(token, closer_seconds=8, scoped_extra=None):
+def config_text(token, closer_seconds=8, scoped_extra=None, once_code=None):
     groups = {
         'fakes': {
             'launch': {'path': os.path.join(FIXTURES, 'fake_boats_launch.py')},
@@ -71,13 +71,22 @@ def config_text(token, closer_seconds=8, scoped_extra=None):
             'requires': ['fakes'], 'restart': 'never',
         },
     }
+    profiles = {'all': ['fakes', 'closer'], 'fakes': ['fakes'], 'none': []}
+    if once_code is not None:
+        # a run-once step after the closer is up, like the demo's window placement
+        groups['once'] = {
+            'launch': {'path': os.path.join(FIXTURES, 'once_launch.py')},
+            'arguments': {'code': {'type': 'int', 'default': once_code}},
+            'requires': ['closer'], 'follows': ['closer'], 'restart': 'never',
+        }
+        profiles['all'] = ['fakes', 'closer', 'once']
     return yaml.safe_dump({
         'manager': {'name': 'lmp_%s' % token, 'default_profile': 'all',
                     'exit_when_all_stopped': True, 'status_period': 0.5,
                     'converge': {'settle': 0.3, 'reply_timeout': 1.5,
                                  'backoff': [0.3, 0.5], 'poll_period': 0.2}},
         'groups': groups,
-        'profiles': {'all': ['fakes', 'closer'], 'fakes': ['fakes'], 'none': []},
+        'profiles': profiles,
     })
 
 
@@ -204,6 +213,38 @@ def test_lost_reply_demo_reaches_ready_then_closing_stops_everything(tmp_path):
     finally:
         watcher.close()
         harness.cleanup()
+
+
+def _run_once_group(tmp_path, token, code):
+    """Run a manager whose run-once group exits with ``code``; return the watcher's view."""
+    harness = Harness(tmp_path, token, closer_seconds=600, once_code=code)
+    watcher = Watcher('lmp_%s' % token)
+    try:
+        harness.start()
+        assert watcher.wait(lambda s: watcher.group('closer')['state'] == 'READY', 90), \
+            (watcher.latest and format_status(watcher.latest), harness.text())
+        assert watcher.wait(lambda s: watcher.group('once')['state'] in ('STOPPED', 'FAILED'),
+                            60), (format_status(watcher.latest), harness.text())
+        # the rest keeps running: nothing follows the run-once group
+        watcher.wait(lambda s: False, 3)
+        states = {g['name']: g['state'] for g in watcher.latest['groups']}
+        return states, watcher.group('once'), harness.text()
+    finally:
+        watcher.close()
+        harness.cleanup()
+
+
+def test_a_run_once_group_that_exits_cleanly_ends_quietly_and_the_rest_keeps_running(tmp_path):
+    states, once, text = _run_once_group(tmp_path, 'b1', 0)
+    assert states == {'fakes': 'READY', 'closer': 'READY', 'once': 'STOPPED'}, text
+    assert once['detail'] == 'exited(0)' and 'FAILED' not in text
+
+
+def test_a_run_once_group_that_fails_is_loud_and_the_rest_keeps_running(tmp_path):
+    states, once, text = _run_once_group(tmp_path, 'b2', 3)
+    assert states == {'fakes': 'READY', 'closer': 'READY', 'once': 'FAILED'}, text
+    assert 'exited with code 3' in once['detail']
+    assert 'group once FAILED' in text
 
 
 def test_set_profile_command_is_acknowledged_in_status(tmp_path):

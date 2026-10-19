@@ -84,8 +84,11 @@ def test_boats_under_the_manager_reach_ready_restart_and_stop_cleanly(tmp_path):
         lambda m: latest.update(json.loads(m.data)), 10)
     commands = node.create_publisher(String, '/demo_manager/command', 10)
 
+    def group(name):
+        return {g['name']: g for g in latest.get('groups', [])}[name]
+
     def boats():
-        return {g['name']: g for g in latest.get('groups', [])}['boats']
+        return group('boats')
 
     def wait_for(predicate, timeout):
         end = time.monotonic() + timeout
@@ -108,6 +111,10 @@ def test_boats_under_the_manager_reach_ready_restart_and_stop_cleanly(tmp_path):
     try:
         assert wait_for(lambda: boats()['state'] == 'READY', 240), \
             (json.dumps(latest, indent=1), log.read_text()[-3000:])
+        # the scorer waits for the target-area publisher, so both come up behind the boats
+        assert wait_for(lambda: group('scorer')['state'] == 'READY', 120), \
+            (json.dumps(latest, indent=1), log.read_text()[-3000:])
+        assert group('target_area')['state'] == 'READY', group('target_area')
         nodes = boats()['lifecycle']['nodes']
         assert len(nodes) >= 10, sorted(nodes)
         assert all(n['state'] == 'active' for n in nodes.values()), nodes
@@ -135,7 +142,7 @@ def test_boats_under_the_manager_reach_ready_restart_and_stop_cleanly(tmp_path):
         remaining = sorted(
             ns.rstrip('/') + '/' + name for name, ns in node.get_node_names_and_namespaces()
             if ns.startswith(('/bluefin', '/clownfish')) or name in (
-                'asv_sim', 'coverage_assessment', 'demo_manager'))
+                'asv_sim', 'coverage_assessment', 'demo_manager', 'survey_area_publisher'))
         assert remaining == [], remaining
     finally:
         node.destroy_node()

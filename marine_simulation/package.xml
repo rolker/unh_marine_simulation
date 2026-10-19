@@ -12,6 +12,7 @@
   <license>BSD</license>
 
   <buildtool_depend>ament_cmake_ros</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
   <exec_depend>asv_helm</exec_depend>
   <exec_depend>asv_sim</exec_depend>
   <exec_depend>coverage_assessment</exec_depend>
@@ -39,6 +40,7 @@
   <exec_depend>python3-yaml</exec_depend>
   <!-- window placement for the demo display (apt; X11 sessions only) -->
   <exec_depend>wmctrl</exec_depend>
+  <exec_depend>rqt_gui</exec_depend>
   <!-- imported by launch/demo_boats_launch.py and the demo scripts -->
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>

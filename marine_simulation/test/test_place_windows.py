@@ -91,10 +91,14 @@ def test_a_window_without_a_geometry_line_gets_zeros():
     assert all(w.width == 0 for w in windows) and len(windows) == 2
 
 
-def test_the_shipped_example_layout_loads_and_places_camp_full_screen():
-    placements, timeout = pw.load_layout(str(PACKAGE / 'config' / 'demo_layout.yaml'))
+CAMP_LAYOUT = str(pathlib.Path(__file__).resolve().parent / 'camp_maximized_layout.yaml')
+
+
+def test_a_maximised_camp_layout_loads():
+    placements, timeout = pw.load_layout(CAMP_LAYOUT)
     assert [p.name for p in placements] == ['camp']
-    assert placements[0].fullscreen and placements[0].wm_class
+    assert placements[0].maximized and not placements[0].fullscreen
+    assert placements[0].rect is None and placements[0].wm_class
     assert timeout > 0
 
 
@@ -133,13 +137,18 @@ def test_the_newest_matching_window_wins():
 # --- layout refusals ----------------------------------------------------------------
 
 @pytest.mark.parametrize('overrides', [
-    {'windows': []},
+    {'windows': 'camp'},
     {'windows': [_window_entry(fullscreen=False)]},
     {'windows': [_window_entry(rect={'x': 0, 'y': 0, 'width': 10, 'height': 10})]},
     {'windows': [_window_entry(fullscreen=False, rect={'x': 0, 'y': 0, 'width': 10})]},
     {'windows': [_window_entry(fullscreen=False,
                                rect={'x': -1, 'y': 0, 'width': 10, 'height': 10})]},
     {'windows': [_window_entry(fullscreen='yes')]},
+    {'windows': [_window_entry(fullscreen=True, maximized=True)]},
+    {'windows': [_window_entry(fullscreen=False, maximized=True,
+                               rect={'x': 0, 'y': 0, 'width': 10, 'height': 10})]},
+    {'windows': [_window_entry(fullscreen=False, maximized='yes')]},
+    {'windows': [_window_entry(fullscreen=False, maximized=False)]},
     {'windows': [_window_entry(match={})]},
     {'windows': [_window_entry(match={'color': 'red'})]},
     {'windows': [_window_entry(monitor='')]},
@@ -151,7 +160,9 @@ def test_the_newest_matching_window_wins():
     {'timeout_seconds': float('nan')},
     {'timeout_seconds': float('inf')},
     {'surprise': 1},
-], ids=['no-windows', 'neither', 'both', 'rect-short', 'rect-negative', 'fullscreen-string',
+], ids=['windows-not-a-list', 'neither', 'both', 'rect-short', 'rect-negative',
+        'fullscreen-string',
+        'fullscreen-and-maximized', 'maximized-and-rect', 'maximized-string', 'maximized-false',
         'match-empty', 'match-unknown', 'monitor-empty', 'name-empty', 'duplicate-name',
         'unknown-key', 'timeout-zero', 'timeout-text', 'timeout-nan', 'timeout-inf',
         'top-level-unknown'])
@@ -237,7 +248,9 @@ def test_the_window_manager_gets_a_pause_between_clearing_and_moving():
 class FakeDesktop:
     """A wmctrl stand-in: windows appear after some polls and may resize themselves."""
 
-    def __init__(self, appear_after=0, resize_once=False, never_moves=False):
+    def __init__(self, appear_after=0, resize_once=False, never_moves=False,
+                 maximizes_to=None):
+        self.maximizes_to = maximizes_to      # the work area a maximised window gets
         self.polls = 0
         self.appear_after = appear_after
         self.resize_once = resize_once
@@ -245,6 +258,9 @@ class FakeDesktop:
         self.geometry = (100, 120, 1384, 753)
         self.calls = []
         self.now = 0.0
+        self.state = set()
+        # mutter: a client resized to exactly this goes full screen
+        self.monitor = (0, 240, 3840, 2160)
 
     def runner(self, command):
         self.calls.append(list(command))
@@ -263,8 +279,27 @@ class FakeDesktop:
             if self.polls <= self.appear_after:
                 return ''
             return '0x04200003  0 %d %d %d %d host CAMP\n' % (x, y, w, h)
+        if command[:1] == ['xprop']:
+            if not self.state:
+                return '_NET_WM_STATE:  not found.\n'
+            return '_NET_WM_STATE(ATOM) = %s\n' % ', '.join(sorted(self.state))
+        if '-b' in command:
+            action, *props = command[-1].split(',')
+            names = {'fullscreen': '_NET_WM_STATE_FULLSCREEN',
+                     'maximized_vert': '_NET_WM_STATE_MAXIMIZED_VERT',
+                     'maximized_horz': '_NET_WM_STATE_MAXIMIZED_HORZ'}
+            for prop in props:
+                if action == 'remove':
+                    self.state.discard(names[prop])
+                elif '_NET_WM_STATE_FULLSCREEN' not in self.state or prop == 'fullscreen':
+                    self.state.add(names[prop])         # a full screen window ignores maximise
+            if (action == 'add' and 'maximized_vert' in props and self.maximizes_to
+                    and '_NET_WM_STATE_FULLSCREEN' not in self.state):
+                self.geometry = self.maximizes_to
         if '-e' in command and not self.never_moves:
             _, x, y, w, h = command[-1].split(',')
+            if (int(x), int(y), int(w), int(h)) == self.monitor:
+                self.state.add('_NET_WM_STATE_FULLSCREEN')
             self.geometry = (int(x), int(y), int(w), int(h))
             if self.resize_once:
                 self.resize_once = False
@@ -404,14 +439,13 @@ class Tools:
 X11 = {'XDG_SESSION_TYPE': 'x11', 'DISPLAY': ':0'}
 
 
-def test_check_layout_accepts_the_shipped_example_on_a_matching_desktop():
-    placements, timeout, monitors = pw.check_layout(
-        str(PACKAGE / 'config' / 'demo_layout.yaml'), X11, Tools())
+def test_check_layout_accepts_a_maximised_camp_layout_on_a_matching_desktop():
+    placements, timeout, monitors = pw.check_layout(CAMP_LAYOUT, X11, Tools())
     assert placements[0].monitor in monitors and timeout > 0
 
 
 def test_check_layout_names_what_is_wrong(tmp_path):
-    path = str(PACKAGE / 'config' / 'demo_layout.yaml')
+    path = CAMP_LAYOUT
     with pytest.raises(pw.LayoutError, match='X11'):
         pw.check_layout(path, {'XDG_SESSION_TYPE': 'wayland', 'DISPLAY': ':0'}, Tools())
     with pytest.raises(pw.LayoutError, match='apt install wmctrl'):
@@ -460,3 +494,240 @@ def test_a_window_that_appears_while_another_is_placed_is_still_found_after_the_
                             clock=desktop.clock, log=lambda _: None)
     assert seen['late']
     assert not any('did not appear' in p for p in problems)
+
+
+# --- maximised placement (keeps the title bar and its Close button) --------------------
+
+MAX_ENTRY = {'name': 'camp', 'match': {'wm_class': 'CCOMAutonomousMissionPlanner'},
+             'monitor': 'HDMI-0', 'maximized': True}
+# HDMI-0 is 3840x2160 at +0+240; a top bar and title bar leave a work area a bit smaller.
+WORK_AREA = (0, 292, 3840, 2108)
+
+
+def test_a_maximized_entry_parses_and_is_not_fullscreen(tmp_path):
+    placements, _ = pw.load_layout(_layout(tmp_path, windows=[MAX_ENTRY]))
+    assert placements[0].maximized and not placements[0].fullscreen
+    assert placements[0].rect is None
+
+
+def test_a_maximized_placement_targets_the_whole_monitor():
+    monitors = pw.parse_monitors(XRANDR)
+    placement = pw.Placement('camp', 'c', '', 'HDMI-0', False, None, True)
+    assert pw.target_geometry(placement, monitors) == (0, 240, 3840, 2160)
+
+
+def test_maximize_commands_move_then_maximize_two_properties_at_most():
+    w = pw.Window('0x1', 'c', 't')
+    commands = pw.move_commands(w, (0, 240, 3840, 2160), False, True)
+    assert [c[-1] for c in commands] == ['0,960,780,1920,1080',
+                                         'add,maximized_vert,maximized_horz']
+    assert all(c[-1] != 'add,fullscreen' for c in commands)
+
+
+def test_maximize_never_resizes_to_exactly_the_monitor():
+    w = pw.Window('0x1', 'c', 't')
+    monitor = (0, 240, 3840, 2160)
+    commands = pw.move_commands(w, monitor, False, True)
+    assert not any(c[-1] == '0,0,240,3840,2160' for c in commands)
+    _, x, y, width, height = commands[0][-1].split(',')
+    x, y, width, height = int(x), int(y), int(width), int(height)
+    assert x > monitor[0] and y > monitor[1]
+    assert x + width < monitor[0] + monitor[2] and y + height < monitor[1] + monitor[3]
+
+
+def _place_maximized(desktop):
+    monitors = pw.parse_monitors(XRANDR)
+    placement = pw.Placement('camp', 'CCOMAutonomousMissionPlanner', '', 'HDMI-0', False, None,
+                             True)
+    logs = []
+    problems = pw.place_all([placement], monitors, 10.0, runner=desktop.runner,
+                            sleep=desktop.sleep, clock=desktop.clock, log=logs.append)
+    return problems, logs
+
+
+def test_a_maximized_window_gets_exactly_this_wmctrl_sequence():
+    desktop = FakeDesktop(maximizes_to=WORK_AREA)
+    problems, logs = _place_maximized(desktop)
+    assert problems == [] and any('placed camp' in line for line in logs)
+    sent = [c for c in desktop.calls if c[:2] == ['wmctrl', '-i']]
+    assert sent == [
+        ['wmctrl', '-i', '-r', '0x04200003', '-b', 'remove,fullscreen'],
+        ['wmctrl', '-i', '-r', '0x04200003', '-b', 'remove,maximized_vert,maximized_horz'],
+        ['wmctrl', '-i', '-r', '0x04200003', '-e', '0,960,780,1920,1080'],
+        ['wmctrl', '-i', '-r', '0x04200003', '-b', 'add,maximized_vert,maximized_horz'],
+    ]
+    assert desktop.state == {'_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ'}
+    assert desktop.geometry == WORK_AREA        # on the monitor, work area, not full screen
+
+
+class AlwaysFullscreen(FakeDesktop):
+    """A window manager that makes the window full screen whatever is asked."""
+
+    def runner(self, command):
+        out = super().runner(command)
+        if '-e' in command or '-b' in command:
+            self.state = {'_NET_WM_STATE_FULLSCREEN'}
+            self.geometry = (0, 240, 3840, 2160)
+        return out
+
+
+class NoXprop(FakeDesktop):
+    """A desktop without xprop."""
+
+    def runner(self, command):
+        if command[:1] == ['xprop']:
+            raise pw.LayoutError('xprop is not installed (sudo apt install x11-utils)')
+        return super().runner(command)
+
+
+def test_a_window_that_comes_back_full_screen_is_not_accepted_and_the_message_names_it():
+    # a window manager that makes the window full screen whatever is asked: it covers the
+    # whole monitor, so geometry alone would accept it
+
+    problems, logs = _place_maximized(AlwaysFullscreen())
+    assert len(problems) == 1 and 'full screen' in problems[0] and 'did not stay' in problems[0]
+    assert any('attempt 1' in line and 'full screen' in line for line in logs)
+    assert any('attempt 2' in line for line in logs)
+
+
+def test_a_window_exactly_monitor_sized_after_the_move_is_not_accepted():
+    # the trap itself: exactly the monitor rect makes the fake (like mutter) go full screen
+    state = frozenset({'_NET_WM_STATE_FULLSCREEN'})
+    window = pw.Window('0x04200003', 'c', 't', 0, 240, 3840, 2160)
+    assert 'full screen' in pw.maximized_problem(window, (0, 240, 3840, 2160), state)
+
+
+def test_a_maximized_window_missing_a_flag_is_reported():
+    window = pw.Window('0x1', 'c', 't', 0, 292, 3840, 2108)
+    state = frozenset({'_NET_WM_STATE_MAXIMIZED_VERT'})
+    assert 'horz' in pw.maximized_problem(window, (0, 240, 3840, 2160), state)
+
+
+# What the live run on this machine showed (mutter, GNOME on Xorg): HDMI-0 is 3840x2160+0+240,
+# the work area starts at 66,272 and the title bar is 37 px. wmctrl -lG offsets the client's
+# top by the frame once more, so the reported rectangle overruns the monitor bottom.
+LIVE_MAXIMIZED = (66, 346, 3774, 2091)
+LIVE_FRAME = (0, 0, 37, 0)
+BOTH_MAXIMIZED = frozenset(pw.STATE_MAXIMIZED)
+
+
+def test_the_live_maximized_geometry_is_accepted_with_its_frame_extents():
+    window = pw.Window('0x1', 'c', 't', *LIVE_MAXIMIZED)
+    assert pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED, LIVE_FRAME) is None
+    # without the frame the reported rectangle overruns the monitor bottom (2437 > 2400)
+    assert 'position' in pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED)
+
+
+class LiveDesktop(FakeDesktop):
+    """A desktop whose window manager also reports a 37 px title bar."""
+
+    def runner(self, command):
+        out = super().runner(command)
+        if command[:1] == ['xprop']:
+            return out + '_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 37, 0\n'
+        return out
+
+
+def test_the_live_maximized_window_is_placed_and_logged():
+    desktop = LiveDesktop(maximizes_to=LIVE_MAXIMIZED)
+    problems, logs = _place_maximized(desktop)
+    assert problems == [] and any('placed camp on HDMI-0' in line for line in logs)
+
+
+def test_the_same_window_on_another_monitor_is_rejected():
+    window = pw.Window('0x1', 'c', 't', 4966 + 66, 106, 3774, 2091)   # DP-2, 1920x1200+4966+0
+    problem = pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED, LIVE_FRAME)
+    assert problem is not None and problem.startswith('position')
+
+
+def test_each_failed_test_is_named():
+    monitor = (0, 240, 3840, 2160)
+    fine = pw.Window('0x1', 'c', 't', *LIVE_MAXIMIZED)
+    small = pw.Window('0x1', 'c', 't', 100, 300, 1384, 753)
+    assert pw.maximized_problem(fine, monitor, frozenset({'_NET_WM_STATE_FULLSCREEN'}),
+                                LIVE_FRAME).startswith('state')
+    assert pw.maximized_problem(fine, monitor, frozenset(), LIVE_FRAME).startswith('state')
+    assert pw.maximized_problem(small, monitor, BOTH_MAXIMIZED, LIVE_FRAME).startswith('coverage')
+
+
+def test_frame_extents_are_parsed_from_xprop_output():
+    text = ('_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_HORZ, _NET_WM_STATE_FOCUSED\n'
+            '_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 37, 0\n')
+    assert pw.parse_frame_extents(text) == (0, 0, 37, 0)
+    assert '_NET_WM_STATE_MAXIMIZED_HORZ' in pw.parse_window_state(text)
+    assert pw.parse_frame_extents('_NET_FRAME_EXTENTS:  not found.\n') == (0, 0, 0, 0)
+
+
+def test_the_state_is_parsed_from_xprop_output():
+    assert pw.parse_window_state('_NET_WM_STATE:  not found.\n') == frozenset()
+    assert pw.parse_window_state(
+        '_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_VERT, _NET_WM_STATE_MAXIMIZED_HORZ\n'
+    ) == frozenset(pw.STATE_MAXIMIZED)
+
+
+def test_a_missing_xprop_is_a_problem_naming_it():
+
+    problems, _ = _place_maximized(NoXprop(maximizes_to=WORK_AREA))
+    assert len(problems) == 1 and 'xprop' in problems[0]
+
+
+def test_a_window_that_stays_small_is_a_problem():
+    # a window that neither moves nor maximises stays at 1384x753, far under the coverage
+    desktop = FakeDesktop(never_moves=True)
+    problems, _ = _place_maximized(desktop)
+    assert len(problems) == 1 and 'did not stay' in problems[0]
+
+
+def test_a_maximized_window_on_the_wrong_monitor_is_a_problem():
+    desktop = FakeDesktop(maximizes_to=(3840, 1200, 1920, 1000))       # eDP-1-1, not HDMI-0
+    problems, _ = _place_maximized(desktop)
+    assert len(problems) == 1 and 'did not stay' in problems[0]
+
+
+@pytest.mark.parametrize('window, expected', [
+    ((0, 292, 3840, 2108), True),
+    ((70, 292, 3770, 2108), True),          # a dock on the left
+    ((0, 240, 3840, 2160), True),           # covers it exactly
+    ((100, 120, 1384, 753), False),         # not maximised at all
+    ((0, 292, 3840, 1000), False),          # too short
+    ((1920, 292, 3840, 2108), False),       # spills off the right edge
+])
+def test_maximized_verification_is_geometry_on_the_monitor(window, expected):
+    w = pw.Window('0x1', 'c', 't', *window)
+    assert pw.maximized_in_place(w, (0, 240, 3840, 2160)) is expected
+
+
+def test_fullscreen_placement_is_unchanged_by_the_maximized_mode():
+    desktop = FakeDesktop()
+    problems, _ = _place(desktop)
+    assert problems == [] and desktop.geometry == (0, 240, 3840, 2160)
+    assert not any(c[-1:] == ['add,maximized_vert,maximized_horz'] for c in desktop.calls)
+
+
+# --- a layout with no windows is a no-op ---------------------------------------------
+
+@pytest.mark.parametrize('text', ['windows: []\n', 'timeout_seconds: 5\n', 'windows:\n'])
+def test_a_layout_with_no_windows_loads_empty(tmp_path, text):
+    path = tmp_path / 'layout.yaml'
+    path.write_text(text)
+    assert pw.load_layout(str(path))[0] == []
+
+
+def test_the_shipped_layout_places_no_window_and_checks_without_a_session_or_tools():
+    path = str(PACKAGE / 'config' / 'demo_layout.yaml')
+    assert pw.load_layout(path)[0] == []
+    calls = []
+    placements, _, monitors = pw.check_layout(path, {}, lambda c: calls.append(c) or '')
+    assert placements == [] and monitors == {} and calls == []      # not even wmctrl is needed
+
+
+def test_placing_nothing_does_not_list_windows_or_wait():
+    calls = []
+    assert pw.place_all([], {}, 90.0, runner=lambda c: calls.append(c) or '',
+                        sleep=lambda s: calls.append(s)) == []
+    assert calls == []
+
+
+def test_main_exits_zero_at_once_for_the_shipped_layout(capsys):
+    assert pw.main(['--layout', str(PACKAGE / 'config' / 'demo_layout.yaml')]) == 0
+    assert pw.main(['--check', '--layout', str(PACKAGE / 'config' / 'demo_layout.yaml')]) == 0

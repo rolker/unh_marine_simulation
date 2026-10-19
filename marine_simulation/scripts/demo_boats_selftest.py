@@ -64,8 +64,9 @@ A launch needs the geoid and VDatum grids under ``~/data/world/datum``: without
 them ``chart_datum`` never publishes and this test fails on the missing frames after
 the startup timeout (the launch itself refuses to start without them).
 
-With ``--demo`` the launch is ``demo_launch.py`` (CAMP and the window placement
-switched off, so it runs on a machine with no display) and one more check runs: the
+With ``--demo`` the thing started is the launch manager, ``demo_manager.py --profile headless``
+(boats, target-area publisher and scorer; no CAMP and no window placement, so it runs on a
+machine with no display), and one more check runs: the
 ``coverage_assessment`` scorer reaches the ``active`` state, and, given a target area
 the self-test publishes itself (latched, like the target-area publisher does), answers
 with a ``CoverageAssessment`` for it.
@@ -153,13 +154,19 @@ def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> li
 
 
 def launch_command(boats, roster, joysticks, extra, demo=False) -> list:
-    """Return the ``ros2 launch`` command line for ``--start-launch``."""
-    cmd = ['ros2', 'launch', 'marine_simulation',
-           'demo_launch.py' if demo else 'demo_boats_launch.py',
-           'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
+    """Return the command line for ``--start-launch`` (the boats launch, or the manager)."""
     if demo:
         # No display here: CAMP and the window placement are the owner's rehearsal.
-        cmd += ['enable_camp:=false', 'enable_window_layout:=false']
+        cmd = ['ros2', 'run', 'marine_simulation', 'demo_manager.py', '--profile', 'headless']
+        if not joysticks:
+            cmd.append('--no-joysticks')
+        if boats:
+            cmd += ['--boats', ','.join(boats)]
+        if roster:
+            cmd += ['--roster', roster]
+        return cmd + list(extra)
+    cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
+           'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
     if boats:
         cmd.append('boats:=%s' % ','.join(boats))
     if roster:
@@ -458,7 +465,7 @@ class SelfTest:
 
 
 def start_launch(cmd):
-    """Start the demo launch in its own process group."""
+    """Start what the self-test runs against (a launch or the manager) in its own process group."""
     return subprocess.Popen(cmd, start_new_session=True)
 
 
@@ -496,9 +503,8 @@ def _terminate(signum, frame):
 # a later copy on the command line would override them and make it check the
 # wrong node set.
 OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'boats:=', 'roster_file:=')
-# With --demo it also fixes which parts of the display run.
-OWN_DEMO_LAUNCH_ARGS = OWN_LAUNCH_ARGS + (
-    'enable_boats:=', 'enable_camp:=', 'enable_scorer:=', 'enable_window_layout:=')
+# With --demo the manager is started instead, and these options are the self-test's own.
+OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks')
 
 
 def overridden_launch_args(extra, demo=False) -> list:
@@ -513,8 +519,8 @@ def main(argv=None):
     parser.add_argument('--start-launch', action='store_true',
                         help='start demo_boats_launch.py (joysticks off) and stop it after')
     parser.add_argument('--demo', action='store_true',
-                        help='start demo_launch.py instead (CAMP and window placement off) '
-                             'and check the coverage scorer too')
+                        help='start demo_manager.py --profile headless instead (no CAMP, no '
+                             'window placement) and check the coverage scorer too')
     parser.add_argument('--joysticks', action='store_true',
                         help='the launch runs joy_linux drivers: expect a joy_node per boat')
     parser.add_argument('--startup-timeout', type=float, default=90.0)
@@ -536,7 +542,8 @@ def main(argv=None):
                if args.start_launch else [])
     if clashes:
         parser.error('%s would override what the self-test checks against; use '
-                     '--boats, --roster or --joysticks instead' % ', '.join(clashes))
+                     '--boats, --roster or --joysticks of the self-test instead'
+                     % ', '.join(clashes))
 
     import rclpy
     from rclpy.signals import SignalHandlerOptions
