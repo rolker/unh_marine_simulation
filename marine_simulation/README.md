@@ -29,7 +29,8 @@ TO START THE DEMO
      as it was. (The very first time on a computer the map window may be small or
      the view off: click the maximise button in its title bar, set the view to
      taste, close the map window, and start again; from then on it comes back
-     the same.)
+     the same. Once per computer, if the start prints a WARNING about
+     auto-maximize, run the command it shows.)
   4. A controller that does not steer its boat: unplug it, plug it back
      in, wait five seconds. If it still does not work, call the number below.
   5. A message starting THE DEMO DID NOT START says in a sentence what is
@@ -161,7 +162,9 @@ generated at launch:
   the previous file, if there is one, is read first and those lines are carried into the new
   one **exactly as CAMP wrote them** (the geometry is a Qt-escaped byte array and is never
   re-encoded). Everything else comes from the template every start, so a layer toggled in CAMP
-  resets, and the tile cache is still emptied. A view is kept only whole (centre and scale
+  resets, and the tile cache is still emptied. **Needs a CAMP with rolker/camp#242** (its
+  resize anchor keeps the map centre): without it the window comes back as saved but the view
+  shifts when the window is maximized or resized at startup. A view is kept only whole (centre and scale
   together); a saved file that cannot be read makes it a first start, with a note in the log
   (`CAMP window and view from its last run: ...`). `--camp-fresh` discards the saved window and
   view for that start.
@@ -231,6 +234,12 @@ CAMP has nothing saved on a new computer, so its first window is the default siz
 fitted view. Start the demo (`run_demo.sh`), click the **maximise button in CAMP's title bar**,
 set the view the way it should come up (zoom and pan), and **close CAMP**, which stops the demo.
 Start it again: CAMP comes back maximised on the same view, and every later start does too.
+On a GNOME computer run `gsettings set org.gnome.mutter auto-maximize false` once for the demo
+user (undo with `true`): GNOME otherwise maximizes any new window that covers about 80 % of the
+work area when it first appears, so a CAMP window you left big but not maximized would come
+back maximized, over rqt. `run_demo.sh` prints a one-line warning with this command when the
+setting is still `true` (it never changes it, and the demo starts anyway).
+
 To forget it (a different screen, a bad view saved), start once with `--camp-fresh` (it applies to the first start of the CAMP group in that session only; a manager restart of the group keeps what CAMP saved since). If CAMP is killed or crashes it never saves, and the next start generates the view again (the generated profile carries a marker comment that CAMP's own save removes). A computer that already has its own `~/.config/marine_simulation_demo/layout.yaml` with a `camp` entry still places CAMP: delete that entry (an empty `windows: []` is fine; `run_demo.sh` no longer needs the file at all: without `~/.config/marine_simulation_demo/layout.yaml` nothing is placed). The saved
 window and view are CAMP's own settings file under
 `~/.local/state/marine_simulation_demo/xdg_config/`.

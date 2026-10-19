@@ -339,3 +339,42 @@ def test_a_domain_of_only_zeros_means_domain_zero(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
     assert _run(machine, DEMO_ROS_DOMAIN_ID='0000').returncode == 0
     assert _record(machine)[0] == '0'
+
+
+# --- GNOME auto-maximize warning --------------------------------------------------------
+
+def _gsettings(machine, answer, status=0):
+    _script(machine / 'bin' / 'gsettings',
+            '#!/bin/sh\nprintf "%%s\\n" "$*" > "$RECORD.gsettings"\n'
+            'echo %s\nexit %d\n' % (answer, status))
+
+
+def test_auto_maximize_true_warns_in_one_line_naming_the_command_and_still_starts(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    _gsettings(machine, 'true')
+    result = _run(machine)
+    assert result.returncode == 0, result.stderr
+    warnings = [line for line in result.stderr.splitlines() if 'auto-maximize' in line]
+    assert len(warnings) == 1 and warnings[0].startswith('WARNING')
+    assert 'gsettings set org.gnome.mutter auto-maximize false' in warnings[0]
+    # it only reads the setting, never changes it
+    assert (machine / 'record.gsettings').read_text().split() == [
+        'get', 'org.gnome.mutter', 'auto-maximize']
+    assert (machine / 'record').exists()
+
+
+def test_auto_maximize_false_or_unreadable_or_missing_says_nothing(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    _gsettings(machine, 'false')
+    assert 'auto-maximize' not in _run(machine).stderr
+    _gsettings(machine, 'true', status=1)                      # gsettings cannot answer
+    assert 'auto-maximize' not in _run(machine).stderr
+    result = _run(machine, DEMO_GSETTINGS=str(machine / 'no-such-gsettings'))   # not installed
+    assert result.returncode == 0 and 'auto-maximize' not in result.stderr
+
+
+def test_no_warning_without_the_display(machine):
+    _files(machine, 'joysticks.yaml')
+    _gsettings(machine, 'true')
+    result = _run(machine, '--profile', 'headless')
+    assert result.returncode == 0 and 'auto-maximize' not in result.stderr

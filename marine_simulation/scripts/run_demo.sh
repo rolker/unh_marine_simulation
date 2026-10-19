@@ -75,6 +75,15 @@ place_windows_tool() { # where the checker is: beside this script, else in the i
     fi
 }
 
+warn_auto_maximize() { # a one-line warning, never an error, never changes the setting
+    local gsettings=${DEMO_GSETTINGS:-gsettings} value
+    command -v "$gsettings" > /dev/null 2>&1 || return 0
+    value=$("$gsettings" get org.gnome.mutter auto-maximize 2> /dev/null) || return 0
+    if [ "$value" = true ]; then
+        echo "WARNING: GNOME maximizes any big new window, so CAMP may not come back as you left it. Once, run: gsettings set org.gnome.mutter auto-maximize false" >&2
+    fi
+}
+
 expand_tilde() { # expand_tilde <path>: a leading ~ is this user's home
     case "$1" in
         "~") printf '%s\n' "$HOME" ;;
@@ -156,6 +165,9 @@ if [ "$want_help" -ne 0 ]; then
             problem=$("$checker" --check --layout "$layout" 2>&1) ||
                 die "the windows cannot be laid out: ${problem#place_windows: }"
         fi
+    fi
+    if [ "$display" -eq 0 ]; then
+        warn_auto_maximize
     fi
     if [ "$display" -eq 0 ] && command -v pgrep > /dev/null 2>&1 &&
         pgrep -x CCOMAutonomousM > /dev/null 2>&1; then
