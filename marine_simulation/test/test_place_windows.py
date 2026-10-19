@@ -600,6 +600,61 @@ def test_a_maximized_window_missing_a_flag_is_reported():
     assert 'horz' in pw.maximized_problem(window, (0, 240, 3840, 2160), state)
 
 
+# What the live run on this machine showed (mutter, GNOME on Xorg): HDMI-0 is 3840x2160+0+240,
+# the work area starts at 66,272 and the title bar is 37 px. wmctrl -lG offsets the client's
+# top by the frame once more, so the reported rectangle overruns the monitor bottom.
+LIVE_MAXIMIZED = (66, 346, 3774, 2091)
+LIVE_FRAME = (0, 0, 37, 0)
+BOTH_MAXIMIZED = frozenset(pw.STATE_MAXIMIZED)
+
+
+def test_the_live_maximized_geometry_is_accepted_with_its_frame_extents():
+    window = pw.Window('0x1', 'c', 't', *LIVE_MAXIMIZED)
+    assert pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED, LIVE_FRAME) is None
+    # without the frame the reported rectangle overruns the monitor bottom (2437 > 2400)
+    assert 'position' in pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED)
+
+
+class LiveDesktop(FakeDesktop):
+    """A desktop whose window manager also reports a 37 px title bar."""
+
+    def runner(self, command):
+        out = super().runner(command)
+        if command[:1] == ['xprop']:
+            return out + '_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 37, 0\n'
+        return out
+
+
+def test_the_live_maximized_window_is_placed_and_logged():
+    desktop = LiveDesktop(maximizes_to=LIVE_MAXIMIZED)
+    problems, logs = _place_maximized(desktop)
+    assert problems == [] and any('placed camp on HDMI-0' in line for line in logs)
+
+
+def test_the_same_window_on_another_monitor_is_rejected():
+    window = pw.Window('0x1', 'c', 't', 4966 + 66, 106, 3774, 2091)   # DP-2, 1920x1200+4966+0
+    problem = pw.maximized_problem(window, (0, 240, 3840, 2160), BOTH_MAXIMIZED, LIVE_FRAME)
+    assert problem is not None and problem.startswith('position')
+
+
+def test_each_failed_test_is_named():
+    monitor = (0, 240, 3840, 2160)
+    fine = pw.Window('0x1', 'c', 't', *LIVE_MAXIMIZED)
+    small = pw.Window('0x1', 'c', 't', 100, 300, 1384, 753)
+    assert pw.maximized_problem(fine, monitor, frozenset({'_NET_WM_STATE_FULLSCREEN'}),
+                                LIVE_FRAME).startswith('state')
+    assert pw.maximized_problem(fine, monitor, frozenset(), LIVE_FRAME).startswith('state')
+    assert pw.maximized_problem(small, monitor, BOTH_MAXIMIZED, LIVE_FRAME).startswith('coverage')
+
+
+def test_frame_extents_are_parsed_from_xprop_output():
+    text = ('_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_HORZ, _NET_WM_STATE_FOCUSED\n'
+            '_NET_FRAME_EXTENTS(CARDINAL) = 0, 0, 37, 0\n')
+    assert pw.parse_frame_extents(text) == (0, 0, 37, 0)
+    assert '_NET_WM_STATE_MAXIMIZED_HORZ' in pw.parse_window_state(text)
+    assert pw.parse_frame_extents('_NET_FRAME_EXTENTS:  not found.\n') == (0, 0, 0, 0)
+
+
 def test_the_state_is_parsed_from_xprop_output():
     assert pw.parse_window_state('_NET_WM_STATE:  not found.\n') == frozenset()
     assert pw.parse_window_state(

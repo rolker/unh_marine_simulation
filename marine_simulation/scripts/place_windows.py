@@ -276,37 +276,87 @@ STATE_FULLSCREEN = '_NET_WM_STATE_FULLSCREEN'
 STATE_MAXIMIZED = ('_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ')
 
 
-def maximized_in_place(window: Window, monitor_geometry) -> bool:
-    """Return True when ``window`` lies on the monitor and covers most of it."""
-    x, y, width, height = monitor_geometry
-    return (window.x >= x - SIZE_TOLERANCE and window.y >= y - SIZE_TOLERANCE and
-            window.x + window.width <= x + width + SIZE_TOLERANCE and
-            window.y + window.height <= y + height + SIZE_TOLERANCE and
-            window.width >= MAXIMIZED_MIN_COVERAGE * width and
+NO_FRAME = (0, 0, 0, 0)
+
+
+def _unframed(window: Window, frame) -> tuple:
+    """
+    Return the window's ``(left, top, right, bottom)`` edges with the frame taken out.
+
+    On a reparenting window manager ``wmctrl -lG`` reports the client's position offset by the
+    frame once more (a maximised window under mutter shows its top at the work area top plus
+    the title bar height twice), so a decorated window always seems to overrun the monitor
+    bottom by the title bar height. ``frame`` is ``_NET_FRAME_EXTENTS``: left, right, top,
+    bottom.
+    """
+    left, right, top, bottom = frame
+    return (window.x - left, window.y - top,
+            window.x - left + window.width, window.y - top + window.height)
+
+
+def maximized_covers(window: Window, monitor_geometry) -> bool:
+    """Return True when ``window`` is at least ``MAXIMIZED_MIN_COVERAGE`` of the monitor."""
+    _, _, width, height = monitor_geometry
+    return (window.width >= MAXIMIZED_MIN_COVERAGE * width and
             window.height >= MAXIMIZED_MIN_COVERAGE * height)
+
+
+def maximized_on_monitor(window: Window, monitor_geometry, frame=NO_FRAME) -> bool:
+    """Return True when the window's centre is on the monitor and it does not spill off it."""
+    x, y, width, height = monitor_geometry
+    left, top, right, bottom = _unframed(window, frame)
+    return (x <= (left + right) / 2 < x + width and y <= (top + bottom) / 2 < y + height and
+            left >= x - SIZE_TOLERANCE and top >= y - SIZE_TOLERANCE and
+            right <= x + width + SIZE_TOLERANCE and bottom <= y + height + SIZE_TOLERANCE)
+
+
+def maximized_in_place(window: Window, monitor_geometry, frame=NO_FRAME) -> bool:
+    """Return True when ``window`` lies on the monitor and covers most of it."""
+    return (maximized_on_monitor(window, monitor_geometry, frame) and
+            maximized_covers(window, monitor_geometry))
 
 
 def parse_window_state(text: str) -> frozenset:
     """Return the ``_NET_WM_STATE_*`` names in ``xprop -id ... _NET_WM_STATE`` output."""
-    return frozenset(re.findall(r'_NET_WM_STATE_[A-Z_]+', text.split('=', 1)[-1]
-                                if '=' in text else ''))
+    names = set()
+    for line in text.splitlines():
+        if line.startswith('_NET_WM_STATE') and '=' in line:
+            names.update(re.findall(r'_NET_WM_STATE_[A-Z_]+', line.split('=', 1)[1]))
+    return frozenset(names)
 
 
-def maximized_problem(window: Window, monitor_geometry, state: frozenset) -> Optional[str]:
-    """Return why a maximised placement is not right, or None when it is."""
+def parse_frame_extents(text: str) -> tuple:
+    """Return ``_NET_FRAME_EXTENTS`` (left, right, top, bottom) from xprop output, else zeros."""
+    for line in text.splitlines():
+        if line.startswith('_NET_FRAME_EXTENTS') and '=' in line:
+            numbers = re.findall(r'-?\d+', line.split('=', 1)[1])
+            if len(numbers) == 4:
+                return tuple(int(n) for n in numbers)
+    return NO_FRAME
+
+
+def maximized_problem(window: Window, monitor_geometry, state: frozenset,
+                      frame=NO_FRAME) -> Optional[str]:
+    """Return why a maximised placement is not right (state, coverage or position), or None."""
     if STATE_FULLSCREEN in state:
-        return 'it is full screen (no title bar), not maximised'
+        return 'state: it is full screen (no title bar), not maximised'
     missing = [name.rsplit('_', 1)[-1].lower() for name in STATE_MAXIMIZED if name not in state]
     if missing:
-        return 'it is not maximised (%s not set)' % ' and '.join(missing)
-    if not maximized_in_place(window, monitor_geometry):
-        return 'it is not on the monitor or covers too little of it'
+        return 'state: it is not maximised (%s not set)' % ' and '.join(missing)
+    if not maximized_covers(window, monitor_geometry):
+        return 'coverage: it is %dx%d, under %d %% of the %dx%d monitor' % (
+            window.width, window.height, round(100 * MAXIMIZED_MIN_COVERAGE),
+            monitor_geometry[2], monitor_geometry[3])
+    if not maximized_on_monitor(window, monitor_geometry, frame):
+        return 'position: it is not on the monitor (frame %s taken out of its reported place)' \
+            % (frame,)
     return None
 
 
-def window_state(runner, ident: str) -> frozenset:
-    """Return the window manager's state flags for a window (needs ``xprop``)."""
-    return parse_window_state(runner(['xprop', '-id', ident, '_NET_WM_STATE']))
+def window_state(runner, ident: str) -> tuple:
+    """Return ``(state flags, frame extents)`` for a window (needs ``xprop``)."""
+    text = runner(['xprop', '-id', ident, '_NET_WM_STATE', '_NET_FRAME_EXTENTS'])
+    return parse_window_state(text), parse_frame_extents(text)
 
 
 def clear_commands(window: Window) -> List[List[str]]:
@@ -433,7 +483,8 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
         why = ''
         if placement.maximized:
             try:
-                reason = maximized_problem(window, geometry, window_state(runner, window.ident))
+                state, frame = window_state(runner, window.ident)
+                reason = maximized_problem(window, geometry, state, frame)
             except LayoutError as error:
                 return 'window %r could not be checked: %s' % (placement.name, error)
             why = '; %s' % reason if reason else ''
