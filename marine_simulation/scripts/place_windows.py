@@ -266,9 +266,14 @@ def in_place(window: Window, geometry) -> bool:
 
 # A maximised window fills the monitor's work area, not the monitor: the top bar and a dock
 # take space and the title bar and border take more. It counts as in place when it lies on
-# its monitor and covers most of it. This is a geometry check, as for the other two modes
-# (the window manager's state flags are not read).
+# its monitor and covers most of it AND the window manager reports it maximised and not full
+# screen (``_NET_WM_STATE``, read with ``xprop``). The state matters: mutter treats a client
+# resized to exactly the monitor's geometry as a full screen request, which hides the title
+# bar and the Close button, and ignores a later maximise; that window still covers 100 % of
+# the monitor, so geometry alone accepts it.
 MAXIMIZED_MIN_COVERAGE = 0.85
+STATE_FULLSCREEN = '_NET_WM_STATE_FULLSCREEN'
+STATE_MAXIMIZED = ('_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ')
 
 
 def maximized_in_place(window: Window, monitor_geometry) -> bool:
@@ -279,6 +284,29 @@ def maximized_in_place(window: Window, monitor_geometry) -> bool:
             window.y + window.height <= y + height + SIZE_TOLERANCE and
             window.width >= MAXIMIZED_MIN_COVERAGE * width and
             window.height >= MAXIMIZED_MIN_COVERAGE * height)
+
+
+def parse_window_state(text: str) -> frozenset:
+    """Return the ``_NET_WM_STATE_*`` names in ``xprop -id ... _NET_WM_STATE`` output."""
+    return frozenset(re.findall(r'_NET_WM_STATE_[A-Z_]+', text.split('=', 1)[-1]
+                                if '=' in text else ''))
+
+
+def maximized_problem(window: Window, monitor_geometry, state: frozenset) -> Optional[str]:
+    """Return why a maximised placement is not right, or None when it is."""
+    if STATE_FULLSCREEN in state:
+        return 'it is full screen (no title bar), not maximised'
+    missing = [name.rsplit('_', 1)[-1].lower() for name in STATE_MAXIMIZED if name not in state]
+    if missing:
+        return 'it is not maximised (%s not set)' % ' and '.join(missing)
+    if not maximized_in_place(window, monitor_geometry):
+        return 'it is not on the monitor or covers too little of it'
+    return None
+
+
+def window_state(runner, ident: str) -> frozenset:
+    """Return the window manager's state flags for a window (needs ``xprop``)."""
+    return parse_window_state(runner(['xprop', '-id', ident, '_NET_WM_STATE']))
 
 
 def clear_commands(window: Window) -> List[List[str]]:
@@ -296,6 +324,11 @@ def move_commands(window: Window, geometry, fullscreen: bool,
                   maximized: bool = False) -> List[List[str]]:
     """Return the wmctrl calls that put a window at ``geometry`` (after clearing it)."""
     x, y, width, height = geometry
+    if maximized:
+        # Never resize a window to exactly the monitor: mutter reads that as a full screen
+        # request and then ignores the maximise below. Move it to the centred half-size
+        # rectangle, strictly inside the monitor, and let the maximise size it.
+        x, y, width, height = x + width // 4, y + height // 4, width // 2, height // 2
     commands = [['wmctrl', '-i', '-r', window.ident, '-e',
                  '0,%d,%d,%d,%d' % (x, y, width, height)]]
     if fullscreen:
@@ -312,7 +345,9 @@ def run(command: Sequence[str]) -> str:
         return subprocess.run(command, check=True, capture_output=True, text=True,
                               timeout=20).stdout
     except FileNotFoundError:
-        raise LayoutError('%s is not installed (sudo apt install wmctrl)' % command[0]) \
+        packages = {'xprop': 'x11-utils', 'xrandr': 'x11-xserver-utils'}
+        package = packages.get(command[0], command[0])
+        raise LayoutError('%s is not installed (sudo apt install %s)' % (command[0], package)) \
             from None
     except subprocess.SubprocessError as error:
         raise LayoutError('%s failed: %s' % (' '.join(command), error)) from None
@@ -395,15 +430,25 @@ def settle(window: Window, placement: Placement, geometry, runner, sleep, log) -
         if now is None:
             return 'window %r disappeared while it was being placed' % placement.name
         window = now
-        if (maximized_in_place(window, geometry) if placement.maximized
-                else in_place(window, geometry)):
+        why = ''
+        if placement.maximized:
+            try:
+                reason = maximized_problem(window, geometry, window_state(runner, window.ident))
+            except LayoutError as error:
+                return 'window %r could not be checked: %s' % (placement.name, error)
+            why = '; %s' % reason if reason else ''
+            in_position = reason is None
+        else:
+            in_position = in_place(window, geometry)
+        if in_position:
             log('placed %s on %s at %s' % (placement.name, placement.monitor, wanted))
             return None
-        log('%s is at %s, wanted %s (attempt %d)' % (
+        log('%s is at %s, wanted %s (attempt %d)%s' % (
             placement.name, geometry_text(window.x, window.y, window.width, window.height),
-            wanted, attempt))
-    return 'window %r did not stay at %s; it is at %s' % (
-        placement.name, wanted, geometry_text(window.x, window.y, window.width, window.height))
+            wanted, attempt, why))
+    return 'window %r did not stay at %s; it is at %s%s' % (
+        placement.name, wanted, geometry_text(window.x, window.y, window.width, window.height),
+        why)
 
 
 def check_session(environ=os.environ) -> None:
@@ -440,6 +485,8 @@ def check_layout(path: str, environ=os.environ, runner=None):
     check_session(environ)
     placements, timeout = load_layout(os.path.expanduser(path))
     runner(['wmctrl', '-m'])
+    if any(p.maximized for p in placements):
+        runner(['xprop', '-root', '_NET_SUPPORTED'])      # the state check needs xprop
     monitors = parse_monitors(runner(['xrandr', '--listmonitors']))
     for placement in placements:
         target_geometry(placement, monitors)

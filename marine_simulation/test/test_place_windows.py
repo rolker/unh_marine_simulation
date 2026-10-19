@@ -254,6 +254,9 @@ class FakeDesktop:
         self.geometry = (100, 120, 1384, 753)
         self.calls = []
         self.now = 0.0
+        self.state = set()
+        # mutter: a client resized to exactly this goes full screen
+        self.monitor = (0, 240, 3840, 2160)
 
     def runner(self, command):
         self.calls.append(list(command))
@@ -272,10 +275,27 @@ class FakeDesktop:
             if self.polls <= self.appear_after:
                 return ''
             return '0x04200003  0 %d %d %d %d host CAMP\n' % (x, y, w, h)
-        if command[-1:] == ['add,maximized_vert,maximized_horz'] and self.maximizes_to:
-            self.geometry = self.maximizes_to
+        if command[:1] == ['xprop']:
+            if not self.state:
+                return '_NET_WM_STATE:  not found.\n'
+            return '_NET_WM_STATE(ATOM) = %s\n' % ', '.join(sorted(self.state))
+        if '-b' in command:
+            action, *props = command[-1].split(',')
+            names = {'fullscreen': '_NET_WM_STATE_FULLSCREEN',
+                     'maximized_vert': '_NET_WM_STATE_MAXIMIZED_VERT',
+                     'maximized_horz': '_NET_WM_STATE_MAXIMIZED_HORZ'}
+            for prop in props:
+                if action == 'remove':
+                    self.state.discard(names[prop])
+                elif '_NET_WM_STATE_FULLSCREEN' not in self.state or prop == 'fullscreen':
+                    self.state.add(names[prop])         # a full screen window ignores maximise
+            if (action == 'add' and 'maximized_vert' in props and self.maximizes_to
+                    and '_NET_WM_STATE_FULLSCREEN' not in self.state):
+                self.geometry = self.maximizes_to
         if '-e' in command and not self.never_moves:
             _, x, y, w, h = command[-1].split(',')
+            if (int(x), int(y), int(w), int(h)) == self.monitor:
+                self.state.add('_NET_WM_STATE_FULLSCREEN')
             self.geometry = (int(x), int(y), int(w), int(h))
             if self.resize_once:
                 self.resize_once = False
@@ -496,8 +516,20 @@ def test_a_maximized_placement_targets_the_whole_monitor():
 def test_maximize_commands_move_then_maximize_two_properties_at_most():
     w = pw.Window('0x1', 'c', 't')
     commands = pw.move_commands(w, (0, 240, 3840, 2160), False, True)
-    assert [c[-1] for c in commands] == ['0,0,240,3840,2160', 'add,maximized_vert,maximized_horz']
+    assert [c[-1] for c in commands] == ['0,960,780,1920,1080',
+                                         'add,maximized_vert,maximized_horz']
     assert all(c[-1] != 'add,fullscreen' for c in commands)
+
+
+def test_maximize_never_resizes_to_exactly_the_monitor():
+    w = pw.Window('0x1', 'c', 't')
+    monitor = (0, 240, 3840, 2160)
+    commands = pw.move_commands(w, monitor, False, True)
+    assert not any(c[-1] == '0,0,240,3840,2160' for c in commands)
+    _, x, y, width, height = commands[0][-1].split(',')
+    x, y, width, height = int(x), int(y), int(width), int(height)
+    assert x > monitor[0] and y > monitor[1]
+    assert x + width < monitor[0] + monitor[2] and y + height < monitor[1] + monitor[3]
 
 
 def _place_maximized(desktop):
@@ -518,15 +550,71 @@ def test_a_maximized_window_gets_exactly_this_wmctrl_sequence():
     assert sent == [
         ['wmctrl', '-i', '-r', '0x04200003', '-b', 'remove,fullscreen'],
         ['wmctrl', '-i', '-r', '0x04200003', '-b', 'remove,maximized_vert,maximized_horz'],
-        ['wmctrl', '-i', '-r', '0x04200003', '-e', '0,0,240,3840,2160'],
+        ['wmctrl', '-i', '-r', '0x04200003', '-e', '0,960,780,1920,1080'],
         ['wmctrl', '-i', '-r', '0x04200003', '-b', 'add,maximized_vert,maximized_horz'],
     ]
+    assert desktop.state == {'_NET_WM_STATE_MAXIMIZED_VERT', '_NET_WM_STATE_MAXIMIZED_HORZ'}
     assert desktop.geometry == WORK_AREA        # on the monitor, work area, not full screen
 
 
+class AlwaysFullscreen(FakeDesktop):
+    """A window manager that makes the window full screen whatever is asked."""
+
+    def runner(self, command):
+        out = super().runner(command)
+        if '-e' in command or '-b' in command:
+            self.state = {'_NET_WM_STATE_FULLSCREEN'}
+            self.geometry = (0, 240, 3840, 2160)
+        return out
+
+
+class NoXprop(FakeDesktop):
+    """A desktop without xprop."""
+
+    def runner(self, command):
+        if command[:1] == ['xprop']:
+            raise pw.LayoutError('xprop is not installed (sudo apt install x11-utils)')
+        return super().runner(command)
+
+
+def test_a_window_that_comes_back_full_screen_is_not_accepted_and_the_message_names_it():
+    # a window manager that makes the window full screen whatever is asked: it covers the
+    # whole monitor, so geometry alone would accept it
+
+    problems, logs = _place_maximized(AlwaysFullscreen())
+    assert len(problems) == 1 and 'full screen' in problems[0] and 'did not stay' in problems[0]
+    assert any('attempt 1' in line and 'full screen' in line for line in logs)
+    assert any('attempt 2' in line for line in logs)
+
+
+def test_a_window_exactly_monitor_sized_after_the_move_is_not_accepted():
+    # the trap itself: exactly the monitor rect makes the fake (like mutter) go full screen
+    state = frozenset({'_NET_WM_STATE_FULLSCREEN'})
+    window = pw.Window('0x04200003', 'c', 't', 0, 240, 3840, 2160)
+    assert 'full screen' in pw.maximized_problem(window, (0, 240, 3840, 2160), state)
+
+
+def test_a_maximized_window_missing_a_flag_is_reported():
+    window = pw.Window('0x1', 'c', 't', 0, 292, 3840, 2108)
+    state = frozenset({'_NET_WM_STATE_MAXIMIZED_VERT'})
+    assert 'horz' in pw.maximized_problem(window, (0, 240, 3840, 2160), state)
+
+
+def test_the_state_is_parsed_from_xprop_output():
+    assert pw.parse_window_state('_NET_WM_STATE:  not found.\n') == frozenset()
+    assert pw.parse_window_state(
+        '_NET_WM_STATE(ATOM) = _NET_WM_STATE_MAXIMIZED_VERT, _NET_WM_STATE_MAXIMIZED_HORZ\n'
+    ) == frozenset(pw.STATE_MAXIMIZED)
+
+
+def test_a_missing_xprop_is_a_problem_naming_it():
+
+    problems, _ = _place_maximized(NoXprop(maximizes_to=WORK_AREA))
+    assert len(problems) == 1 and 'xprop' in problems[0]
+
+
 def test_a_window_that_stays_small_is_a_problem():
-    # verification is geometry only (as for the other modes): a window that neither moves nor
-    # maximises stays at 1384x753, far under the coverage
+    # a window that neither moves nor maximises stays at 1384x753, far under the coverage
     desktop = FakeDesktop(never_moves=True)
     problems, _ = _place_maximized(desktop)
     assert len(problems) == 1 and 'did not stay' in problems[0]

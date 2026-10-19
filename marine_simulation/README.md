@@ -202,7 +202,7 @@ example puts CAMP maximised on the big display and leaves the second display
 for the scoreboard (not built yet); it also shows the one-display variant.
 `scripts/place_windows.py` waits for the windows (90 s by default, one deadline for
 all), takes the newest window that matches, clears its full screen and maximised
-state, moves it with `wmctrl`, checks the geometry and moves it once more if the
+state, moves it with `wmctrl` (a maximised window is first moved to a rectangle inside the monitor, never to the monitor's exact size, which mutter takes for a full screen request), checks the geometry (and for a maximised window its `_NET_WM_STATE` with `xprop`: maximised and not full screen) and moves it once more if the
 application resized itself, and exits non-zero naming any window it could not
 place. It runs as the manager's `layout` group, a **run-once** group: it starts when
 CAMP is running, and a clean exit just ends the group (status `STOPPED`, detail
