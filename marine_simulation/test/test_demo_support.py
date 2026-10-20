@@ -66,6 +66,8 @@ needs_scorer = pytest.mark.skipif(not _installed('coverage_assessment'),
 
 
 POLYGON = str(CONFIG / 'demo_target_polygon_camp.json')
+LIVE_DEFAULTS = demo.live_layer_defaults(
+    demo.parse_profile((CONFIG / 'demo_camp_profile.conf').read_text())['LiveCoverageLayer'])
 
 
 def _boat(name, index=0, lat=43.0, lon=-70.7):
@@ -159,7 +161,85 @@ def test_profile_has_the_view_and_a_live_layer_per_boat():
         assert '%s\\visible=true' % key in sections['MapItem']
     # The fixed part is still there.
     assert 'openstreetmap\\visible=true' in sections['MapItem']
-    assert len(sections['MapItem']) == 4 + 2 * 2
+    assert len(sections['MapItem']) == 4 + 2 * (2 + len(LIVE_DEFAULTS))
+
+
+def _live_layer_values(profile_text, boat):
+    """Return the live layer keys of ``boat`` in a generated profile, as text."""
+    prefix = demo.live_layer_key(boat) + '\\'
+    return dict(line[len(prefix):].split('=', 1)
+                for line in demo.parse_profile(profile_text)['MapItem']
+                if line.startswith(prefix))
+
+
+def test_every_boats_live_layer_is_seeded_with_the_fixed_range_and_the_colormap():
+    template = (CONFIG / 'demo_camp_profile.conf').read_text()
+    boats = roster_module.load_roster(str(CONFIG / 'demo_roster.yaml'))
+    text = demo.build_profile(template, boats, 43.0743, -70.7105, 1.25)
+    assert 'LiveCoverageLayer' not in demo.parse_profile(text)     # not a CAMP section
+    assert len(boats) >= 2
+    for boat in boats:
+        values = _live_layer_values(text, boat.name)
+        assert values['live_enabled'] == 'true' and values['visible'] == 'true'
+        assert values['colormap'] == 'viridis'
+        assert values['range_mode'] == 'manual'         # not CAMP's data-driven auto range
+        low, high = float(values['range_min']), float(values['range_max'])
+        # 0 to 30 m of depth, the Ping Profile's range, as ellipsoid heights (positive up):
+        # the deep end is range_min, and the sea surface (about -29.4 m at Portsmouth) is the top
+        assert high - low == pytest.approx(30.0)
+        assert -31.0 < high < -28.0
+
+
+def test_the_seeded_colormap_is_one_marine_colormap_registers():
+    source = None
+    for parent in PACKAGE.parents:
+        candidate = parent / 'ui_ws' / 'src' / 'marine_colormap' / 'marine_colormap' / 'src' / \
+            'palette.cpp'
+        if candidate.is_file():
+            source = candidate
+            break
+    if source is None:
+        pytest.skip('marine_colormap is not in this workspace')
+    names = set(re.findall(r'(?:even|Palette)\("(\w+)"', source.read_text()))
+    assert len(names) >= 8
+    seeded = [line for line in LIVE_DEFAULTS if line.startswith('colormap=')]
+    assert seeded and seeded[0].split('=', 1)[1] in names
+
+
+def test_the_live_layer_seed_is_read_back_by_qt_as_camp_reads_it(tmp_path):
+    qtcore = pytest.importorskip('PyQt5.QtCore')
+    template = (CONFIG / 'demo_camp_profile.conf').read_text()
+    path = tmp_path / 'p.conf'
+    path.write_text(demo.build_profile(template, [_boat('one')], 43.074296, -70.7105, 0.9))
+    settings = qtcore.QSettings(str(path), qtcore.QSettings.IniFormat)
+    settings.beginGroup('MapItem')
+    settings.beginGroup(demo.live_layer_key('one').replace('%3A', ':').replace('%25', '%'))
+    assert settings.value('range_mode') == 'manual' and settings.value('colormap') == 'viridis'
+    assert settings.contains('range_min') and settings.contains('range_max')
+    # CAMP calls QVariant::toFloat(&ok) on these; a plain number string converts
+    low = settings.value('range_min', type=float)
+    high = settings.value('range_max', type=float)
+    assert high - low == pytest.approx(30.0, abs=1e-4)
+
+
+@pytest.mark.parametrize('lines, message', [
+    (['volume=11'], 'not a live layer key'),
+    (['colormap=viridis', 'colormap=turbo'], 'set twice'),
+    (['range_mode=sometimes'], 'range_mode'),
+    (['range_mode=manual', 'range_min=-5'], 'range_min and range_max'),
+    (['range_mode=manual', 'range_min=a', 'range_max=2'], 'range_min and range_max'),
+    (['range_mode=manual', 'range_min=3', 'range_max=2'], 'below range_max'),
+    (['range_mode=manual', 'range_min=nan', 'range_max=2'], 'below range_max'),
+    (['colormap='], 'colormap is empty'),
+])
+def test_a_bad_live_layer_seed_is_refused(lines, message):
+    with pytest.raises(ValueError, match=message):
+        demo.live_layer_defaults(lines)
+
+
+def test_without_a_live_layer_section_the_layers_keep_camps_own_defaults():
+    text = demo.build_profile('', [_boat('one')], 43.0, -70.0, 1.0)
+    assert sorted(_live_layer_values(text, 'one')) == ['live_enabled', 'visible']
 
 
 def test_profile_reads_back_the_same_view_in_qt(tmp_path):

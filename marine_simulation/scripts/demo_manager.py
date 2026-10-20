@@ -37,7 +37,8 @@ window placement. ``--profile headless`` leaves CAMP and the placement out. The 
 every boat's lifecycle nodes to active, so a lost ``change_state`` reply (issue #96) no longer
 leaves a boat dead, and closing CAMP stops everything and ends this process. CAMP comes back
 with the window and map view it saved when it last closed; ``--camp-fresh`` discards them for a
-start (the fitted view is only the default of a first start).
+start (the fitted view is only the default of a first start). rqt is imported from the shipped
+perspective file on a first start and with ``--rqt-fresh``, and comes back as it was after.
 ``ros2 run launch_manager_proto launch_manager_proto status`` shows what it is doing.
 ``scripts/run_demo.sh`` is the helper's command; it finds this machine's files and calls this.
 
@@ -115,7 +116,7 @@ def boats_launch_arguments(spec, items: Sequence[str], declared: Sequence[str] =
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
                   scorer_params: str, roster_file: str, joystick_config: str,
                   layout_config: str, target_file: str,
-                  camp_fresh: bool = False) -> Dict[str, str]:
+                  camp_fresh: bool = False, rqt_fresh: bool = False) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
         'boats': boats_argument,
@@ -128,6 +129,7 @@ def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: b
         'layout_config': layout_config,
         'target_file': target_file,
         'camp_fresh': 'true' if camp_fresh else 'false',
+        'rqt_fresh': 'true' if rqt_fresh else 'false',
     }
 
 
@@ -230,6 +232,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--camp-fresh', action='store_true',
                         help='discard the window and map view CAMP saved when it last closed '
                              '(a first start); otherwise CAMP comes back as it was closed')
+    parser.add_argument('--rqt-fresh', action='store_true',
+                        help='import the shipped rqt perspective again (Survey Coverage and one '
+                             'Ping Profile per boat), replacing the one rqt stored (a first '
+                             'start); otherwise rqt comes back as it was closed')
     parser.add_argument('launch_args', nargs='*', metavar='name:=value',
                         help='more arguments of the boats launch (demo_boats_launch.py), '
                              'for example tide_speed_factor:=1; the ones the options above '
@@ -277,7 +283,8 @@ def main(argv: List[str] = None) -> int:
             spec = load_config(
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
-                              roster_file, joysticks, layout, target, args.camp_fresh))
+                              roster_file, joysticks, layout, target, args.camp_fresh,
+                              args.rqt_fresh))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2

@@ -1,0 +1,130 @@
+{
+  "groups": {
+    "pluginmanager": {
+      "groups": {
+        "plugin__rqt_coverage__rqt_coverage__CoveragePlugin__1": {
+          "groups": {
+            "dock_widget__": {
+              "groups": {},
+              "keys": {
+                "dock_widget_title": {
+                  "repr": "'Survey Coverage'",
+                  "type": "repr"
+                }
+              }
+            },
+            "plugin": {
+              "groups": {},
+              "keys": {
+                "config_yaml": {
+                  "repr": "'topic: coverage_assessment\\n'",
+                  "type": "repr"
+                }
+              }
+            }
+          },
+          "keys": {}
+        },
+        "plugin__rqt_ping_profile__rqt_ping_profile__PingProfilePlugin__1": {
+          "groups": {
+            "dock_widget__": {
+              "groups": {},
+              "keys": {
+                "dock_widget_title": {
+                  "repr": "'bluefin'",
+                  "type": "repr"
+                }
+              }
+            },
+            "plugin": {
+              "groups": {},
+              "keys": {
+                "config_yaml": {
+                  "repr": "'depth_max: 30.0\\ndepth_min: 0.0\\ndepth_mode: fixed\\ntitle: bluefin\\ntopic: /bluefin/sensors/mbes/detections\\n'",
+                  "type": "repr"
+                }
+              }
+            }
+          },
+          "keys": {}
+        },
+        "plugin__rqt_ping_profile__rqt_ping_profile__PingProfilePlugin__2": {
+          "groups": {
+            "dock_widget__": {
+              "groups": {},
+              "keys": {
+                "dock_widget_title": {
+                  "repr": "'clownfish'",
+                  "type": "repr"
+                }
+              }
+            },
+            "plugin": {
+              "groups": {},
+              "keys": {
+                "config_yaml": {
+                  "repr": "'depth_max: 30.0\\ndepth_min: 0.0\\ndepth_mode: fixed\\ntitle: clownfish\\ntopic: /clownfish/sensors/mbes/detections\\n'",
+                  "type": "repr"
+                }
+              }
+            }
+          },
+          "keys": {}
+        },
+        "plugin__rqt_ping_profile__rqt_ping_profile__PingProfilePlugin__3": {
+          "groups": {
+            "dock_widget__": {
+              "groups": {},
+              "keys": {
+                "dock_widget_title": {
+                  "repr": "'urchin'",
+                  "type": "repr"
+                }
+              }
+            },
+            "plugin": {
+              "groups": {},
+              "keys": {
+                "config_yaml": {
+                  "repr": "'depth_max: 30.0\\ndepth_min: 0.0\\ndepth_mode: fixed\\ntitle: urchin\\ntopic: /urchin/sensors/mbes/detections\\n'",
+                  "type": "repr"
+                }
+              }
+            }
+          },
+          "keys": {}
+        },
+        "plugin__rqt_ping_profile__rqt_ping_profile__PingProfilePlugin__4": {
+          "groups": {
+            "dock_widget__": {
+              "groups": {},
+              "keys": {
+                "dock_widget_title": {
+                  "repr": "'beluga'",
+                  "type": "repr"
+                }
+              }
+            },
+            "plugin": {
+              "groups": {},
+              "keys": {
+                "config_yaml": {
+                  "repr": "'depth_max: 30.0\\ndepth_min: 0.0\\ndepth_mode: fixed\\ntitle: beluga\\ntopic: /beluga/sensors/mbes/detections\\n'",
+                  "type": "repr"
+                }
+              }
+            }
+          },
+          "keys": {}
+        }
+      },
+      "keys": {
+        "running-plugins": {
+          "repr": "{'rqt_coverage/rqt_coverage/CoveragePlugin': [1], 'rqt_ping_profile/rqt_ping_profile/PingProfilePlugin': [1, 2, 3, 4]}",
+          "type": "repr"
+        }
+      }
+    }
+  },
+  "keys": {}
+}

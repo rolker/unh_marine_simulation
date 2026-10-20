@@ -40,8 +40,8 @@ TO START THE DEMO
      for the prompt, UP ARROW, ENTER. Still wrong: call.
 
   6. A second window, rqt ("rqt"), may be open: it shows the coverage score
-     (the perspective "demo"). The first time on a computer it is empty: Plugins >
-     Robot Tools > Survey Coverage, arrange it, close it; it is remembered.
+     and one multibeam profile per boat. It comes up filled in the first time
+     on a computer; if you rearrange it, close it and it is remembered.
 
 TO STOP EVERYTHING: close the map window (the big one). Everything else
 shuts down by itself; wait until the terminal prompt comes back. (If that does
@@ -97,6 +97,7 @@ profiles are in "Demo launch manager" below.
 | `--layout FILE` | `config/demo_layout.yaml` (`run_demo.sh`: `layout.yaml` in the config directory) | Window layout of this computer. |
 | `--no-layout` | off | Do not move the windows. |
 | `--camp-fresh` | off | Discard the window and map view CAMP saved when it last closed, for this start (see "First start on a computer"). |
+| `--rqt-fresh` | off | Import the shipped rqt perspective again (Survey Coverage and one Ping Profile per boat), replacing the one rqt stored, for this start (see "rqt and the coverage plugin"). |
 | `--target FILE` | `config/demo_target_polygon_camp.json` (`run_demo.sh`: `target.json` when present) | Saved CAMP `.json` with the target survey area: CAMP opens it and the publisher sends it to the scorer. |
 | `--profile NAME` | `demo` | `demo`, `headless` (no CAMP, no placement) or `boats`. |
 | `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
@@ -156,6 +157,21 @@ symlink, and only when they hold the marker file the demo writes. The file is
 `config/demo_camp_profile.conf` (OpenStreetMap as the only background map) plus,
 generated at launch:
 
+- **the live coverage layers' colormap and range.** The profile's `[LiveCoverageLayer]` section
+  (not a CAMP section: it is copied into every boat's layer) seeds each layer with
+  `colormap=viridis` and a **manual** range of -59.4 to -29.4 m, written on every start (what
+  the operator changes in CAMP's colormap menu is not kept, only the window and view are). CAMP
+  reads these keys per layer in `SonarLiveCacheLayer::readSettings`: `colormap`, `range_mode`
+  (`manual`; without it CAMP tracks the data), `range_min`, `range_max`, `visible`,
+  `live_enabled`. The numbers are negative because the live layer colours the tiles' `depth`
+  band, which is the seabed's WGS84 ellipsoid height in metres, positive up (see the
+  `cube_bathymetry` README), not a depth: over 17 m of water at Portsmouth it reads about -46 m.
+  The sea surface is at about -29.4 m there (measured from a demo run's tile cache against the
+  chart grid), so -29.4 down to -59.4 is 0 to 30 m of water, the Ping Profile's range, with the
+  deep end first: viridis then runs dark (deep) to light yellow (shallow), a perceptually uniform
+  ramp whose luminance rises monotonically. The surface height is a property of the Portsmouth
+  site (geoid separation), so another site needs its own two numbers.
+
 - **what CAMP remembers.** When CAMP closes it saves its window (`MainWindow/geometry`,
   `MainWindow/state`, which include maximised or not) and its map view
   (`MainWindow/mapCenter`, `MainWindow/mapScale` and the `[MapView]` section). On every start
@@ -214,15 +230,39 @@ Known limits of this approach:
 
 ### rqt and the coverage plugin
 
-The manager's `rqt` group runs `rqt --force-discover --perspective demo` (`demo_rqt_launch.py`): rqt switches to
-the perspective named `demo` and creates it when it does not exist. rqt keeps perspectives in the
-operator's own settings (`ros.org/rqt_gui.ini`, written when rqt exits), so it runs on those
-normal settings, not on the demo's wiped-per-start home. `--lock-perspective` is not used (the
-menu is needed to add a plugin, and the close button is how the operator closes the window), and
-the window is not placed: rqt restores its own geometry per perspective. First start on a new
-computer: in rqt choose **Plugins > Robot Tools > Survey Coverage** (`rqt_coverage/CoveragePlugin`,
-package `rqt_coverage` in `rqt_operator_tools`), arrange it, close rqt; it comes back the same on
-every later start. The plugin's default topic `coverage_assessment` resolves to the scorer's
+The manager's `rqt` group (`demo_rqt_launch.py`) starts rqt on a perspective generated for the boats
+that are run (`--boats`, `--roster`); for the whole roster it is the shipped
+`config/demo.perspective`: **Survey Coverage** (`rqt_coverage/CoveragePlugin`, topic
+`coverage_assessment`) and one **Ping Profile** (`rqt_ping_profile/PingProfilePlugin`) per roster
+boat, titled with the boat's name, on the full topic `/<boat>/sensors/mbes/detections`, fixed
+depth range 0 to 30 m (the range the live coverage layer in CAMP uses, so the two displays
+cover the same 30 m of water at Portsmouth; the numbers differ, see above; the plugin draws
+the platform's colour itself). The file is generated from the roster by
+`python3 -m marine_simulation.demo_perspective config/demo_roster.yaml config/demo.perspective`,
+and `test_demo_perspective.py` fails when it no longer matches the roster. It holds no window
+geometry or dock state (those belong to the monitor): rqt lays the docks out itself, and the
+operator's arrangement is kept from then on.
+
+How rqt names it (read from `qt_gui` in Jazzy and checked live): `--perspective-file` imports the
+file as a **hidden** perspective named `@` plus the file name; an existing one of that name is
+replaced; it is not listed in the Perspectives menu and is not made rqt's current perspective, but
+it is saved in `ros.org/rqt_gui.ini` when rqt exits like any other. The group writes the
+perspective for the boats it runs to `~/.local/state/marine_simulation_demo/rqt/demo-<hash>.perspective`
+(the hash is of the content), so the imported name is `@demo-<hash>.perspective`. It starts rqt with
+`--perspective-file` on a **first start** (the operator's `ros.org/rqt_gui.ini` holds no perspective of
+that name: the first run on a computer, a different set of boats, a changed layout; a plain `demo`
+perspective left by an older version is ignored) or with `--rqt-fresh` (the first start of the group
+in that session only, like `--camp-fresh`), and with `--perspective @demo-<hash>.perspective` after, so
+rqt keeps the geometry and changes per set of boats. One log line says which way it was started.
+If the settings file cannot be read or the perspective cannot be written, rqt starts without the
+demo perspective (a log line says why) and the demo goes on. A perspective rqt saved half-way (a
+kill during the write) comes back empty: start once with `--rqt-fresh`. rqt runs on the operator's
+normal settings (`ros.org/rqt_gui.ini`), not on the demo's wiped-per-start home.
+`--lock-perspective` is not used (the menu is needed to rearrange the plugins, and the close
+button is how the operator closes the window), and the window is not placed. To get the shipped
+arrangement back after rearranging, start once with `--rqt-fresh`.
+The coverage plugin's default topic
+`coverage_assessment` resolves to the scorer's
 `/coverage_assessment` (type `marine_interfaces/msg/CoverageAssessment`, transient local), which
 the headless run of this branch showed publishing with no namespace, so nothing needs to be set in
 its config dialog; the plugin tolerates a scorer that comes up late. rqt has no `requires` and
@@ -230,6 +270,68 @@ stops with CAMP; closing rqt by itself does not stop the demo. rqt is started wi
 `--force-discover` because it caches its plugin list in its settings: without it a plugin package
 built after the first rqt start (for example `rqt_ping_profile`) would not appear in the Plugins
 menu.
+
+### Setting up the demo computer
+
+A checklist for one computer, the Ubuntu 24.04 desktop with an RTX 5080 and the four GameSir G7 SE
+pads that runs the demo at the event, in the order to do it. "Checked" means checked on the dev
+host on 2026-10-14; the steps marked **on the machine** depend on the hardware and have to be
+checked there. "Setting up a computer (once)" above is the per-user part (the files in
+`~/.config/marine_simulation_demo`); this is the machine under it.
+
+1. **X11 session.** The window placement and CAMP's saved geometry need X11 (position
+   persistence broke on Wayland). Ubuntu's `61-gdm.rules` makes GDM prefer Xorg once an nvidia
+   driver of version 470 or later binds; check at the login screen, with the gear menu, that the
+   session is the Xorg one and not Wayland before logging in. Set the display layout **after** landing on X11:
+   GNOME keys saved monitor layouts on connector names, and those differ between the two
+   sessions (`HDMI-0`, `DP-2` on nvidia X11, `HDMI-1`, `DP-3` on Wayland), so a layout made on
+   Wayland is not found on X11. Copy `~/.config/monitors.xml` aside before changing it: mutter
+   keeps one backup generation only.
+2. **nvidia driver (on the machine).** The dev host runs the 615 open driver; the RTX 5080 may
+   need a newer one than that. Install the driver the machine needs and check `nvidia-smi` and
+   the Xorg session (step 1) before the kernel work below.
+3. **A kernel with the G7 SE fix, and the kernel parameter.** The pads enumerate as
+   3537:10a0 and, without the fix, fall back to HID mode: no rumble, and joystick numbers that
+   no longer match `config/demo_params.yaml`. The fix is the `r` letter of `usbcore.quirks`
+   (`USB_QUIRK_WINDOWS_CONFIG_REQ_SIZE`), in mainline 7.2 and in stable 6.18.45 and 7.1.9
+   onward; Ubuntu's 6.8 and HWE kernels do not have it. Checked with mainline 7.2.6 from
+   [kernel.ubuntu.com/mainline](https://kernel.ubuntu.com/mainline/): with the parameter below,
+   the pads bind `xpad`, rumble works and the joystick numbers match `demo_params.yaml`.
+   - `usbcore` is built into the kernel, so `modprobe.d` cannot set it. Put
+     `GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT usbcore.quirks=3537:10a0:r"` in
+     `/etc/default/grub.d/gamesir-g7se.cfg`, run `sudo update-grub`, reboot, and check
+     `cat /proc/cmdline` shows it.
+   - The mainline debs do not install on 24.04 as they are. Their maintainer scripts call
+     `run-parts` with two directories and Noble's `run-parts` takes one: repack the image,
+     headers and modules debs under `fakeroot` (`dpkg-deb -R`, drop the
+     `/usr/share/kernel/*.d` argument from the scripts in `DEBIAN/`, `dpkg-deb -b`).
+   - The kernel is built with gcc-15 flags, so the nvidia DKMS module fails with the default
+     compiler. Build it with gcc-14: `sudo apt install gcc-14`; write
+     `override CC = gcc-14` into `/usr/src/linux-headers-<version>/.kernelvariables`;
+     `sudo dkms install nvidia/<driver version> -k <kernel version>`; then
+     `sudo dpkg --configure -a` (it reruns the initramfs and `update-grub` that the failed
+     build skipped). Until that finishes there is no boot entry for the new kernel.
+   - Cold-boot check: with all four pads plugged in before power-on, `ls /dev/input/js*`
+     shows `js0` to `js3` and `lsusb -t` shows `Driver=xpad` under each pad.
+4. **ROS 2 Jazzy and the workspace.** Install ROS 2 Jazzy, clone the workspace and run
+   `make build` from its root. `make build` does not install apt packages: install them with
+   `rosdep install --from-paths src --ignore-src -y` from the layer directory (it resolves this
+   package's `exec_depend`s: `ros-jazzy-joy-linux`, `wmctrl` and the rest).
+5. **GNOME auto-maximize.** `gsettings set org.gnome.mutter auto-maximize false` once for the
+   demo user (see "First start on a computer").
+6. **The per-machine files** in `~/.config/marine_simulation_demo/`: `env.bash` (sources the
+   workspace `setup.bash`) and `joysticks.yaml`. The by-path device names hold the PCI address
+   of the USB controller, so fill `joysticks.yaml` on this computer with all four pads in their
+   final ports (see Gamepads). Or use the plug-order file
+   `config/demo_joysticks_plug_order.yaml`, which binds `/dev/input/js0` to `js3` in plug
+   order and needs no labelled ports (after #107 merges). The desktop icon comes from
+   `install_demo_shortcut.sh` (also after #107 merges).
+7. **First starts.** CAMP first (see "First start on a computer"), then rqt: it imports the
+   shipped perspective by itself on a first start (see "rqt and the coverage plugin") and shows
+   Survey Coverage and the four Ping Profiles; rearrange them once and close rqt. Then the
+   **cold-boot check** with all four pads attached at power-on: power the computer off, plug
+   the pads in, power on, log in on X11, start the demo, and check the helper card against
+   what appears.
 
 ### First start on a computer
 
@@ -648,7 +750,7 @@ ros2 run launch_manager_proto launch_manager_proto status       # what is it doi
 | `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, via `marine_simulation.demo_support.camp_actions`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
 | `target_area` | `demo_target_area_launch.py` (`publish_survey_area.py`, latched, on the target file) | READY when `/survey_area_publisher` is in the graph; `follows: [camp]` |
 | `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_support.scorer_parameters` (map frame = the first boat's) | `requires: [boats, target_area]`, `follows: [camp]`, lifecycle node `/coverage_assessment` to `active` |
-| `rqt` | `demo_rqt_launch.py` (`rqt --perspective demo`; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
+| `rqt` | `demo_rqt_launch.py` (`rqt --perspective-file` on the perspective generated for the boats, on a first start or `--rqt-fresh`, `--perspective @demo-<hash>.perspective` after; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
 | `layout` | `demo_layout_launch.py` (`place_windows.py`, once) | `requires: [camp]`, `follows: [camp]`, `restart: never` (run once, see "Window layout") |
 
 Profiles: `demo` (all five), `headless` (boats, target area and scorer), `boats` (boats

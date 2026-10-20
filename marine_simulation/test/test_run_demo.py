@@ -335,6 +335,13 @@ def test_extra_boats_launch_arguments_are_forwarded_to_the_manager_untouched(mac
     assert lines[-4:] == ['tide_speed_factor:=1', '--boats', 'a,b', 'cell_size:=2 5']
 
 
+def test_rqt_fresh_is_passed_to_the_manager_like_camp_fresh(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine, '--camp-fresh', '--rqt-fresh')
+    assert result.returncode == 0, result.stderr
+    assert (machine / 'record').read_text().splitlines()[-2:] == ['--camp-fresh', '--rqt-fresh']
+
+
 def test_a_domain_of_only_zeros_means_domain_zero(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
     assert _run(machine, DEMO_ROS_DOMAIN_ID='0000').returncode == 0
