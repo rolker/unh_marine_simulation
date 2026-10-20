@@ -1,0 +1,21 @@
+---
+issue: 111
+---
+
+# Issue #111 — asv_sim: boats collide with terrain and with each other (block passage; boats indestructible for now)
+
+## Issue Review
+**Status**: complete
+**When**: 2026-10-20 11:31 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Issue**: #111
+**Comment**: (best-effort post follows this entry; not recorded inline)
+**Scope verdict**: well-scoped
+
+### Actions
+- [ ] Watch: the grid is read by a second process (asv_sim) beside each mbes_sim; the demo truth grid is 27 MB at 2 m, the chart grid 69 MB. Plan must say how it is shared (import of mbes_sim.bathy_grid, one load in the one asv_sim node) and what happens when no grid is configured (collision off, say so loudly).
+- [ ] Watch: boat velocity is a body-forward speed plus a current drift applied to position, not a velocity vector in state. "Zero the velocity component" needs a definition against the integration in dynamics.py (issue #84 sub-stepping).
+- [ ] Watch: datum caveat from #98 (CCOM compilation datum unstated, treated as MLLW) applies to grounding depth as well; note it in the docs.
+- [ ] Recommendation: land/nodata = wall, no-grid = no collision; keep all later consequences (damage, reset) out of scope as the issue says.
+- [ ] Consequences: asv_sim parameter table in .agents/README.md, asv_sim/README, demo roster/launch, marine_simulation README, package.xml deps, new tests.
