@@ -81,6 +81,12 @@ import yaml
 # js API; an -event-joystick link resolves to eventN and reads as garbage).
 _JS_DEVICE = re.compile(r'js[0-9]+')
 
+# What a joystick file may say about a boat whose device is not there at launch
+# (its ``when_missing`` key): refuse to start (the default, for by-path links: a
+# missing pad is a wrong cable), or wait: the boat starts without it and joy_linux
+# gets the path anyway (it retries opening a missing device every second).
+MISSING_PAD_POLICIES = ('refuse', 'wait')
+
 # Where chart_datum (mru_transform) looks for its geoid and VDatum grids when the
 # launch does not override them. Without them it only warns and never publishes
 # <boat>/chart_datum.
@@ -175,10 +181,15 @@ def load_joystick_config(path: str) -> dict:
     return data
 
 
+def _warn(message: str) -> None:
+    print('[demo_boats_launch] ' + message, file=sys.stderr, flush=True)
+
+
 def assign_joysticks(
         roster: Sequence[Boat], boats: Sequence[Boat], config: dict,
         exists: Callable[[str], bool] = os.path.exists,
-        resolve: Callable[[str], str] = os.path.realpath) -> Dict[str, str]:
+        resolve: Callable[[str], str] = os.path.realpath,
+        warn: Callable[[str], None] = _warn) -> Dict[str, str]:
     """
     Map each selected boat to its joystick device path, or raise.
 
@@ -188,7 +199,17 @@ def assign_joysticks(
     ``js<N>`` node (the ``-event-joystick`` link resolves to ``event<N>``, which
     ``joy_linux`` reads as garbage), and no two selected boats may resolve to the
     same node (two different links can name one pad).
+
+    ``config['when_missing']`` (``MISSING_PAD_POLICIES``) decides about a device
+    that is not there: ``refuse`` (the default) raises; ``wait`` keeps it in the
+    assignment, says so through ``warn`` and skips the checks that need the
+    device, so ``joy_linux`` opens the pad when it is plugged in. That is the
+    plug-order mode (``/dev/input/js0``, ``js1``, ...: any number of pads).
     """
+    policy = config.get('when_missing', 'refuse')
+    if policy not in MISSING_PAD_POLICIES:
+        raise ValueError('joystick when_missing = %r must be one of: %s'
+                         % (policy, ', '.join(MISSING_PAD_POLICIES)))
     devices = config.get('devices')
     if not isinstance(devices, list) or not all(isinstance(d, str) and d for d in devices):
         raise ValueError('every joystick device must be a non-empty path string')
@@ -200,25 +221,39 @@ def assign_joysticks(
         raise ValueError('the same joystick device is listed more than once: %s'
                          % ', '.join(duplicates))
     assignment = {b.name: devices[b.index] for b in boats}
-    missing = ['%s (%s pad): %s' % (b.name, b.pad or 'no pad label', assignment[b.name])
-               for b in boats if not exists(assignment[b.name])]
-    if missing:
+
+    def describe(boat: Boat) -> str:
+        return '%s (%s pad): %s' % (boat.name, boat.pad or 'no pad label', assignment[boat.name])
+
+    absent = [b for b in boats if not exists(assignment[b.name])]
+    if absent and policy == 'refuse':
         raise ValueError(
             'joystick device(s) not found; plug the pads into the labelled ports, check '
             "'ls -l /dev/input/by-path/ | grep -- -joystick$', or launch with "
-            'enable_joysticks:=false:\n  ' + '\n  '.join(missing))
+            'enable_joysticks:=false:\n  ' + '\n  '.join(describe(b) for b in absent))
+    # A missing device cannot be resolved, but its name can still give it away.
+    wrong_name = [describe(b) for b in absent
+                  if assignment[b.name].endswith('-event-joystick')]
+    if wrong_name:
+        raise ValueError(
+            'joystick device(s) are not plugged in and are not kernel joystick links either; '
+            "joy_linux needs the by-path link ending in '-joystick', not '-event-joystick':\n  "
+            + '\n  '.join(wrong_name))
+    for b in absent:
+        warn('%s is not plugged in; the boat starts without a pad and joy_linux opens '
+             'this device as soon as it appears' % describe(b))
 
-    targets = {b.name: resolve(assignment[b.name]) for b in boats}
-    wrong_kind = ['%s (%s pad): %s resolves to %s' % (
-        b.name, b.pad or 'no pad label', assignment[b.name], targets[b.name])
-        for b in boats if not _JS_DEVICE.fullmatch(os.path.basename(targets[b.name]))]
+    present = [b for b in boats if exists(assignment[b.name])]
+    targets = {b.name: resolve(assignment[b.name]) for b in present}
+    wrong_kind = ['%s resolves to %s' % (describe(b), targets[b.name])
+                  for b in present if not _JS_DEVICE.fullmatch(os.path.basename(targets[b.name]))]
     if wrong_kind:
         raise ValueError(
             'joystick device(s) are not kernel joystick (js<N>) nodes; joy_linux needs '
             "the by-path link ending in '-joystick', not '-event-joystick':\n  "
             + '\n  '.join(wrong_kind))
     by_target = {}
-    for b in boats:
+    for b in present:
         by_target.setdefault(targets[b.name], []).append(b.name)
     shared = ['%s -> %s' % (', '.join(names), target)
               for target, names in sorted(by_target.items()) if len(names) > 1]

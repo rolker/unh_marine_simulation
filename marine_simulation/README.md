@@ -13,7 +13,8 @@ scorer, CAMP with the planned layers (its window and map view come back as the
 operator last left them), and any other windows on the right screens. `scripts/run_demo.sh` (installed as
 `lib/marine_simulation/run_demo.sh`) is the helper's command: it finds this
 computer's files and starts the launch manager (`demo_manager.py`, see "Demo launch
-manager" below). That is the only way to start the demo.
+manager" below). That is the only way to start the demo; the desktop icon that
+`install_demo_shortcut.sh` makes runs it in a terminal window.
 
 ### Helper card
 
@@ -21,8 +22,12 @@ Keep this on paper next to the computer.
 
 ```
 TO START THE DEMO
-  1. Plug in the four game controllers (the lights on them come on).
-  2. Open a terminal. Press the UP ARROW key once, then ENTER.
+  1. Plug in the four game controllers (the lights on them come on). On a
+     computer whose USB ports are not labelled, plug them in in this order:
+     blue, orange, purple, white.
+  2. Double-click the icon "Ocean Discovery Day Demo" on the desktop. A black
+     terminal window opens. (No icon: open a terminal, press the UP ARROW key
+     once, then ENTER.)
   3. Wait about two minutes. Do not touch the mouse.
      Expect: the big screen shows the map with the harbour and the survey
      box; the four boats appear near the middle; the second screen stays
@@ -35,23 +40,27 @@ TO START THE DEMO
      in, wait five seconds. If it still does not work, call the number below.
   5. A message starting THE DEMO DID NOT START says in a sentence what is
      wrong (a map window is already open: close it; a cable is unplugged: plug
-     it in). Fix that and press UP ARROW, ENTER again. Anything else strange
-     (a window in the wrong place, a frozen map): close the map window, wait
-     for the prompt, UP ARROW, ENTER. Still wrong: call.
+     it in). Fix that, press ENTER to close the window, and double-click the
+     icon again. Anything else strange (a window in the wrong place, a frozen
+     map): close the map window, wait for "Press ENTER", press it, and
+     double-click the icon again. Still wrong: call.
 
   6. A second window, rqt ("rqt"), may be open: it shows the coverage score
      and one multibeam profile per boat. It comes up filled in the first time
      on a computer; if you rearrange it, close it and it is remembered.
 
 TO STOP EVERYTHING: close the map window (the big one). Everything else
-shuts down by itself; wait until the terminal prompt comes back. (If that does
-not work: click the terminal and press CTRL and C together.)
+shuts down by itself; wait until the terminal window says "Press ENTER to
+close this window", then press ENTER. (If that does not work: click the
+terminal and press CTRL and C together.)
 
 WHO TO CALL:  <NAME - OWNER TO FILL IN>   <PHONE - OWNER TO FILL IN>
 ```
 
-The up-arrow command is the one typed last, so type it once yourself first:
-`~/bin/run_demo.sh` (any copy of `scripts/run_demo.sh`).
+The icon runs `run_demo.sh --hold` in a terminal (`--hold` waits for ENTER before the
+window closes, so the last message stays readable). The up-arrow fallback is the
+command typed last, so type it once yourself first: `~/bin/run_demo.sh` (any copy of
+`scripts/run_demo.sh`).
 
 ### Setting up a computer (once)
 
@@ -62,15 +71,26 @@ The up-arrow command is the one typed last, so type it once yourself first:
 2. Create `~/.config/marine_simulation_demo/` holding:
    - `env.bash`: the line(s) that source the workspace `setup.bash`.
    - `joysticks.yaml`: a copy of `config/demo_joysticks.yaml` with this
-     computer's by-path device links (see Gamepads below).
+     computer's by-path device links (see Gamepads below), or, on a computer
+     without labelled ports, a copy of `config/demo_joysticks_plug_order.yaml`
+     as it is (the pads drive the boats in the order they are plugged in, and
+     any number of pads works).
    - `layout.yaml`: optional; only for windows that need placing (the installed layout
      places none): a copy of `config/demo_layout.yaml` with the monitor names from
      `xrandr --listmonitors`.
    - `target.json`: optional, the saved CAMP file holding the target survey area
      (see "Target area" below).
-3. Rehearse from a cold boot: start the computer, open a terminal, run
-   `run_demo.sh`, and check the card above against what appears. This is a
-   human check; the tests below cannot do it.
+3. Put the icon on the desktop: `install_demo_shortcut.sh` (installed beside
+   `run_demo.sh` in `lib/marine_simulation`; `ros2 pkg prefix marine_simulation`
+   gives the prefix). It refuses until `env.bash` exists and gives a working
+   `ros2`, because a double click starts with no workspace sourced. Run it
+   again if the workspace moves: the icon holds the full path (and a
+   `DEMO_CONFIG_DIR` given to the installer). The check starts from a plain
+   system `PATH`, so a ROS terminal does not hide a bad `env.bash`. (The file is
+   `marine_simulation_demo.desktop` on the desktop; delete it to remove the icon.)
+4. Rehearse from a cold boot: start the computer, double-click the icon, and
+   check the card above against what appears. This is a human check; the tests
+   below cannot do it.
 
 ### What the one command does
 
@@ -99,6 +119,7 @@ profiles are in "Demo launch manager" below.
 | `--camp-fresh` | off | Discard the window and map view CAMP saved when it last closed, for this start (see "First start on a computer"). |
 | `--rqt-fresh` | off | Import the shipped rqt perspective again (Survey Coverage and one Ping Profile per boat), replacing the one rqt stored, for this start (see "rqt and the coverage plugin"). |
 | `--target FILE` | `config/demo_target_polygon_camp.json` (`run_demo.sh`: `target.json` when present) | Saved CAMP `.json` with the target survey area: CAMP opens it and the publisher sends it to the scorer. |
+| `--hold` | off | `run_demo.sh` only (never reaches the manager): wait for ENTER before the script ends, for a terminal window that closes with it (the desktop icon). |
 | `--profile NAME` | `demo` | `demo`, `headless` (no CAMP, no placement) or `boats`. |
 | `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
 
@@ -324,8 +345,8 @@ checked there. "Setting up a computer (once)" above is the per-user part (the fi
    of the USB controller, so fill `joysticks.yaml` on this computer with all four pads in their
    final ports (see Gamepads). Or use the plug-order file
    `config/demo_joysticks_plug_order.yaml`, which binds `/dev/input/js0` to `js3` in plug
-   order and needs no labelled ports (after #107 merges). The desktop icon comes from
-   `install_demo_shortcut.sh` (also after #107 merges).
+   order and needs no labelled ports. The desktop icon comes from
+   `install_demo_shortcut.sh` (see "Helper card").
 7. **First starts.** CAMP first (see "First start on a computer"), then rqt: it imports the
    shipped perspective by itself on a first start (see "rqt and the coverage plugin") and shows
    Survey Coverage and the four Ping Profiles; rearrange them once and close rqt. Then the
@@ -483,8 +504,10 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 The launch refuses to start (with the reason) when a boat name is unknown or
 repeated, a roster value is not a finite number in range, the joystick list does
 not match the roster, two boats share a pad (also when two links resolve to one
-device), a configured pad is missing or its link resolves to something other than
-a `jsN` node (the `-event-joystick` link), `joy_linux` is not installed,
+device), a configured pad is missing (unless the joystick file says
+`when_missing: wait`, see "Plug-order mode" below) or its link resolves to something other than
+a `jsN` node (the `-event-joystick` link), `when_missing` is anything but
+`refuse` or `wait`, `joy_linux` is not installed,
 `deadzone` is outside [0, 1) or `autorepeat_rate` is 2 Hz or less, a boolean
 argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
 an explicit `mbes_grid_file` (or `$MBES_DEMO_GRID`) is not a file, `cell_size`, `beam_count` or `ping_interval` is
@@ -530,6 +553,24 @@ work. Port labelling for the event (first boat first):
 `config/demo_joysticks.yaml` lists the links in that order with placeholder
 paths. The by-path names contain the PCI address of the USB controller, so make a
 copy per machine, fill in its real links and launch with `joystick_config:=<copy>`.
+
+#### Plug-order mode (any pads, no labelled ports)
+
+`config/demo_joysticks_plug_order.yaml` binds the boats to `/dev/input/js0`,
+`js1`, `js2`, `js3` instead: the kernel numbers pads in the order they are plugged
+in, so the first pad drives the first roster boat, and so on. Its
+`when_missing: wait` tells the launch to start a boat whose device is not there
+without refusing: the `joy_linux` driver still gets the path and retries opening
+it every second (its own behaviour), so any number of pads works and a pad
+plugged in later, even during the demo, drives the boat of the next free number.
+A pad unplugged and plugged back in gets the lowest free number again, so it
+keeps its boat unless another pad came in meanwhile. The launch prints one
+`not plugged in` line per missing pad, and still checks the pads that are there
+(a `jsN` node each, no two boats on one node). `when_missing: refuse` is the
+default and what the by-path file relies on: there a missing pad means a wrong
+cable, and the demo must not start with a boat nobody can drive. Use plug-order
+mode on a computer without labelled ports (a development machine, the demo
+before the event computer exists); use the by-path file on the event computer.
 
 Controls (`joy_to_helm`, configured explicitly in `config/demo_params.yaml`): left
 stick up/down is throttle (`axes[1]`), the right stick sideways is rudder
