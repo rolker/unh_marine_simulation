@@ -80,3 +80,30 @@ Folded the four must-fix findings of the plan review (mission_manager namespace,
 **By**: Claude Code Agent (Claude Sonnet 5.5)
 
 Roland's decisions folded into plan.md. Deliberate simplification (decision 5): hand-back is **restart the section, not pause/resume**. The `override hover` / `cancel_override` mechanics and the remaining-lines bookkeeping are dropped; a hand-over to autonomy clears and sends the whole section from the first line, and a takeover sends manual then `clear_tasks`. Stages 1 and 2 go now, nav stays off by default until rehearsed; no collision avoidance (issue 111 covers contact).
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-20 13:20 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-112 at `6040844`
+**Mode**: pre-push
+**Depth**: Standard (reason: launch files and the lifecycle manager, about 700 lines of code and tests)
+**Must-fix**: 2 (both fixed) | **Suggestions**: 9 (8 fixed, 1 documented)
+**Round**: 2 | **Ship**: recommended — round 1 found two must-fix items in the self-test, both fixed with a unit test and the live self-test rerun; the second round was reduced to the fix commits
+
+### Findings
+- [x] (must-fix) A survey line the navigator recorded failed (`SetTaskFailed` also marks it done) could pass the mission check; now `line_reached` rejects a failed status and needs the end of the line — `marine_simulation/scripts/demo_boats_selftest.py` (codex, confirmed by the live four-boat failure where the line was marked done after 18 m)
+- [x] (must-fix) Returning to manual and clearing the mission ran only on normal completion; now in a `finally` — `demo_boats_selftest.py` check_nav_mission (codex)
+- [x] (suggestion) mission command repeated every 15 s clears and re-sends the tasks; now every 60 s — `demo_boats_selftest.py` (Lens A)
+- [x] (suggestion) `autonomous` published once; now with each command — `demo_boats_selftest.py` (Lens A)
+- [x] (suggestion) check timeouts not honoured when nav2 is down — `demo_boats_selftest.py` (Lens A)
+- [x] (suggestion) default startup timeout too short with `--nav`; now 240 s — `demo_boats_selftest.py` (Lens A)
+- [x] (suggestion) `converge` did not validate its regular expressions — `launch_manager_proto/cli.py` (Lens A)
+- [x] (suggestion) params file written before checks that can refuse the start — `demo_boats_launch.py` (Lens A)
+- [x] (suggestion) `write_params` trusted any file under the hashed name and could leave a temporary — `demo_nav.py` (Lens B)
+- [x] (suggestion) README: manager READY does not cover nav2; the standalone guard does not cover a respawned mission_manager — `marine_simulation/README.md` (Lens B; documented, not changed)
+- [ ] (suggestion) keep the standalone guard alive for the nav case or add a read-only nav2 state check to READY — `demo_boats_launch.py` (Lens B; left open: the manager path is the demo's, Stage 2's watchdog will see an unavailable navigator)
+
+Specialists: static analysis (pre-commit flake8 on every commit, passed), governance (ADR-0008 headers present, ADR-0009 no new dependency, ADR-0013 entries, consequences: README, .agents/README.md, plan, tests done), plan drift (resolution/size delta, SurveyPattern self-test and the `check_multi_boat_graph.py` no-change are recorded in the plan), two Claude adversarial passes (Lens A, Lens B), cross-model (codex ran; gemini failed: headless tool denial, exit 1).
