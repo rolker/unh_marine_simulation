@@ -19,6 +19,7 @@ import pathlib
 import time
 
 from asv_sim.asv_sim_node import AsvSim
+from asv_sim_msgs.msg import Collision
 from asv_sim_msgs.srv import SetPose
 import pytest
 import rclpy
@@ -26,6 +27,7 @@ from rclpy.executors import SingleThreadedExecutor
 from sensor_msgs.msg import NavSatFix
 from std_msgs.msg import Bool
 from std_msgs.msg import Float32
+import synthetic_grid
 import yaml
 
 DEMO_CONFIG = pathlib.Path(__file__).resolve().parents[1] / 'config' / 'demo.yaml'
@@ -44,10 +46,11 @@ MODELS = {'alpha': 'demo', 'bravo': 'demo', 'charlie': 'demo_fast'}
 FAST_MAX_SPEED = 4.0
 
 
-def _write_platform_file(path):
+def _write_platform_file(path, extra=None):
     # asv_sim defaults to a 1 m/s current; drift would swamp the isolation
     # checks, so switch it off.
     params = {'platforms': list(PLATFORMS), 'environment.current.speed': 0.0}
+    params.update(extra or {})
     demo = yaml.safe_load(DEMO_CONFIG.read_text())['asv_sim']['ros__parameters']
     for key, value in demo.items():
         params[key.replace('models.demo.', 'models.demo_fast.', 1)] = value
@@ -71,9 +74,9 @@ def _metres(a, b):
 class Rig:
     """The node under test, a driver node and the spin helper."""
 
-    def __init__(self, tmp_path):
+    def __init__(self, tmp_path, extra=None):
         platform_file = tmp_path / 'platforms.yaml'
-        _write_platform_file(platform_file)
+        _write_platform_file(platform_file, extra)
         rclpy.init(args=[
             '--ros-args',
             '--params-file', str(DEMO_CONFIG),
@@ -95,6 +98,9 @@ class Rig:
         self.executor.add_node(self.driver)
 
         self.fixes = {}
+        self.collisions = []
+        self.driver.create_subscription(
+            Collision, '/asv_sim/collisions', self.collisions.append, 10)
         self.throttle_pubs = {}
         self.reset_pubs = {}
         self.pose_clients = {}
@@ -210,10 +216,14 @@ def test_set_pose_moves_only_that_platform(rig):
         assert _metres(before[name], rig.fresh_fix(name)) < 1.0, name
 
 
-def test_set_pose_heading_is_a_compass_heading(rig):
+def test_set_pose_heading_is_a_compass_heading(quiet_rig):
     # Heading 0 is north. A yaw sign error (heading 180) or a missing 90 degree
-    # offset (heading 90, due east) both fail one of the two bounds; the
-    # simulator's own noise stays far inside them.
+    # offset (heading 90, due east) both fail one of the two bounds. Dynamics
+    # noise is off: the yaw noise is a random walk of the heading (measured:
+    # median 12.6 degrees, 95th percentile 36 degrees after 5 s, 12 % of runs
+    # beyond the 26.6 degrees the east/north bound allows), so with it on this
+    # check failed in a few percent of runs for no reason of its own.
+    rig = quiet_rig
     start = (43.0800, -70.7000)
     rig.set_pose('charlie', start[0], start[1], 0.0)
     rig.drive('charlie', 1.0, 5.0)
@@ -221,7 +231,7 @@ def test_set_pose_heading_is_a_compass_heading(rig):
     east = (end[1] - start[1]) * 111320.0 * math.cos(math.radians(start[0]))
     north = (end[0] - start[0]) * 111320.0
     assert north > 2.0
-    assert abs(east) < north / 2.0
+    assert abs(east) < north / 10.0
 
 
 def test_set_pose_stores_a_heading_in_zero_to_360(rig):
@@ -336,3 +346,148 @@ def test_demo_config_keys_are_declared_model_parameters(rig):
     assert keys
     undeclared = [k for k in keys if not rig.sim.has_parameter(k)]
     assert undeclared == []
+
+
+# contact (issue #111) -------------------------------------------------------
+
+# Dynamics noise would turn a head-on meeting into a glancing one that slides
+# past; the contact tests want it exact.
+NO_NOISE = {'models.%s.%s_noise' % (m, k): 0.0
+            for m in ('demo', 'demo_fast')
+            for k in ('thrust', 'yaw_rate', 'drag')}
+
+
+@pytest.fixture
+def quiet_rig(tmp_path):
+    r = None
+    try:
+        r = Rig(tmp_path, NO_NOISE)
+        r.wait_for_fixes()
+        yield r
+    finally:
+        if r is not None:
+            r.close()
+
+
+def _east_of(lat, lon, metres):
+    return lat, lon + metres / (111320.0 * math.cos(math.radians(lat)))
+
+
+def _drive_both(rig, seconds, a_throttle, b_throttle):
+    deadline = time.monotonic() + seconds
+    while time.monotonic() < deadline:
+        rig.throttle_pubs['alpha'].publish(Float32(data=a_throttle))
+        rig.throttle_pubs['bravo'].publish(Float32(data=b_throttle))
+        rig.executor.spin_once(timeout_sec=0.05)
+
+
+def test_boats_block_each_other_through_the_node_and_report_it(quiet_rig):
+    rig = quiet_rig
+    lat, lon = 43.0700, -70.7100
+    rig.set_pose('alpha', lat, lon, 90.0)
+    rig.set_pose('bravo', *_east_of(lat, lon, 14.0), 270.0)
+    _drive_both(rig, 8.0, 1.0, 1.0)
+    rig.spin(0.5)
+    alpha = rig.fresh_fix('alpha')
+    bravo = rig.fresh_fix('bravo')
+    gap = _metres(alpha, bravo)
+    # bow to bow: the hulls are 4 m long, so the centres stay 4 m apart
+    assert 3.6 < gap < 4.6, gap
+    events = [(e.platform, e.other) for e in rig.collisions]
+    assert events and set(events) <= {('alpha', 'bravo'), ('bravo', 'alpha')}
+    assert all(e.kind == Collision.KIND_BOAT for e in rig.collisions)
+    assert len(rig.collisions) <= 4, 'one event per contact, not per step'
+
+
+def test_a_boat_can_back_out_through_the_node(quiet_rig):
+    rig = quiet_rig
+    lat, lon = 43.0700, -70.7100
+    rig.set_pose('alpha', lat, lon, 90.0)
+    rig.set_pose('bravo', *_east_of(lat, lon, 14.0), 270.0)
+    _drive_both(rig, 8.0, 1.0, 1.0)
+    before = _metres(rig.fresh_fix('alpha'), rig.fresh_fix('bravo'))
+    _drive_both(rig, 6.0, -1.0, -1.0)
+    after = _metres(rig.fresh_fix('alpha'), rig.fresh_fix('bravo'))
+    assert after > before + 3.0
+
+
+def test_collision_boats_false_lets_boats_pass(tmp_path):
+    r = Rig(tmp_path, dict(NO_NOISE, **{'collision.boats': False}))
+    try:
+        r.wait_for_fixes()
+        lat, lon = 43.0700, -70.7100
+        r.set_pose('alpha', lat, lon, 90.0)
+        r.set_pose('bravo', *_east_of(lat, lon, 14.0), 270.0)
+        _drive_both(r, 8.0, 1.0, 1.0)
+        r.spin(0.5)
+        alpha = r.fresh_fix('alpha')
+        bravo = r.fresh_fix('bravo')
+        assert alpha[1] > bravo[1], 'they passed through each other'
+        assert r.collisions == []
+    finally:
+        r.close()
+
+
+def test_an_unreadable_collision_grid_refuses_to_start(tmp_path):
+    with pytest.raises(Exception):  # noqa: B017 - the GDAL error type
+        Rig(tmp_path, {'collision.grid_file': str(tmp_path / 'absent.tif')})
+    assert not rclpy.ok()
+
+
+def test_the_grid_stops_a_boat_at_the_shore_through_the_node(tmp_path):
+    grid = str(tmp_path / 'truth.tif')
+    lat, lon = synthetic_grid.write_grid(grid)
+    # The node reads the clock for its tide, and the synthetic land (-2 m) is
+    # flooded by a tide above 2.4 m: pin the tide at 0 so the test does not
+    # depend on the time of day.
+    flat_tide = {'environment.tide.constituents.amplitudes': [0.0],
+                 'environment.tide.constituents.speeds': [0.0],
+                 'environment.tide.constituents.phases': [0.0],
+                 'environment.tide.msl_above_mllw': 0.0}
+    r = Rig(tmp_path, dict(NO_NOISE, **flat_tide,
+                           **{'collision.grid_file': grid}))
+    try:
+        r.wait_for_fixes()
+        r.set_pose('alpha', *_east_of(lat, lon, 20.0), 90.0)
+        r.drive('alpha', 1.0, 18.0)
+        r.spin(0.5)
+        east = r.fresh_fix('alpha')
+        distance = _metres((lat, lon), east)
+        # the shore is 50 m east of the origin; the bow is 2 m ahead of the
+        # reference point, the grid is a degree off true east
+        assert 40.0 < distance < 51.5, distance  # 20 m start + run
+        kinds = {e.kind for e in r.collisions}
+        assert kinds == {Collision.KIND_TERRAIN}
+    finally:
+        r.close()
+
+
+ENC_DIR = pathlib.Path(__file__).resolve().parents[1] / 'enc'
+
+
+def test_the_node_reads_charted_objects_from_a_cell_directory(tmp_path):
+    r = Rig(tmp_path, {'collision.enc_dir': str(ENC_DIR),
+                       'collision.enc_footprints': ['BOYLAT=2.0', 'UWTROC=0']})
+    try:
+        r.wait_for_fixes()
+        sources = r.sim.collisions.sources
+        objects = [s for s in sources
+                   if type(s).__name__ == 'ChartedObjectSource']
+        assert len(objects) == 1
+        klasses = {p.klass for p in objects[0].primitives}
+        assert 'SLCONS' in klasses and 'UWTROC' not in klasses
+        assert {p.radius for p in objects[0].primitives
+                if p.klass == 'BOYLAT'} == {2.0}
+    finally:
+        r.close()
+
+
+@pytest.mark.parametrize('extra', [
+    {'collision.enc_dir': '/no/such/enc'},
+    {'collision.enc_dir': str(ENC_DIR),
+     'collision.enc_footprints': ['LNDARE=1']},
+])
+def test_unusable_charted_object_settings_refuse_to_start(tmp_path, extra):
+    with pytest.raises((FileNotFoundError, ValueError)):
+        Rig(tmp_path, extra)
+    assert not rclpy.ok()

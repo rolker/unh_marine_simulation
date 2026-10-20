@@ -23,3 +23,6 @@ asv_sim:
     models.coastal_surveyor.max_rudder_angle:     30.0
     models.coastal_surveyor.rudder_distance:      6.0
     models.coastal_surveyor.rudder_coefficient:   0.25
+
+    # models.<name>.length, beam and draft (contact footprint, issue #111) are not
+    # set here: the 4.0 x 1.7 x 0.4 m defaults apply and are NOT verified for this boat.

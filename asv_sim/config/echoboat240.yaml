@@ -68,3 +68,6 @@ asv_sim:
     models.echoboat240.thrust_noise:        0.1
     models.echoboat240.yaw_rate_noise:      0.1
     models.echoboat240.drag_noise:          0.1
+
+    # models.<name>.length, beam and draft (contact footprint, issue #111) are not
+    # set here: the 4.0 x 1.7 x 0.4 m defaults apply and are NOT verified for this boat.

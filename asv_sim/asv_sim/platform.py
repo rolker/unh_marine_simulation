@@ -92,7 +92,8 @@ class Platform:
 
         self.dynamics = asv_sim.dynamics.Dynamics(
             self.model, node.environment, start, name=self.name,
-            logger=node.get_logger())
+            logger=node.get_logger(), contact=node.collisions)
+        node.collisions.register(self.dynamics)
 
         self.diag_publishers = {}
         self.have_commands_pub = node.create_publisher(
