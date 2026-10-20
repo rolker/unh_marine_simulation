@@ -144,3 +144,21 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [ ] (suggestion, B) global gdal.UseExceptions inside the node (the 20 Hz projection can raise; Dynamics' contact try/except keeps the step) — `charts.py`
 - [ ] (suggestion, B) find_cells has no bound; a whole ENC_ROOT is parsed before the span check refuses it (loud, slow) — `charts.py`
 - [ ] (suggestion, A) areas are hollow: a boat placed inside one is not pushed out (documented) — `charts.py`
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-20 13:32 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-111 at `298c69c`
+**Mode**: pre-push (reduced second round on the #113 fix commits)
+**Depth**: Light (one Claude adversarial pass, Sonnet)
+**Must-fix**: 1 | **Suggestions**: 3
+**Round**: 4 of the branch (round 2 of #113) | **Ship**: recommended — the must-fix was a vacuous test, fixed with tests that fail on the old behaviour
+
+### Findings
+- [x] (must-fix) the two-walls test passed with the old class keying; replaced by a corner test that counts contacts and fails on the old keying — `test_charts.py`
+- [x] (suggestion) the unreadable-cell check was dead code under GDAL exceptions; now wraps RuntimeError into OSError naming the cell, test asserts the type — `charts.py`
+- [x] (suggestion) span test named only a cell prefix; asserts both cells — `test_charts.py`
+- [x] (suggestion) the speed rule compounded per contact over hops and passes; the most restrictive contact now decides, with a buoy-grinding test — `collision.py`
