@@ -163,6 +163,32 @@ def test_the_acknowledgement_needs_the_set_and_its_line():
     assert not selftest.tasks_acknowledge([], 't')
 
 
+def test_the_watchdog_arguments_per_scenario():
+    assert selftest.watchdog_arguments(False, None) == []
+    assert selftest.watchdog_arguments(True, None) == ['enable_watchdog:=false']
+    pad = selftest.watchdog_arguments(True, 'pad')
+    assert 'idle_timeout:=6' in pad and 'missing_pad_grace:=600' in pad
+    assert selftest.watchdog_arguments(True, 'attract') == ['missing_pad_grace:=8']
+    cmd = selftest.launch_command(None, None, False, [], nav=True, watchdog='pad')
+    assert 'enable_nav:=true' in cmd and 'idle_timeout:=6' in cmd
+    assert 'enable_watchdog:=false' not in cmd
+    demo = selftest.launch_command(None, None, False, [], demo=True, nav=True)
+    assert demo.index('--nav') < demo.index('enable_watchdog:=false')
+
+
+def test_the_watchdog_arguments_are_the_self_tests_own():
+    assert selftest.overridden_launch_args(['idle_timeout:=1', 'line_spacing:=60']) == [
+        'idle_timeout:=1']
+    assert selftest.overridden_launch_args(['enable_watchdog:=true'], True) == [
+        'enable_watchdog:=true']
+
+
+def test_a_pad_at_rest_is_a_message_the_watchdog_takes_for_rest():
+    msg = selftest.rest_joy()
+    assert list(msg.axes) == selftest.PAD_REST_AXES and not any(msg.buttons)
+    assert len(msg.buttons) == selftest.BUTTONS
+
+
 def test_a_failed_line_is_not_a_completed_line_even_when_it_is_marked_done():
     assert selftest.line_reached(150.0, 160.0, 12.0, '')
     assert selftest.line_reached(180.0, 160.0, 20.0, '')               # where the boat settles
