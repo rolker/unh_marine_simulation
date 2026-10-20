@@ -345,8 +345,8 @@ checked there. "Setting up a computer (once)" above is the per-user part (the fi
    of the USB controller, so fill `joysticks.yaml` on this computer with all four pads in their
    final ports (see Gamepads). Or use the plug-order file
    `config/demo_joysticks_plug_order.yaml`, which binds `/dev/input/js0` to `js3` in plug
-   order and needs no labelled ports (after #107 merges). The desktop icon comes from
-   `install_demo_shortcut.sh` (also after #107 merges).
+   order and needs no labelled ports. The desktop icon comes from
+   `install_demo_shortcut.sh` (see "Helper card").
 7. **First starts.** CAMP first (see "First start on a computer"), then rqt: it imports the
    shipped perspective by itself on a first start (see "rqt and the coverage plugin") and shows
    Survey Coverage and the four Ping Profiles; rearrange them once and close rqt. Then the
