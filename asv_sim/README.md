@@ -73,14 +73,20 @@ step and a boat cannot tunnel through a shore or another hull.
   starts later does not see earlier events. The node also logs one INFO line.
   `closing_speed` is the closing speed of the attempted motion, current
   included.
+- **Charted objects.** With `collision.enc_dir`, the piers, pontoons, piles,
+  buoys, beacons, rocks and wrecks of S-57 ENC cells block boats the same way
+  (see below). A contact is named by the S-57 class in the event's `other`.
 - **More obstacle sources.** `Collisions.sources` is a list of objects with
-  `correct(step, lat, lon)`; boats and terrain are two of them. Another source
-  (for example charted objects, issue #113) is appended to the list.
+  `correct(step, lat, lon)`; boats, charted objects and terrain are three of
+  them, run in that order (the bottom has the last word). Another source is
+  appended to the list.
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
 | `collision.boats` | `true` | Boats block each other; `false` lets them pass through |
 | `collision.grid_file` | `''` | Bathymetry GeoTIFF (as `mbes_sim.bathy_grid` reads it); empty: no terrain collision. Read once at start; an unreadable file stops the node |
+| `collision.enc_dir` | `''` | One S-57 `.000` cell or a directory of cells (flat, or one directory per cell as in an ENC_ROOT); empty: no charted objects. Read once at start with GDAL's OGR S-57 driver; an unreadable path, a class override that is not known, or cells more than half a degree apart stop the node. Point it at the cells of the area only (overlapping cells of different scales would all be read) |
+| `collision.enc_footprints` | `[]` | Overrides `CLASS=metres` of the footprints below (radius of a point, half width of a line); `0` leaves the class out, e.g. `BOYLAT=1.5`, `SLCONS=0` |
 | `models.<name>.length` | `4.0` m | Hull length (0.01 to 1000); must not be less than `beam` |
 | `models.<name>.beam` | `1.7` m | Hull width |
 | `models.<name>.draft` | `0.4` m | Keel depth; the boat grounds where the water is shallower |
@@ -91,3 +97,38 @@ compilation.
 
 The defaults are the C-Worker 4 (`cw4.yaml`). `coastal_surveyor`, `drix` and
 `echoboat240` use them without having been checked against those boats.
+
+### Charted objects
+
+`asv_sim/charts.py` reads the S-57 cells and turns the features of the classes
+below into circles (points) and segments with a half-width (lines; the rings of
+areas, which are hollow: a boat cannot cross the ring, the inside is never
+entered). The classes follow the classification of `marine_charts`'s
+`S57Dataset::getGrid`, the one behind the real boats' costmap: what it rasterises
+as lethal, plus the discrete hazards. Buoys and beacons are ignored there but a
+boat can hit them, so they are here. Land (`LNDARE`, `COALNE`) is left to the
+bathymetry grid.
+
+| S-57 class | Footprint (m) | Meaning |
+|---|---|---|
+| `SLCONS` | 1.0 | shoreline construction: piers, quays, walls |
+| `PONTON`, `FLODOC` | 0.5 | pontoons and floating docks |
+| `PILPNT` | 0.5 | pile |
+| `PYLONS` | 1.5 | pylon, bridge support |
+| `CAUSWY`, `DAMCON`, `DYKCON`, `GATCON`, `FSHFAC`, `HULKES`, `OBSTRN` | 1.0 | causeway, dam, dyke, gate, fishing facility, hulk, obstruction |
+| `WRECKS` | 1.5 | wreck |
+| `UWTROC` | 1.0 | underwater or awash rock |
+| `BCNCAR`, `BCNISD`, `BCNLAT`, `BCNSAW`, `BCNSPP` | 0.75 | beacons |
+| `BOYCAR`, `BOYINB`, `BOYISD`, `BOYLAT`, `BOYSAW`, `BOYSPP` | 1.0 | buoys |
+
+`UWTROC`, `WRECKS` and `OBSTRN` with a charted `VALSOU` block only while that depth
+plus the tide is less than the boat's draft; without one (the costmap assumes the
+same) and every other class, at every tide. The footprints are choices made here, not
+chart data; a pontoon or pier outline of the chart is thin, so the half-width is
+what makes it a thing a hull can hit. Frame: an azimuthal equidistant projection
+centred on the loaded data (below a centimetre per kilometre within the half
+degree limit); the per-class counts are logged at start.
+
+`enc/` holds the two harbour-scale NOAA cells that cover the demo area, installed
+with the package (about 2.3 MB), so a machine needs nothing under `ENC_ROOT`; see
+`enc/README.md` for editions and source.

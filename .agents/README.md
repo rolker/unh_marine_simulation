@@ -21,8 +21,9 @@
 ```
 unh_marine_simulation/
 ├── asv_sim/                           # ASV dynamics simulator
-│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform, collision)
+│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform, collision, charts)
 │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
+│   ├── enc/                           #   NOAA S-57 cells US5PSMCC/US5PSMCD (+ update, README, user agreement) for charted-object collision
 │   └── test/                          #   Linting, tide tests, test_multi_platform.py (in-process)
 ├── asv_sim_msgs/                      # Service and message definitions
 │   ├── msg/Collision.msg
@@ -176,9 +177,13 @@ Known build issues:
 | Parameter | Type | Default | Range | Effect |
 |-----------|------|---------|-------|--------|
 | `collision.boats` | bool | `true` | | Boats block each other; `false` lets them pass through |
+| `collision.enc_dir` | string | `''` | | One S-57 `.000` or a directory of cells, read once with OGR (`asv_sim/charts.py`); empty means no charted objects; unreadable path, unknown class override or cells over 0.5 degree apart raise at start |
+| `collision.enc_footprints` | string array | `['']` | | `CLASS=metres` overrides (radius or half width; 0 drops the class); the default is the table in `asv_sim/README.md` |
 | `collision.grid_file` | string | `''` | | Bathymetry GeoTIFF read once at start with `mbes_sim.bathy_grid.BathyGrid`; empty means no terrain collision; an unreadable file raises at start |
 | `models.<name>.length` | double, m | `4.0` | 0.01 to 1000, not less than `beam` | Hull length (capsule footprint) |
 | `models.<name>.beam` | double, m | `1.7` | 0.01 to 1000, not more than `length` | Hull width |
 | `models.<name>.draft` | double, m | `0.4` | 0.01 to 1000 | The boat grounds where grid depth + tide is less than this |
+
+- **Charted objects (issue #113) come from OGR on the S-57 cells, not from the C++ `s57_grids` stack (asv_sim keeps its dependency surface small; `python3-gdal` is already `mbes_sim`'s).** The classes follow `marine_charts`'s `S57Dataset::getGrid` lethal list plus the hazards, and add buoys and beacons (the costmap ignores them). Land is left to the bathymetry grid. `UWTROC`/`WRECKS`/`OBSTRN` with a `VALSOU` block only while depth + tide < draft; without one they block at every tide. The cells are installed with the package (`asv_sim/enc`, about 2.3 MB; US5PSMCD ships with its `.001` update, which OGR applies) so the demo needs nothing under `ENC_ROOT`; the demo launch passes `share/asv_sim/enc` (argument `charted_objects`). `collision.enc_dir` must hold the cells of the area only: overlapping cells of different scales are all read. The footprints are choices, not chart data.
 
 Topic: `/asv_sim/collisions` (`asv_sim_msgs/msg/Collision`, reliable, depth 10), one message per contact onset.
