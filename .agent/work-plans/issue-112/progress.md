@@ -19,3 +19,22 @@ issue: 112
 - [ ] Decide where the watchdog lives with the shared-interface consequence written down (new node in this repo recommended; a `joy_to_helm`/`helm_manager` feature would put idle-to-autonomous on real boats).
 - [ ] The launch manager's `boats` lifecycle group matches `^/(boat)/` and would also drive nav2's self-managed lifecycle nodes (second writer); the plan has to exclude them.
 - [ ] Name the schedule risk: the event is 2026-10-23/24; `enable_nav` must stay off by default until a rehearsal passes.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-20 11:40 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-112/plan.md` at `127f042`
+**Branch**: feature/issue-112 at `127f042`
+**Phases**: 3 (nav stack per boat; watchdog and section mission; attract mode and polish)
+
+### Open questions
+- [ ] Staging: three PRs, nav default off until rehearsed, or stages 1+2 combined for the event?
+- [ ] Watchdog home: new node in this repo (recommended) or a joy_to_helm/helm_manager feature?
+- [ ] Mission kind: pre-planned lines (recommended) or SurveyArea through manda_coverage?
+- [ ] Pad buttons: keep inert (no command_bridge) or add command_bridge_receiver per boat?
+- [ ] Hand-back: pause with override hover and resume (recommended) or restart the section?
+- [ ] Chart layer: drop it (recommended) or run s57_grids per boat?
+- [ ] Shared map origin: leave per-boat (recommended) or set one?
+- [ ] On completion of a section: repeat (recommended) or hold?
