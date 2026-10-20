@@ -310,13 +310,25 @@ def check_datum_grids(root: str = DATUM_ROOT) -> None:
 
 
 def asv_sim_parameters(
-        boats: Sequence[Boat], tide_speed_factor: float, current_speed: float) -> dict:
-    """Return the ``asv_sim`` parameters for the selected boats."""
+        boats: Sequence[Boat], tide_speed_factor: float, current_speed: float,
+        grid_file: str = '', enc_dir: str = '') -> dict:
+    """
+    Return the ``asv_sim`` parameters for the selected boats.
+
+    ``grid_file`` is the bathymetry the sonars sample; ``asv_sim`` grounds the boats on it
+    (empty: boats still block each other but the sea floor and shore do not stop them).
+    ``enc_dir`` holds the S-57 cells whose piers, pontoons, piles, buoys, rocks and wrecks
+    block the boats (empty: charted objects do not).
+    """
     params = {
         'platforms': [b.name for b in boats],
         'environment.tide.speed_factor': tide_speed_factor,
         'environment.current.speed': current_speed,
     }
+    if grid_file:
+        params['collision.grid_file'] = grid_file
+    if enc_dir:
+        params['collision.enc_dir'] = enc_dir
     for b in boats:
         prefix = 'platforms.%s.' % b.name
         params[prefix + 'model'] = 'demo'
@@ -628,6 +640,13 @@ def launch_setup(context, *args, **kwargs):
         'enable_nav': enable_nav,
     }
     tide_speed_factor = parse_tide_speed_factor(arg('tide_speed_factor'))
+    enc_dir = ''
+    if parse_bool(arg('charted_objects'), 'charted_objects'):
+        enc_dir = os.path.join(get_package_share_directory('asv_sim'), 'enc')
+        if not os.path.isdir(enc_dir):
+            raise RuntimeError(
+                'charted_objects is on but %s is not installed; rebuild asv_sim or launch '
+                'with charted_objects:=false' % enc_dir)
     current_speed = parse_float(arg('current_speed'), 'current_speed', low=0.0)
     check_datum_grids()
 
@@ -661,7 +680,8 @@ def launch_setup(context, *args, **kwargs):
             package='asv_sim', executable='asv_sim', name='asv_sim', emulate_tty=True,
             parameters=[
                 PathJoinSubstitution([FindPackageShare('asv_sim'), 'config', 'demo.yaml']),
-                asv_sim_parameters(boats, tide_speed_factor, current_speed),
+                asv_sim_parameters(
+                    boats, tide_speed_factor, current_speed, mbes_grid_file, enc_dir),
             ],
             remappings=asv_sim_remappings(boats)),
     ]
@@ -703,6 +723,9 @@ def generate_launch_description():
         declare('tide_speed_factor', TextSubstitution(text='10'),
                 'Tide speed multiplier (10 = ~75 min cycle, 3600 = ~12 sec cycle, '
                 '1 = real-time, 0 = a frozen tide).'),
+        declare('charted_objects', TextSubstitution(text='true'),
+                'true: piers, pontoons, piles, buoys, beacons, rocks and wrecks of the ENC cells '
+                'installed with asv_sim block the boats; false: they do not.'),
         declare('current_speed', TextSubstitution(text='0.0'),
                 'Water current in m/s. asv_sim itself defaults to 1.0 m/s toward 090, '
                 'which drifts every boat; the demo defaults to none.'),

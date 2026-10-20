@@ -496,6 +496,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `joystick_config` | `config/demo_joysticks.yaml` | Joystick device links; copy and edit per host. |
 | `enable_joysticks` | `true` | Start a `joy_linux` driver per boat. `joy_to_helm` runs either way, so `sensor_msgs/Joy` on `<boat>/joy` drives the boat. |
 | `enable_nav` | `false` | Run the navigation stack on every boat: `mission_manager` and the real `ben_project11` nav2 bring-up. See [The navigation stack](#the-navigation-stack). |
+| `charted_objects` | `true` | The piers, pontoons, piles, buoys, beacons, rocks and wrecks of the ENC cells installed with `asv_sim` (`share/asv_sim/enc`) block the boats; `false` leaves them out. |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
 | `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why, on stderr). An explicit path must be a file. |
@@ -827,13 +828,29 @@ namespace; `cube_bathymetry` publishes a relative `grid` in `<boat>/sensors/mbes
 `water_surface_frame` and `water_surface_boat_frame`. Starting the scorer and this node
 together with the boats is the single demo launch (issue #94).
 
+### Boats block each other and the shallows
+
+The demo boats cannot pass through each other and cannot go where the water is
+shallower than their draft (0.4 m) at the current tide: land and no-data cells
+of the truth grid are walls. They are indestructible; a contact only stops
+them, and they can back away. The launch hands `asv_sim` the same grid file the
+sonars sample (`collision.grid_file`). `demo.yaml` gives the `demo` model a
+4.0 x 1.7 m hull, 0.4 m draft. The demo tide is sped up (`tide_speed_factor`),
+so the shallows move in and out within a round; at low water a boat can be
+aground and must back out. Contacts are announced on `/asv_sim/collisions`
+(`asv_sim_msgs/msg/Collision`). To let boats pass through each other, start
+`asv_sim` with `collision.boats:=false` (not a launch argument yet; set it in a
+copy of `demo.yaml`). Charted objects (piers, pontoons, piles,
+buoys, beacons, rocks, wrecks of the S-57 cells in `asv_sim/enc`) block the boats too
+(`charted_objects:=false` turns them off); a contact names the S-57 class in the event. Details: `asv_sim/README.md`.
+
 ### Known limits
 
 - There is no bridge or command bridge, so the pad's mode buttons (`joy_to_helm` sends them to `marine/send_command`, which nothing receives) do nothing, with the navigation stack on or off. A boat leaves `manual` only when something publishes on `<boat>/piloting_mode`.
 - With the navigation stack on, nav2 knows no land and no other boat (no chart layer, no obstacle layer): a mission that crosses land or a boat is driven anyway.
 - The tide topic `/asv_sim/environment/tide_level` is shared by every boat on purpose.
 - `asv_sim`'s `set_pose` service and `sim_reset` topic work per boat (they were both broken before issue #88).
-- Four `mbes_sim` nodes each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.
+- Four `mbes_sim` nodes and `asv_sim` each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.
 
 ### Tests
 
