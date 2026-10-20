@@ -157,6 +157,21 @@ symlink, and only when they hold the marker file the demo writes. The file is
 `config/demo_camp_profile.conf` (OpenStreetMap as the only background map) plus,
 generated at launch:
 
+- **the live coverage layers' colormap and range.** The profile's `[LiveCoverageLayer]` section
+  (not a CAMP section: it is copied into every boat's layer) seeds each layer with
+  `colormap=viridis` and a **manual** range of -59.4 to -29.4 m, written on every start (what
+  the operator changes in CAMP's colormap menu is not kept, only the window and view are). CAMP
+  reads these keys per layer in `SonarLiveCacheLayer::readSettings`: `colormap`, `range_mode`
+  (`manual`; without it CAMP tracks the data), `range_min`, `range_max`, `visible`,
+  `live_enabled`. The numbers are negative because the live layer colours the tiles' `depth`
+  band, which is the seabed's WGS84 ellipsoid height in metres, positive up (see the
+  `cube_bathymetry` README), not a depth: over 17 m of water at Portsmouth it reads about -46 m.
+  The sea surface is at about -29.4 m there (measured from a demo run's tile cache against the
+  chart grid), so -29.4 down to -59.4 is 0 to 30 m of water, the Ping Profile's range, with the
+  deep end first: viridis then runs dark (deep) to light yellow (shallow), a perceptually uniform
+  ramp whose luminance rises monotonically. The surface height is a property of the Portsmouth
+  site (geoid separation), so another site needs its own two numbers.
+
 - **what CAMP remembers.** When CAMP closes it saves its window (`MainWindow/geometry`,
   `MainWindow/state`, which include maximised or not) and its map view
   (`MainWindow/mapCenter`, `MainWindow/mapScale` and the `[MapView]` section). On every start
