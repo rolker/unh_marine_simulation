@@ -162,3 +162,21 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [x] (suggestion) the unreadable-cell check was dead code under GDAL exceptions; now wraps RuntimeError into OSError naming the cell, test asserts the type — `charts.py`
 - [x] (suggestion) span test named only a cell prefix; asserts both cells — `test_charts.py`
 - [x] (suggestion) the speed rule compounded per contact over hops and passes; the most restrictive contact now decides, with a buoy-grinding test — `collision.py`
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-20 13:32 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-111 at `b7cf448`
+**Plan**: `.agent/work-plans/issue-111/plan.md` steps 12 to 16 (charted objects, #113, moved into this PR by Roland on 2026-10-20), kept in sync
+
+### Verification
+- asv_sim pytest: 163 tests, 162 passed, 1 skipped; test_charts.py (29 tests) is new; charted-object node tests in test_multi_platform.py
+- colcon test, all 11 simulation packages: 1244 tests, 18 failures, all baseline lint in untouched files (marine_simulation launch files, portsmouth_nh_gazebo) plus the asv_sim_msgs xmllint on the element order of package.xml that fails identically before this branch
+- demo_boats_selftest.py --start-launch --boats bluefin,clownfish with charted objects (7785 primitives) and terrain on: 12 of 12 checks passed
+- headless on the real cells and the demo truth grid: Cod Rock Lighted Buoy 5 stops a boat head-on 3.0 m from its centre and the boat backs 13.9 m away; a glancing boat 1.3 m off the line slides past (1.85 m clear); a 54 m charted shoreline construction in open water at 43.072184, -70.711321 stops a boat with the bow at its edge (3.0 m from its centre line, event SLCONS) and the boat backs 13.9 m away
+- the node-level shore test depended on the clock through the tide (high water flooded the synthetic land); the tide is now pinned
+
+### Open questions
+- [ ] No open questions.
