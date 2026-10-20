@@ -665,3 +665,22 @@ def test_between_a_boat_and_the_shore_the_shore_wins(mdl, world):
     rig.add('b', 40.0, 0.0, 90.0, frozen=True)
     rig.run(20.0, {'a': 1.0})
     assert bow_east(rig, a) <= SHORE_EAST + TOL
+
+
+def test_a_boat_sliding_along_the_shore_keeps_its_heading_and_yaw_rate(
+        mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 48.9, 0.0, 0.0)
+    prev = (a.latitude, a.longitude)
+    # moved 0.3 m east, so its side is now over land, while turning through
+    # north (6.28 rad to 0.01 rad)
+    a.latitude, a.longitude = collision.move_en(
+        prev[0], prev[1], 0.3, 0.0)
+    a.heading = 0.01
+    a.speed = 1.0
+    a.yaw_rate = 0.2
+    rig.collisions.resolve(a, prev[0], prev[1], ns(1.0), 0.05,
+                           last_heading=6.28)
+    assert rig.events, 'the test must make contact'
+    assert a.heading == 0.01
+    assert a.yaw_rate == 0.2

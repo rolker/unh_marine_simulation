@@ -375,13 +375,15 @@ class TerrainSource:
                 candidates.append((slid, step.prev_heading))
         candidates.append(((0.0, 0.0), step.prev_heading))
         for (e, n), heading in candidates:
-            if heading == step.prev_heading and (e, n) == (0.0, 0.0) or \
-                    acceptable(self.clearance(frame, e, n, step, heading)):
+            # The last candidate (stay, old heading) is where the boat was:
+            # always acceptable, so the loop always returns.
+            stay = heading == step.prev_heading and (e, n) == (0.0, 0.0)
+            if stay or acceptable(
+                    self.clearance(frame, e, n, step, heading)):
                 step.heading = heading
                 new_lat, new_lon = move_en(
                     step.prev[0], step.prev[1], e, n)
                 return new_lat, new_lon, [contact]
-        return step.prev[0], step.prev[1], [contact]
 
 
 class Collisions:
@@ -405,7 +407,7 @@ class Collisions:
         if grid is not None:
             self.sources.append(TerrainSource(grid))
         self._last_seen = {}
-        self._void_warned = set()
+        self._warned = set()
 
     def register(self, dyn):
         """Add a boat; its ``name`` must be unique."""
@@ -438,8 +440,16 @@ class Collisions:
         hops = max(1, min(MAX_HOPS, math.ceil(
             math.hypot(east, north) / (MAX_HOP_BEAMS * dyn.model.beam))))
 
+        if hops == MAX_HOPS and math.hypot(east, north) > (
+                MAX_HOPS * MAX_HOP_BEAMS * dyn.model.beam):
+            self._warn_once(
+                ('hops', dyn.name),
+                'asv_sim platform {!r}: one step moved {:.0f} m, more than '
+                'contact can check in {} hops; thin obstacles may be '
+                'jumped'.format(dyn.name, math.hypot(east, north), MAX_HOPS))
         position = (last_lat, last_lon)
         heading = last_heading
+        reverted = False
         contacts = {}
         in_void = False
         for k in range(1, hops + 1):
@@ -448,10 +458,14 @@ class Collisions:
             wanted = last_heading + turn * k / hops
             position, heading, found, void = self._hop(
                 dyn, position, heading, target, wanted, tide)
+            if heading != wanted:
+                reverted = True
             in_void = in_void or void
             for contact in found:
                 contacts[(contact.kind, contact.other)] = contact
         lat, lon = position
+        # Only a heading a source put back replaces the dynamics' own.
+        heading = heading % (2.0 * math.pi) if reverted else dyn.heading
         if not _finite(lat, lon, heading):
             raise ArithmeticError('contact moved the boat to a non-finite '
                                   'pose')
@@ -462,7 +476,7 @@ class Collisions:
             return
 
         attempted = (east / delta_t, north / delta_t)
-        forward = (math.sin(dyn.heading), math.cos(dyn.heading))
+        forward = (math.sin(heading), math.cos(heading))
         speed0 = dyn.speed
         closings = []
         for contact in contacts.values():
@@ -474,7 +488,7 @@ class Collisions:
             along = forward[0] * normal[0] + forward[1] * normal[1]
             if dyn.speed * along < 0.0:
                 dyn.speed *= 1.0 - along * along
-        if heading != dyn.heading:
+        if reverted:
             dyn.yaw_rate = 0.0
         dyn.latitude, dyn.longitude, dyn.heading = lat, lon, heading
         dyn.a += (dyn.speed - speed0) / delta_t
@@ -516,9 +530,9 @@ class Collisions:
             'land and shoals until it is in charted water'.format(dyn.name))
 
     def _warn_once(self, key, message):
-        if key in self._void_warned:
+        if key in self._warned:
             return
-        self._void_warned.add(key)
+        self._warned.add(key)
         if self.logger is not None:
             self.logger.warning(message)
 
