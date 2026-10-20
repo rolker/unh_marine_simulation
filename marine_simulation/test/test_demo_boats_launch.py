@@ -542,7 +542,9 @@ def test_asv_sim_gets_the_charted_objects_when_a_cell_directory_is_given(roster)
 
 def test_the_launch_hands_asv_sim_the_grid_the_sonars_use():
     text = LAUNCH.read_text()
-    assert 'asv_sim_parameters(\n                    boats, tide_speed_factor, current_speed, mbes_grid_file, enc_dir)' in text
+    call = ('asv_sim_parameters(\n                    boats, tide_speed_factor, current_speed, '
+            'mbes_grid_file, enc_dir)')
+    assert call in text
 
 
 def test_asv_sim_remappings_are_five_per_boat_and_stay_in_the_boats_namespace(roster):
