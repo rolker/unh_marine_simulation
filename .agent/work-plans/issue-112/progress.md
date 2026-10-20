@@ -122,3 +122,27 @@ Specialists: static analysis (pre-commit flake8 on every commit, passed), govern
 - Per-boat nav2 lifecycle nodes pinned from the headless run: controller_server, smoother_server, planner_server, behavior_server, manda_coverage, velocity_smoother, collision_monitor, bt_task_navigator, waypoint_follower, docking_server, local_costmap/local_costmap, global_costmap/global_costmap (24 for two boats, 48 for four, all active before and after the mission); `lifecycle_manager_navigation` is a plain node; the manager owns ten lifecycle nodes per boat (nine and `mission_manager`).
 - Load, 16 core dev computer: 2 boats 26 processes 2.1 GB (no nav) vs 50 processes 4.4 GB (nav); 4 boats 50 processes 4.5 GB vs about 100 processes 11 GB, saturating the 16 cores for about 100 s while starting. At nav2's defaults one of four boats' bring-up aborted on its 4 s bond timeout and a planner missed the 10 s acknowledge timeout on the 5.8 M-cell global costmap; `bond_timeout` 30 s and a 2 m, 2400 m global costmap fixed both (`ros2 param get` showed 30.0 on the lifecycle manager).
 - Not verified: the event computer's load; the Stage 2 watchdog (not built); nav2 behaviour at the first mission line after a very loaded start beyond the above.
+
+## Implementation
+**Status**: in-progress
+**When**: 2026-10-20 14:58 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-112 at `319afb6`
+**Stage**: 2 of 3 — checkpoint 2026-10-20 15:00 (no PR yet)
+
+### Done
+- survey_sections.py (equal-area bands, boustrophedon lines, CAMP SurveyPattern), watchdog_core.py (state machine, fake-Joy tests), scripts/demo_watchdog.py, launch arguments and demo values, selftests `--watchdog pad` and `--watchdog attract`, README and .agents/README.md, plan notes; jazzy (collision, PR 114) merged in.
+- Suite (marine_simulation, launch_manager_proto): 1035 tests, the same 8 lint failures in untouched launch files (cpplint and uncrustify pass on the new C file; cppcheck skipped, not installed).
+- Live (headless, through the manager, collision on): `--watchdog pad` 21 of 21 (2 boats); `--watchdog attract` 17 of 17 (2 boats) and 23 of 23 (4 boats, about 105 processes, 12 GB, 6 cores settled, 15 cores for the first two minutes).
+- Review round 1 ran (static, Claude Lens A and Lens B, codex; gemini failed on headless tool denial). NOT yet addressed.
+
+### Not done (exact next step: fix the must-fix items, add a test each, rerun the two selftests, reduced second round, then open the PR)
+- must-fix (watchdog_core.py): (1) an area that is set but cannot be split makes the core retry every 100 ms tick (delete the NO_AREA to NOT_LOADED lines in `_autonomous_tick`; test must count calls); (2) takeover skips clear_tasks when the state is NOT_LOADED while mission_manager still holds a plan (on_area, repeat, resends, tf_settle, command_gap): track a may-be-loaded flag set in `_send`; (3) self-test pad scenario: the pad goes silent after the single active message for longer than pad_lost_timeout (3 s), so the final check can pass on reason pad_missing; keep publishing the rest pad and assert reason idle; (4) codex: standby latch is cleared when entering autonomy (a standby helm is overridden by the idle timeout), and README claims otherwise; (5) codex: a button held when the pad appears becomes its baseline (buttons should count independent of the learned baseline); (6) codex: with no area the core still announces autonomous (plan says stay manual until an area exists).
+- suggestions: resume the rest-pad publishing; keep the first baseline across a short Joy gap; log when navigator_unavailable flips; all-lines-failed section should back off, not repeat every 10 s; compare SurveyArea stamps; cap steps and lines in survey_sections; guard the C shim offset overflow; own_tasks prefix match (ben_s1 vs ben_s10); rename Section.heading (it is the maths angle); --watchdog needs --demo (refuse early); a --watchdog/--no-watchdog option on demo_manager.py.
+- Collision: nothing special was added; the documented behaviour (nav2's progress checker aborts a held boat's line after about a minute and the navigator goes to the next line) is from the mechanism and the Stage 1 logs, NOT observed live with a boat held by a charted object.
+
+### Live-run facts
+- Only one boat per computer could ever run a navigator goal: marine_nav_bt_task_navigator opens a BT::Groot2Publisher with fixed ZeroMQ ports (1667 and 1668) on every goal, and the second boat's goal failed with "Address already in use". src/demo_zmq_ports.c is an LD_PRELOAD shim that moves each boat's nav2 ZeroMQ binds by ten ports per boat (DEMO_ZMQ_PORT_OFFSET); an upstream parameter for the port would retire it (proposed issue for unh_marine_navigation, not filed).
+- Smac hybrid could not plan the 700 m transit to a section's first line over the empty costmap; the demo uses NavFn on a 3200 m, 2 m global costmap.
+- A 14 minute four-boat attract run through the manager was inconclusive: it started with FastDDS shared-memory port errors while review jobs ran, one boat's state topic never appeared and another stayed LOADING (nav not acknowledging); not diagnosed. The short four-boat runs passed.
