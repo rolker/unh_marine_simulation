@@ -73,3 +73,10 @@ Checked against source: ben_project11 `nav2_bringup_launch.py`, `navigation_laun
 **By**: Claude Code Agent (Claude Sonnet 5.5)
 
 Folded the four must-fix findings of the plan review (mission_manager namespace, TF gate before the first mission send, selftest and watchdog conflict, unstable mission_tasks feed) and the other findings (exclude vs lookahead, costmap resolution kept, NAVIGATOR_UNAVAILABLE and NO_AREA states, send rate limit, doc and test line references) into plan.md.
+
+## Plan Revised
+**Status**: complete
+**When**: 2026-10-20 12:00 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+Roland's decisions folded into plan.md. Deliberate simplification (decision 5): hand-back is **restart the section, not pause/resume**. The `override hover` / `cancel_override` mechanics and the remaining-lines bookkeeping are dropped; a hand-over to autonomy clears and sends the whole section from the first line, and a takeover sends manual then `clear_tasks`. Stages 1 and 2 go now, nav stays off by default until rehearsed; no collision avoidance (issue 111 covers contact).
