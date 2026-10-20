@@ -30,6 +30,7 @@
 """Unit tests for the pure helpers in scripts/demo_boats_selftest.py."""
 
 import importlib.util
+import json
 import os
 import pathlib
 import subprocess
@@ -134,12 +135,51 @@ def test_stop_launch_on_an_already_exited_launch_is_quiet():
     selftest.stop_launch(proc)
 
 
+def test_nav_adds_the_launch_argument_or_the_manager_option():
+    assert 'enable_nav:=true' in selftest.launch_command(None, None, False, [], nav=True)
+    assert not any(a.startswith('enable_nav') for a in selftest.launch_command(
+        None, None, False, []))
+    assert '--nav' in selftest.launch_command(None, None, False, [], demo=True, nav=True)
+    assert '--nav' not in selftest.launch_command(None, None, False, [], demo=True)
+
+
+def test_the_mission_is_the_shape_camp_sends_and_mission_manager_reads():
+    plan = selftest.line_mission('t', (43.0, -70.7), (43.001, -70.7), 4.0)
+    (pattern,) = plan
+    assert pattern['type'] == 'SurveyPattern' and pattern['label'] == 't_set'
+    (line,) = pattern['children']
+    assert line['type'] == 'TrackLine' and line['label'] == 't_line'
+    assert [w['type'] for w in line['children']] == ['Waypoint', 'Waypoint']
+    assert line['children'][1]['latitude'] == 43.001
+    command = selftest.mission_command(plan)
+    verb, kind, payload = command.split(None, 2)
+    assert (verb, kind) == ('replace_task', 'mission_plan')
+    assert json.loads(payload) == plan
+
+
+def test_the_acknowledgement_needs_the_set_and_its_line():
+    assert selftest.tasks_acknowledge(['done_hover', 't_set', 't_set/t_line'], 't')
+    assert not selftest.tasks_acknowledge(['done_hover', 't_set'], 't')
+    assert not selftest.tasks_acknowledge([], 't')
+
+
+def test_offset_position_goes_the_given_way():
+    lat, lon = selftest.offset_position((43.0, -70.7), 90.0, 111.0)
+    assert abs(lat - 43.0) < 1e-9 and lon > -70.7
+    lat, lon = selftest.offset_position((43.0, -70.7), 0.0, 111.32)
+    assert abs(lat - 43.001) < 1e-6 and abs(lon + 70.7) < 1e-9
+
+
 def test_extra_launch_args_may_not_override_the_ones_the_self_test_derives():
     assert selftest.overridden_launch_args(
         ['tide_speed_factor:=1', 'boats:=a', 'enable_joysticks:=true',
          'roster_file:=/x.yaml']) == ['boats:=a', 'enable_joysticks:=true',
                                       'roster_file:=/x.yaml']
-    assert selftest.overridden_launch_args(['tide_speed_factor:=1', 'enable_nav:=true']) == []
+    # enable_nav is the self-test's own (--nav), like the pads
+    assert selftest.overridden_launch_args(['tide_speed_factor:=1', 'enable_nav:=true']) == [
+        'enable_nav:=true']
+    assert selftest.overridden_launch_args(['--nav', '--no-nav', '--boats', 'x'], True) == [
+        '--nav', '--no-nav', '--boats']
 
 
 def test_main_refuses_overriding_launch_args_before_starting_anything(capsys):
