@@ -117,13 +117,15 @@ groups:
     arguments: {boats: {type: string, default: ''}}   # declared, typed, defaults only
     requires: [other]           # must be READY before this group starts
     follows: [camp]             # stop this group when camp closes (see below)
-    lifecycle: {match: '^/(a|b)/', expect: 18, target: active}   # or nodes: [/a, /b]
+    lifecycle: {match: '^/(a|b)/', exclude: '/nav2_[a-z]+$', expect: 18, target: active}   # or nodes: [/a, /b]
     ready: {nodes: [/x], timeout: 180}
     restart: on-failure         # or never
     description: one line for the status table
 profiles:
   demo: [boats, camp, scorer]   # groups set RUNNING; every other group is STOPPED
 ```
+
+`exclude` (optional, only with `match`) is a regular expression searched in the same way: a node whose name also matches it is never discovered, so a node that another writer manages (nav2's own lifecycle manager in the demo) is not touched by the convergence loop. `converge --exclude` is the same for the standalone guard.
 
 A profile that names a group without the groups it `requires`, a dependency or `follows`
 cycle, an unknown key, a bad regular expression, a declared argument whose default does not

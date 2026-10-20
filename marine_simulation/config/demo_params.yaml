@@ -6,8 +6,9 @@
 # demo_roster.yaml and demo_joysticks.yaml.
 
 # helm_manager: pass the manual (joystick) helm through to asv_helm, and start in
-# manual so the first stick movement drives the boat. Nothing else can change the
-# mode: there is no command_bridge in the demo.
+# manual so the first stick movement drives the boat. Nothing changes the mode unless
+# something publishes on <boat>/piloting_mode (the self-test and a hand-sent mission do; the
+# pad's mode buttons go to marine/send_command and there is no command_bridge to receive them).
 /**/helm_manager:
   ros__parameters:
     output_type: helm

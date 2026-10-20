@@ -67,21 +67,26 @@ def transition_id(name: str) -> int:
     return _TRANSITION_IDS[name]
 
 
-def discover_lifecycle_nodes(node, pattern: Optional[str] = None) -> List[str]:
+def discover_lifecycle_nodes(node, pattern: Optional[str] = None,
+                             exclude: Optional[str] = None) -> List[str]:
     """
     Return the fully qualified names of lifecycle nodes visible in the graph.
 
     A lifecycle node is one that serves both ``get_state`` and ``change_state`` with the
-    ``lifecycle_msgs`` types. ``pattern`` is a regular expression searched in the name.
+    ``lifecycle_msgs`` types. ``pattern`` is a regular expression searched in the name; a node
+    whose name also matches ``exclude`` (searched the same way) is left out.
     """
     services = dict(node.get_service_names_and_types())
     regex = re.compile(pattern) if pattern else None
+    excluded = re.compile(exclude) if exclude else None
     found = []
     for name, types in services.items():
         if not name.endswith('/get_state') or 'lifecycle_msgs/srv/GetState' not in types:
             continue
         base = name[:-len('/get_state')]
         if 'lifecycle_msgs/srv/ChangeState' not in services.get(base + '/change_state', []):
+            continue
+        if excluded is not None and excluded.search(base):
             continue
         if regex is None or regex.search(base):
             found.append(base)

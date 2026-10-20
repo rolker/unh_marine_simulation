@@ -38,6 +38,7 @@ Command line: run the manager, print its status, send it commands, or just conve
 
 import argparse
 import json
+import re
 import sys
 import time
 from typing import Dict, List, Optional
@@ -195,6 +196,13 @@ def format_report(reports) -> str:
 
 def cmd_converge(args) -> int:
     """Run the convergence loop alone: the post-launch guard (fixes the lost-reply race)."""
+    for option, pattern in (('--match', args.match), ('--exclude', args.exclude)):
+        try:
+            re.compile(pattern or '')
+        except re.error as error:
+            print('launch_manager_proto converge: %s is not a regular expression (%s)'
+                  % (option, error), file=sys.stderr)
+            return 2
     rclpy.init()
     node = Node('launch_manager_proto_guard')
     backend = RclpyBackend(node, query_timeout=2.0)
@@ -214,7 +222,7 @@ def cmd_converge(args) -> int:
             now = time.monotonic()
             if now - last_print >= 2.0:
                 last_print = now
-                for name in discover_lifecycle_nodes(node, args.match):
+                for name in discover_lifecycle_nodes(node, args.match, args.exclude):
                     if name not in known:
                         known.add(name)
                         last_new = now
@@ -270,6 +278,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     converge = sub.add_parser('converge', help='converge lifecycle nodes, no groups')
     converge.add_argument('--match', default=None, help='regular expression on node names')
+    converge.add_argument('--exclude', default=None,
+                          help='regular expression: nodes whose name matches it are left out '
+                               '(for nodes another writer manages)')
     converge.add_argument('--target', choices=core.TARGETS, default=core.ACTIVE)
     converge.add_argument('--expect', type=int, default=1,
                           help='nodes that must be seen before success counts (default 1: '

@@ -875,6 +875,55 @@ def test_the_parser_knows_rqt_fresh():
     assert parser.parse_args(['--rqt-fresh']).rqt_fresh is True
 
 
+# -- the navigation stack switch ------------------------------------------------------------
+
+def test_nav_is_off_by_default_and_the_option_has_a_no_form():
+    parser = demo_manager.build_parser()
+    assert parser.parse_args([]).nav is False
+    assert parser.parse_args(['--nav']).nav is True
+    assert parser.parse_args(['--nav', '--no-nav']).nav is False
+
+
+def test_nav_raises_the_expected_lifecycle_nodes_by_mission_manager_only():
+    names = roster_names()
+    off = demo_manager.substitutions(names, '', True, '/s', '/r', '/j', '/l', '/t')
+    on = demo_manager.substitutions(names, '', True, '/s', '/r', '/j', '/l', '/t',
+                                    enable_nav=True)
+    per_boat = demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT
+    assert off['boats_expect'] == str(per_boat * len(names))
+    assert on['boats_expect'] == str((per_boat + 1) * len(names))
+    assert (off['enable_nav'], on['enable_nav']) == ('false', 'true')
+    loaded = config.load_config(str(CONFIG), on)
+    assert loaded.groups['boats'].lifecycle.expect == (per_boat + 1) * len(names)
+    assert loaded.groups['boats'].arguments['enable_nav'].default == 'true'
+
+
+def test_the_boats_group_leaves_nav2s_own_lifecycle_nodes_to_nav2(spec):
+    life = spec.groups['boats'].lifecycle
+    name = roster_names()[0]
+    found = [n for n in ('/%s/helm_manager' % name, '/%s/mission_manager' % name,
+                         '/%s/sensors/mbes/cube_bathymetry' % name,
+                         '/%s/controller_server' % name, '/%s/bt_task_navigator' % name,
+                         '/%s/global_costmap/global_costmap' % name)
+             if re.search(life.match, n) and not re.search(life.exclude, n)]
+    assert found == ['/%s/helm_manager' % name, '/%s/mission_manager' % name,
+                     '/%s/sensors/mbes/cube_bathymetry' % name]
+
+
+def test_enable_nav_is_owned_by_the_manager_so_an_extra_one_is_refused(spec):
+    with pytest.raises(ValueError, match='set by the demo'):
+        demo_manager.boats_launch_arguments(
+            spec, ['enable_nav:=true'], ['boats', 'enable_nav'])
+
+
+def test_main_passes_nav_to_the_boats_group(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', '--nav']) == 0
+    (spec,) = run_manager_spy
+    assert spec.groups['boats'].arguments['enable_nav'].default == 'true'
+    assert spec.groups['boats'].lifecycle.expect % (demo_manager.MIN_LIFECYCLE_NODES_PER_BOAT
+                                                    + 1) == 0
+
+
 def _text(log_info):
     return ''.join(part.text for part in log_info.msg)
 

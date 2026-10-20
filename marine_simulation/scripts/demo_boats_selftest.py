@@ -60,6 +60,14 @@ boat's ``joy`` topic, so ``joy_to_helm``, ``helm_manager``, ``asv_helm`` and
 - all four driven at once move, on different courses,
 - every boat's CUBE coverage topics deliver.
 
+With ``--nav`` the boats run the navigation stack (``enable_nav:=true``, or ``--nav`` of the
+manager with ``--demo``), and the self-test also checks that every nav2 lifecycle node of every
+boat is ``active`` (nav2's own lifecycle manager brings them up), that the first boat, set to
+``autonomous`` and sent a one-line ``SurveyPattern`` mission the way CAMP sends it
+(``replace_task mission_plan`` on ``marine/mission_manager/command``), reports the mission's
+tasks on ``marine/status/mission_tasks`` and drives to the end of the line, that the second boat,
+left in ``manual``, does not move, and that the nav nodes are still active at the end.
+
 A launch needs the geoid and VDatum grids under ``~/data/world/datum``: without
 them ``chart_datum`` never publishes and this test fails on the missing frames after
 the startup timeout (the launch itself refuses to start without them).
@@ -76,6 +84,7 @@ start poses at the end.
 """
 
 import argparse
+import json
 import math
 import os
 import signal
@@ -84,6 +93,7 @@ import sys
 import time
 
 import check_multi_boat_graph as graph
+from marine_simulation import demo_nav
 import yaml
 
 # Node names (relative to the boat's namespace) every boat must have.
@@ -93,6 +103,10 @@ BOAT_NODES = (
     'sea_surface_estimator', 'sensors/mbes/cube_bathymetry',
     'sensors/mbes/detections_to_pointcloud',
 )
+# With navigation on, every boat also has these (relative to its namespace): mission_manager
+# and the nodes of ben_project11's nav2 bring-up (see marine_simulation.demo_nav).
+NAV_NODES = ('mission_manager', 'lifecycle_manager_navigation') + demo_nav.NAV2_SERVERS \
+    + demo_nav.NAV2_COSTMAPS
 # Frame names (under the boat's prefix) every boat must publish.
 BOAT_FRAMES = (
     'base_link', 'base_link_north_up', 'odom', 'map', 'map_tide', 'chart_datum',
@@ -153,13 +167,15 @@ def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> li
     return problems
 
 
-def launch_command(boats, roster, joysticks, extra, demo=False) -> list:
+def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> list:
     """Return the command line for ``--start-launch`` (the boats launch, or the manager)."""
     if demo:
         # No display here: CAMP and the window placement are the owner's rehearsal.
         cmd = ['ros2', 'run', 'marine_simulation', 'demo_manager.py', '--profile', 'headless']
         if not joysticks:
             cmd.append('--no-joysticks')
+        if nav:
+            cmd.append('--nav')
         if boats:
             cmd += ['--boats', ','.join(boats)]
         if roster:
@@ -167,11 +183,19 @@ def launch_command(boats, roster, joysticks, extra, demo=False) -> list:
         return cmd + list(extra)
     cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
            'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
+    if nav:
+        cmd.append('enable_nav:=true')
     if boats:
         cmd.append('boats:=%s' % ','.join(boats))
     if roster:
         cmd.append('roster_file:=%s' % roster)
     return cmd + list(extra)
+
+
+def roster_headings(path: str) -> dict:
+    """Return ``{boat name: start heading in degrees}`` from the roster file."""
+    with open(path) as f:
+        return {b['name']: float(b['start']['heading']) for b in yaml.safe_load(f)['boats']}
 
 
 def scorer_centre(roster_path, boats) -> tuple:
@@ -203,6 +227,56 @@ def bearing(a, b) -> float:
     return math.degrees(math.atan2(dlon, dlat)) % 360.0
 
 
+def offset_position(origin, heading: float, distance: float) -> tuple:
+    """Return the (lat, lon) ``distance`` metres from ``origin`` along compass ``heading``."""
+    dlat = distance * math.cos(math.radians(heading)) / 111320.0
+    dlon = distance * math.sin(math.radians(heading)) / (
+        111320.0 * math.cos(math.radians(origin[0])))
+    return origin[0] + dlat, origin[1] + dlon
+
+
+def line_mission(label: str, start, end, speed_knots: float) -> list:
+    """
+    Return the mission plan CAMP would send for one survey line (a ``SurveyPattern``).
+
+    The shape is what ``SurveyPattern::write`` produces and ``mission_manager``'s
+    ``parseMission`` reads: a pattern item whose ``TrackLine`` child has ``Waypoint`` children.
+    """
+    def waypoint(name, point):
+        return {'type': 'Waypoint', 'label': name, 'latitude': point[0], 'longitude': point[1]}
+
+    return [{
+        'type': 'SurveyPattern', 'label': label + '_set', 'speed': speed_knots, 'priority': 0,
+        'children': [{
+            'type': 'TrackLine', 'label': label + '_line', 'speed': speed_knots,
+            'children': [waypoint('start', start), waypoint('end', end)],
+        }],
+    }]
+
+
+def mission_command(plan: list) -> str:
+    """Return the String mission_manager receives for ``plan`` (command_bridge strips the rest)."""
+    return 'replace_task mission_plan ' + json.dumps(plan)
+
+
+def line_reached(travelled: float, line_length: float, distance, status: str) -> bool:
+    """
+    Return whether a boat has driven a survey line to its end.
+
+    It must have covered most of the line and be near the end, and the navigator must not
+    have recorded the line failed: ``SetTaskFailed`` also marks a task ``done``, so the done
+    flag alone proves nothing. The boat settled 16 to 20 m short of the end in every live run
+    (the path follower hands over before the last waypoint), hence the margin.
+    """
+    return (travelled > 0.8 * line_length and distance is not None and distance < 30.0
+            and 'fail' not in (status or '').lower())
+
+
+def tasks_acknowledge(task_ids, label: str) -> bool:
+    """Return whether the reported task ids include the whole mission ``label`` sent."""
+    return {label + '_set', label + '_set/' + label + '_line'} <= set(task_ids)
+
+
 def angle_difference(a: float, b: float) -> float:
     """Smallest absolute difference between two compass angles, in degrees."""
     return abs((a - b + 180.0) % 360.0 - 180.0)
@@ -211,7 +285,7 @@ def angle_difference(a: float, b: float) -> float:
 class SelfTest:
     """The live checks."""
 
-    def __init__(self, boats, joysticks, colors, launch=None):
+    def __init__(self, boats, joysticks, colors, launch=None, nav=False, starts=None):
         import rclpy
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
         from marine_interfaces.msg import (
@@ -222,6 +296,8 @@ class SelfTest:
         self.rclpy = rclpy
         self.boats = list(boats)
         self.joysticks = joysticks
+        self.nav = nav
+        self.starts = starts or {}
         self.colors = colors
         self.launch = launch
         self.platforms = {}
@@ -304,7 +380,7 @@ class SelfTest:
     def wait_for_nodes(self, timeout):
         expected = {'/asv_sim'}
         for b in self.boats:
-            expected.update('/%s/%s' % (b, n) for n in BOAT_NODES)
+            expected.update('/%s/%s' % (b, n) for n in self.boat_nodes())
             if self.joysticks:
                 expected.add('/%s/joy_node' % b)
         missing = expected
@@ -316,12 +392,52 @@ class SelfTest:
             if not missing and len(self.fix) == len(self.boats):
                 break
         self.record('node set (one asv_sim, %d nodes per boat)' % (
-            len(BOAT_NODES) + (1 if self.joysticks else 0)),
+            len(self.boat_nodes()) + (1 if self.joysticks else 0)),
             not missing, 'missing: %s' % ', '.join(sorted(missing)) if missing else '')
         self.record('every boat publishes a position', len(self.fix) == len(self.boats),
                     'have %s' % ', '.join(sorted(self.fix)))
         asv_sims = [1 for n, ns in self.sampler.nodes() if n == 'asv_sim']
         self.record('exactly one asv_sim node', len(asv_sims) == 1, 'found %d' % len(asv_sims))
+
+    def boat_nodes(self):
+        """Return the node names every boat must have (nav2's too with ``--nav``)."""
+        return BOAT_NODES + (NAV_NODES if self.nav else ())
+
+    def lifecycle_state(self, name, timeout=5.0):
+        """Return the lifecycle state label of node ``name``, or None when it did not answer."""
+        from lifecycle_msgs.srv import GetState
+        client = self.node.create_client(GetState, name + '/get_state')
+        try:
+            deadline = time.monotonic() + timeout
+            while not client.service_is_ready() and time.monotonic() < deadline:
+                self.spin(0.1)
+            if not client.service_is_ready():
+                return None
+            future = client.call_async(GetState.Request())
+            while not future.done() and time.monotonic() < deadline:
+                self.spin(0.05)
+            if future.done() and future.result() is not None:
+                return future.result().current_state.label
+            return None
+        finally:
+            self.node.destroy_client(client)
+
+    def check_nav_active(self, label, timeout=90.0):
+        """Check every nav2 lifecycle node of every boat is ``active`` (wait for it first)."""
+        wanted = [name for b in self.boats for name in demo_nav.nav_node_names(b).values()]
+        deadline = time.monotonic() + timeout
+        states = {}
+        while True:
+            # each node gets what is left of the time, so the timeout is the timeout
+            states = {name: self.lifecycle_state(
+                name, min(5.0, max(0.2, deadline - time.monotonic()))) for name in wanted}
+            bad = {n: st for n, st in states.items() if st != 'active'}
+            if not bad or time.monotonic() > deadline:
+                break
+            self.spin(2.0)
+        self.record('%s: every nav2 lifecycle node (%d) of every boat is active'
+                    % (label, len(wanted)), not bad,
+                    ', '.join('%s %s' % (n, st) for n, st in sorted(bad.items())))
 
     def check_graph(self, tf_seconds, frame_timeout=90.0):
         """Wait for every boat's frames (they start publishing late), then check the graph."""
@@ -339,7 +455,7 @@ class SelfTest:
         self.record('graph: unique nodes, one TF parent per frame, no cross-boat topics',
                     not problems, '; '.join(problems))
 
-    def check_platforms(self, timeout=15.0):
+    def check_platforms(self, timeout=60.0):
         """Check the CAMP tab names and colours: one platform per boat, in the roster colour."""
         deadline = time.monotonic() + timeout
         while not set(self.boats) <= set(self.platforms) and time.monotonic() < deadline:
@@ -392,6 +508,98 @@ class SelfTest:
                     not steered or not straight or min(steered) > max(straight) + 10.0,
                     ', '.join('%s %s %.0f deg' % (b, 'steered' if steering[b] else 'straight',
                                                   d) for b, d in bend.items()))
+
+    def check_nav_mission(self, seconds, speed_knots=4.0, line_length=160.0, lead=40.0):
+        """
+        Send the first boat a one-line survey mission and check it drives it; the others stay.
+
+        The boat is set to ``autonomous`` and sent ``replace_task mission_plan <json>`` as CAMP
+        sends it. It must report the mission's tasks on ``marine/status/mission_tasks`` and get
+        to the end of the line (or mark the task done) within ``seconds``; every other boat, in
+        ``manual`` and given nothing, must not move. The command is repeated until the tasks
+        show up, because mission_manager only forwards to nav2 once nav2 is ready.
+        """
+        from marine_nav_interfaces.msg import TaskFeedback
+        from std_msgs.msg import String
+
+        boat = self.boats[0]
+        label = 'selftest'
+        self.reset()
+        start = self.positions()
+        heading = self.starts.get(boat, 60.0)
+        first = offset_position(start[boat], heading, lead)
+        last = offset_position(start[boat], heading, lead + line_length)
+        command = mission_command(line_mission(label, first, last, speed_knots))
+        seen = {'ids': [], 'done': set(), 'status': ''}
+        line_id = label + '_set/' + label + '_line'
+
+        def on_tasks(msg):
+            seen['ids'] = [t.id for t in msg.tasks]
+            seen['done'] = {t.id for t in msg.tasks if t.done}
+            seen['status'] = ' '.join(t.status for t in msg.tasks if t.id == line_id)
+
+        self.node.create_subscription(
+            TaskFeedback, '/%s/marine/status/mission_tasks' % boat, on_tasks, 10)
+        mode = self.node.create_publisher(String, '/%s/piloting_mode' % boat, 10)
+        mission = self.node.create_publisher(
+            String, '/%s/marine/mission_manager/command' % boat, 10)
+        try:
+            self._drive_mission(boat, label, line_id, command, start, last, seen, mode,
+                                mission, seconds, line_length)
+        finally:
+            # whatever happened (a failed check, an interrupt), hand the boat back and stop
+            # the navigator, so a demo that is already running is left as it was found
+            mode.publish(String(data='manual'))
+            mission.publish(String(data='clear_tasks'))
+            self.spin(1.0)
+        self.check_nav_active('after the mission', timeout=30.0)
+
+    def _drive_mission(self, boat, label, line_id, command, start, last, seen, mode, mission,
+                       seconds, line_length):
+        """Send the mission, wait for it to be taken, then watch the boat drive the line."""
+        from std_msgs.msg import String
+        deadline = time.monotonic() + 30.0
+        while (mode.get_subscription_count() == 0 or mission.get_subscription_count() == 0) \
+                and time.monotonic() < deadline:
+            self.spin(0.2)
+        accepted = False
+        sent = 0
+        next_send = 0.0
+        # A loaded start can take minutes before nav2 takes a goal, and every command clears
+        # and re-sends the task list, so it is repeated rarely. The mode goes with it: helm_manager
+        # may not have been ready for the first.
+        deadline = time.monotonic() + 240.0
+        while not accepted and time.monotonic() < deadline:
+            if time.monotonic() >= next_send:
+                mode.publish(String(data='autonomous'))
+                mission.publish(String(data=command))
+                sent += 1
+                next_send = time.monotonic() + 60.0
+            self.spin(0.5)
+            accepted = tasks_acknowledge(seen['ids'], label)
+        self.record('%s accepts the mission (its tasks appear on mission_tasks)' % boat,
+                    accepted, '%d command(s) sent, tasks %s' % (sent, sorted(seen['ids'])))
+        end = time.monotonic() + seconds
+        reached, distance = False, None
+        travelled = 0.0
+        while accepted and time.monotonic() < end:
+            self.spin(1.0)
+            fix = self.fix.get(boat)
+            distance = metres(fix, last) if fix else None
+            travelled = metres(start[boat], fix) if fix else 0.0
+            reached = line_reached(travelled, line_length, distance, seen['status'])
+            if reached:
+                break
+        self.record('%s follows the mission to the end of the line' % boat, reached,
+                    'travelled %.0f m, %s m from the end after %s s, done %s, line status %r'
+                    % (travelled, 'unknown' if distance is None else '%.0f' % distance,
+                       '%.0f' % (seconds - max(0.0, end - time.monotonic())),
+                       sorted(seen['done']), seen['status']))
+        after = dict(self.fix)
+        others = {b: metres(start[b], after[b]) for b in self.boats if b != boat}
+        self.record('the other boats, left in manual, do not move',
+                    all(d < 1.0 for d in others.values()),
+                    ', '.join('%s %.1f m' % (b, d) for b, d in others.items()) or 'none')
 
     def check_coverage(self, timeout):
         deadline = time.monotonic() + timeout
@@ -502,9 +710,10 @@ def _terminate(signum, frame):
 # Launch arguments the self-test sets itself and derives its expectations from;
 # a later copy on the command line would override them and make it check the
 # wrong node set.
-OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'boats:=', 'roster_file:=')
+OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'enable_nav:=', 'boats:=', 'roster_file:=')
 # With --demo the manager is started instead, and these options are the self-test's own.
-OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks')
+OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks',
+                        '--nav', '--no-nav')
 
 
 def overridden_launch_args(extra, demo=False) -> list:
@@ -523,12 +732,21 @@ def main(argv=None):
                              'window placement) and check the coverage scorer too')
     parser.add_argument('--joysticks', action='store_true',
                         help='the launch runs joy_linux drivers: expect a joy_node per boat')
-    parser.add_argument('--startup-timeout', type=float, default=90.0)
+    parser.add_argument('--nav', action='store_true',
+                        help='the boats run the navigation stack (the launch is started with '
+                             'it): also check nav2 is active and one boat drives a mission')
+    parser.add_argument('--nav-seconds', type=float, default=240.0,
+                        help='how long the mission boat has to reach the end of its line')
+    parser.add_argument('--startup-timeout', type=float, default=None,
+                        help='seconds to wait for every node (default 90, 240 with --nav: four '
+                             'boats with nav saturate a 16 core computer for a minute or two)')
     parser.add_argument('--drive-seconds', type=float, default=6.0)
     parser.add_argument('--tf-seconds', type=float, default=5.0)
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
+    if args.startup_timeout is None:
+        args.startup_timeout = 240.0 if args.nav else 90.0
     roster = args.roster or graph.default_roster_path()
     boats = ([b.strip() for b in args.boats.split(',') if b.strip()] if args.boats
              else graph.boats_from_roster(roster))
@@ -557,11 +775,12 @@ def main(argv=None):
         try:
             # Everything that can fail sits inside these tries, and the launch (about
             # 50 processes) starts last, so a failed constructor cannot leak it.
-            test = SelfTest(boats, args.joysticks, colors)
+            test = SelfTest(boats, args.joysticks, colors, nav=args.nav,
+                            starts=roster_headings(roster))
             if args.start_launch:
                 proc = start_launch(launch_command(
                     boats if args.boats else None, args.roster, args.joysticks,
-                    args.launch_args, args.demo))
+                    args.launch_args, args.demo, args.nav))
                 test.launch = proc
             try:
                 test.wait_for_nodes(args.startup_timeout)
@@ -570,6 +789,9 @@ def main(argv=None):
                     test.check_platforms()
                     test.check_solo(args.drive_seconds)
                     test.check_together(args.drive_seconds + 2.0)
+                    if args.nav:
+                        test.check_nav_active('after start')
+                        test.check_nav_mission(args.nav_seconds)
                     test.check_coverage(30.0)
                     if args.demo:
                         test.check_scorer(40.0, scorer_centre(roster, boats))

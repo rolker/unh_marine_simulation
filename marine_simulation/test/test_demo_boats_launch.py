@@ -339,20 +339,106 @@ def test_the_shipped_plug_order_file_waits_on_js_numbers_in_roster_order(roster)
 
 # --- nav stack ---------------------------------------------------------------------
 
-@pytest.mark.parametrize('value', ['true', 'True', ' 1 ', 'yes'])
-def test_enable_nav_is_refused_with_not_wired_yet(value):
-    with pytest.raises(RuntimeError, match='not wired yet'):
-        demo.refuse_enable_nav(value)
-
-
-def test_enable_nav_false_is_accepted():
-    demo.refuse_enable_nav('false')
+def test_enable_nav_is_no_longer_refused_and_defaults_to_off():
+    description = demo.generate_launch_description()
+    declared = {e.name: e for e in description.entities if hasattr(e, 'default_value')}
+    assert 'enable_nav' in declared
+    assert not hasattr(demo, 'refuse_enable_nav')
+    assert ''.join(t.text for t in declared['enable_nav'].default_value) == 'false'
 
 
 @pytest.mark.parametrize('value', ['ture', '', 'maybe', '2'])
-def test_enable_nav_garbage_is_an_error_not_off(value):
+def test_enable_nav_garbage_is_an_error_not_off(tmp_path, no_host_checks, value):
     with pytest.raises(ValueError, match='enable_nav'):
-        demo.refuse_enable_nav(value)
+        demo.launch_setup(_setup_context(tmp_path, enable_nav=value))
+
+
+@pytest.fixture
+def nav_state(tmp_path, monkeypatch):
+    """Keep the generated nav2 parameter file out of the real state directory."""
+    monkeypatch.setattr(demo.demo_support, 'state_dir', lambda home=None: str(tmp_path / 'state'))
+    return tmp_path / 'state' / 'nav'
+
+
+@pytest.fixture
+def included(monkeypatch):
+    """Record every ``_include`` of the launch: (package, file, launch arguments)."""
+    calls = []
+
+    def record(package, *path, launch_arguments=None):
+        calls.append((package, path[-1], dict(launch_arguments or {})))
+        return OpaqueFunction(function=lambda context: None)
+
+    monkeypatch.setattr(demo, '_include', record)
+    return calls
+
+
+def test_without_nav_no_boat_gets_mission_manager_or_nav2(tmp_path, no_host_checks, included):
+    demo.launch_setup(_setup_context(tmp_path))
+    files = [f for _, f, _ in included]
+    assert 'mission_manager_launch.py' not in files
+    assert 'nav2_bringup_launch.py' not in files
+
+
+def test_with_nav_every_boat_gets_mission_manager_and_nav2_in_its_own_namespace(
+        tmp_path, no_host_checks, nav_state, roster, included):
+    actions = demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    managers = [(p, a) for p, f, a in included if f == 'mission_manager_launch.py']
+    navs = [(p, a) for p, f, a in included if f == 'nav2_bringup_launch.py']
+    assert [a['map_frame'] for _, a in managers] == ['%s/map' % b.name for b in roster]
+    assert {p for p, _ in managers} == {'mission_manager'}
+    assert {p for p, _ in navs} == {'ben_project11'}
+    assert [a['namespace'] for _, a in navs] == [b.name for b in roster]
+    for _, arguments in navs:
+        assert arguments['use_namespace'] == 'true'
+        assert arguments['use_composition'] == 'False'
+        assert arguments['use_respawn'] == 'False'
+        assert arguments['params_file'].startswith(str(nav_state))
+    # one top-level group per boat for nav2, after the boats' own groups
+    assert sum(isinstance(a, GroupAction) for a in actions) == 2 * len(roster)
+
+
+def test_nav2_sits_outside_the_boats_namespace_with_a_longer_bond_timeout(included):
+    from launch_ros.actions import PushROSNamespace
+    group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml')
+    entities = group.get_sub_entities()
+    assert not any(isinstance(e, PushROSNamespace) for e in entities)
+    (setting,) = [e for e in entities if isinstance(e, demo.ScopedSetParameter)]
+    context = LaunchContext()
+    setting.execute(context)
+    assert dict(context.launch_configurations['global_params']) == {
+        'bond_timeout': demo.demo_nav.BOND_TIMEOUT_S}
+    (package, name, arguments), = included
+    assert (package, name) == ('ben_project11', 'nav2_bringup_launch.py')
+    assert arguments['namespace'] == 'a' and arguments['params_file'] == '/p.yaml'
+
+
+def test_the_nav2_parameter_file_is_written_with_the_demo_delta(
+        tmp_path, no_host_checks, nav_state, included):
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    written = sorted(nav_state.glob('nav2_params-*.yaml'))
+    assert len(written) == 1
+    params = yaml.safe_load(written[0].read_text())
+    for costmap in ('local_costmap', 'global_costmap'):
+        node = params[costmap][costmap]['ros__parameters']
+        assert 'chart_layer' not in node['plugins'] and 'chart_layer' not in node
+    # the placeholders stay: nav2_bringup_launch.py fills them in per boat
+    assert params['bt_task_navigator']['ros__parameters']['global_frame'] == '<tf_prefix>/map'
+
+
+def test_a_missing_nav_package_is_a_plain_message(
+        tmp_path, no_host_checks, nav_state, included, monkeypatch):
+    import ament_index_python.packages as packages
+    real = packages.get_package_prefix
+
+    def find(package):
+        if package == 'mission_manager':
+            raise packages.PackageNotFoundError(package)
+        return real(package)
+
+    monkeypatch.setattr(packages, 'get_package_prefix', find)
+    with pytest.raises(RuntimeError, match='mission_manager package is not installed'):
+        demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
 
 
 # --- strict argument parsing -------------------------------------------------------
@@ -660,6 +746,16 @@ def test_the_guard_waits_for_exactly_the_selected_boats(roster):
     assert command[command.index('--expect') + 1] == str(demo.LIFECYCLE_NODES_PER_BOAT * 2)
     assert float(command[command.index('--settle') + 1]) == demo.GUARD_SETTLE_SECONDS
     assert float(command[command.index('--quiet-period') + 1]) == demo.GUARD_QUIET_SECONDS
+
+
+def test_the_guard_with_nav_expects_mission_manager_and_leaves_nav2_to_nav2(roster):
+    boats = demo.select_boats(roster, ','.join(b.name for b in roster[:2]))
+    command = demo.lifecycle_guard_command(boats, '/x/guard', True)
+    assert command[command.index('--expect') + 1] == str(
+        (demo.LIFECYCLE_NODES_PER_BOAT + 1) * 2)
+    exclude = command[command.index('--exclude') + 1]
+    assert exclude == demo.demo_nav.nav_exclude_regex([b.name for b in boats])
+    assert '--exclude' not in demo.lifecycle_guard_command(boats, '/x/guard')
 
 
 def test_the_guard_declares_its_launch_argument():
