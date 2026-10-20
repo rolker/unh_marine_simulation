@@ -45,14 +45,22 @@ step and a boat cannot tunnel through a shore or another hull.
   are pushed apart on their next step.
 - **Boat to bottom.** Needs `collision.grid_file`. Hull clearance is the least,
   over the centre, bow, stern, port and starboard points, of grid depth plus
-  tide minus `draft`. Land (negative or zero depth), no-data cells and
-  positions off the grid are walls. A step that would take the boat into
+  tide minus `draft`. Land (negative or zero depth) is graded by its height;
+  no-data cells and positions off the grid are the void, a wall. A step that would take the boat into
   negative clearance, shallower than where it is, loses the part of its motion
   that points shallower; if that is not enough it stays where it was. A boat
   that already is aground (a low tide, a `set_pose` onto the shallows) may
-  move anywhere that is not shallower, so it can always get out. The datum
+  move anywhere that is not shallower, so it can always get out. A boat in
+  the void can only move through the void or into water, never onto land or
+  a shoal, and a warning names it once. A turn that would swing the hull
+  onto land is put back (heading restored, yaw rate zeroed). Between a boat
+  and the shore the shore wins: the boat is kept out of the land and may
+  overlap the other boat for that step. The datum
   caveat of the demo grid (CCOM does not state it; it is treated as MLLW, as
   the sonar does) applies. Wave heave, roll and pitch are ignored.
+- **Long hops.** A step longer than half a beam (a long `max_step`, a fast
+  current) is checked in pieces of at most that length, so a thin hull or
+  shore cannot be jumped.
 - **Speed.** A boat moving into the obstacle keeps only the part of its speed
   that is along the hull axis and across the contact: `speed * (1 - cos^2)`
   of the angle between its heading and the contact normal. Head on it stops,
@@ -60,7 +68,11 @@ step and a boat cannot tunnel through a shore or another hull.
   rudder are not changed.
 - **Event.** `~/collisions` (`asv_sim_msgs/msg/Collision`, reliable) gets one
   message per contact onset, not one per step; a contact is over after one
-  second without overlap. The node also logs one INFO line.
+  second without overlap (a boat that touches, backs off and touches again
+  within a second is one event). The topic is not latched: a subscriber that
+  starts later does not see earlier events. The node also logs one INFO line.
+  `closing_speed` is the closing speed of the attempted motion, current
+  included.
 - **More obstacle sources.** `Collisions.sources` is a list of objects with
   `correct(step, lat, lon)`; boats and terrain are two of them. Another source
   (for example charted objects, issue #113) is appended to the list.
@@ -72,6 +84,10 @@ step and a boat cannot tunnel through a shore or another hull.
 | `models.<name>.length` | `4.0` m | Hull length (0.01 to 1000); must not be less than `beam` |
 | `models.<name>.beam` | `1.7` m | Hull width |
 | `models.<name>.draft` | `0.4` m | Keel depth; the boat grounds where the water is shallower |
+
+`collision.grid_file` is loaded whole into memory (about 27 MB for the demo
+truth grid, 69 MB for the chart grid); do not point it at a multi-gigabyte
+compilation.
 
 The defaults are the C-Worker 4 (`cw4.yaml`). `coastal_surveyor`, `drix` and
 `echoboat240` use them without having been checked against those boats.

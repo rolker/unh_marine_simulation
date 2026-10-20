@@ -1,6 +1,8 @@
 # A boat touched something it cannot pass: another boat or the bottom.
 # Published once per contact onset (not once per simulation step) on
-# asv_sim's ~/collisions. Boats are indestructible; this only reports.
+# asv_sim's ~/collisions (reliable, not latched: a subscriber that starts
+# later does not see earlier events). Boats are indestructible; this only
+# reports. A contact is over after one second without overlap.
 
 std_msgs/Header header
 
