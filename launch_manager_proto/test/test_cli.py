@@ -88,5 +88,7 @@ def test_parser_knows_every_documented_command():
     assert args.verb == 'CLEAR_FAILURE' and args.names == ['a', 'b']
     args = parser.parse_args(['converge', '--match', '^/a/', '--expect', '9'])
     assert args.expect == 9 and args.target == 'active'
+    args = parser.parse_args(['converge', '--match', '^/a/', '--exclude', '/nav$'])
+    assert args.exclude == '/nav$'
     with pytest.raises(SystemExit):
         parser.parse_args(['command', 'restart', 'x'])

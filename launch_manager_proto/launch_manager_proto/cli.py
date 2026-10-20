@@ -214,7 +214,7 @@ def cmd_converge(args) -> int:
             now = time.monotonic()
             if now - last_print >= 2.0:
                 last_print = now
-                for name in discover_lifecycle_nodes(node, args.match):
+                for name in discover_lifecycle_nodes(node, args.match, args.exclude):
                     if name not in known:
                         known.add(name)
                         last_new = now
@@ -270,6 +270,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     converge = sub.add_parser('converge', help='converge lifecycle nodes, no groups')
     converge.add_argument('--match', default=None, help='regular expression on node names')
+    converge.add_argument('--exclude', default=None,
+                          help='regular expression: nodes whose name matches it are left out '
+                               '(for nodes another writer manages)')
     converge.add_argument('--target', choices=core.TARGETS, default=core.ACTIVE)
     converge.add_argument('--expect', type=int, default=1,
                           help='nodes that must be seen before success counts (default 1: '

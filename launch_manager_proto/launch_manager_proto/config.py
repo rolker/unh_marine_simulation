@@ -63,6 +63,7 @@ class LifecycleSpec:
     """Which lifecycle nodes a group owns and where they should be."""
 
     match: Optional[str] = None
+    exclude: Optional[str] = None
     nodes: List[str] = field(default_factory=list)
     expect: int = 1
     target: str = core.ACTIVE
@@ -218,7 +219,7 @@ def _parse_lifecycle(raw, where, problems) -> Optional[LifecycleSpec]:
     if not isinstance(raw, dict):
         problems.append('%s must be a mapping' % where)
         return None
-    _unknown(raw, ('match', 'nodes', 'expect', 'target'), where, problems)
+    _unknown(raw, ('match', 'exclude', 'nodes', 'expect', 'target'), where, problems)
     spec = LifecycleSpec()
     if 'match' in raw:
         try:
@@ -230,6 +231,19 @@ def _parse_lifecycle(raw, where, problems) -> Optional[LifecycleSpec]:
             problems.append('%s.match must not be empty (it would never discover anything)'
                             % where)
             spec.match = None
+    if 'exclude' in raw:
+        try:
+            re.compile(raw['exclude'])
+            spec.exclude = raw['exclude']
+        except (re.error, TypeError) as error:
+            problems.append('%s.exclude is not a valid regular expression (%s)' % (where, error))
+        if not raw['exclude']:
+            problems.append('%s.exclude must not be empty (it would exclude every node)' % where)
+            spec.exclude = None
+        elif spec.exclude is not None and 'match' not in raw:
+            problems.append('%s.exclude needs a match to narrow (listed nodes are explicit)'
+                            % where)
+            spec.exclude = None
     spec.nodes = list(dict.fromkeys(_string_list(raw.get('nodes'), where + '.nodes', problems)))
     for name in spec.nodes:
         if not name.startswith('/'):

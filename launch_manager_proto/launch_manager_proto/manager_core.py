@@ -98,8 +98,8 @@ class Runner:
 class Services:
     """Access to the ROS graph for readiness and lifecycle."""
 
-    def discover(self, pattern: str) -> List[str]:
-        """Return lifecycle node names matching ``pattern``."""
+    def discover(self, pattern: str, exclude: Optional[str] = None) -> List[str]:
+        """Return lifecycle node names matching ``pattern`` and not ``exclude``."""
         raise NotImplementedError
 
     def node_visible(self, name: str) -> bool:
@@ -502,7 +502,7 @@ class ManagerCore:
         now = self._clock()
         if discover and life.match and now - g.last_discovery >= DISCOVER_PERIOD:
             g.last_discovery = now
-            for node_name in self._services.discover(life.match):
+            for node_name in self._services.discover(life.match, life.exclude):
                 conv.add_node(node_name)
         conv.tick()
 

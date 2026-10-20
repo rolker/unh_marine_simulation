@@ -103,8 +103,9 @@ class FakeServices(mc.Services):
         self.config = core.ConvergeConfig(settle=0.0, backoff=(0.2,), max_attempts=3,
                                           reply_timeout=1.0, poll_period=0.1)
 
-    def discover(self, pattern):
-        return sorted(n for n in self.nodes if re.search(pattern, n))
+    def discover(self, pattern, exclude=None):
+        return sorted(n for n in self.nodes if re.search(pattern, n)
+                      and not (exclude and re.search(exclude, n)))
 
     def node_visible(self, name):
         return name in self.nodes
@@ -191,6 +192,17 @@ def test_boats_not_ready_until_expected_lifecycle_nodes_are_active():
     w.run(10)
     assert w.state('boats') == mc.STARTING
     assert '1 of 2 expected lifecycle nodes seen' in w.core.status()['groups'][0]['detail']
+
+
+def test_excluded_nodes_are_never_discovered_so_another_writer_keeps_them():
+    data = copy.deepcopy(DATA)
+    data['groups']['boats']['lifecycle'] = {'match': '^/b', 'exclude': '/nav$', 'expect': 2}
+    nodes = {'/b1/x': FakeNode(), '/b2/x': FakeNode(), '/b1/nav': FakeNode(),
+             '/score': FakeNode()}
+    w = World(data=data, nodes=nodes)
+    w.boot()
+    assert nodes['/b1/nav'].received == []
+    assert nodes['/b1/x'].received == ['configure', 'activate']
 
 
 def test_ready_timeout_fails_the_group_with_a_reason():

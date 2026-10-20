@@ -89,6 +89,23 @@ def test_discovery_finds_lifecycle_nodes_and_filters_by_regex():
         node.destroy_node()
 
 
+def test_discovery_leaves_out_excluded_names():
+    one = FakeLifecycleNode('lmp_ex_a', namespace='/t4')
+    two = FakeLifecycleNode('lmp_ex_nav', namespace='/t4')
+    probe = rclpy.create_node('lmp_probe_ex')
+    with Spinner(one, two, probe):
+        end = time.monotonic() + 10
+        found = []
+        while time.monotonic() < end and len(found) < 2:
+            found = lifecycle_rclpy.discover_lifecycle_nodes(probe, r'^/t4/')
+            time.sleep(0.1)
+        assert found == ['/t4/lmp_ex_a', '/t4/lmp_ex_nav']
+        assert lifecycle_rclpy.discover_lifecycle_nodes(
+            probe, r'^/t4/', r'/lmp_ex_nav$') == ['/t4/lmp_ex_a']
+    for node in (one, two, probe):
+        node.destroy_node()
+
+
 def test_lost_configure_reply_still_reaches_active():
     # Issue 96: the node configures, the reply never reaches the manager.
     fake = FakeLifecycleNode('lmp_lost', namespace='/t4', hold=3.0, lose_reply_on=(1,),
