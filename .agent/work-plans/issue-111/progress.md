@@ -33,3 +33,21 @@ issue: 111
 - [ ] Footprint values for models other than demo/cw4 (unverified defaults 4.0 x 1.7 x 0.4)
 - [ ] Collision default on only where a grid is passed (demo); sim_robot_launch stays off
 - [ ] Wave heave/roll/pitch ignored for clearance
+
+## Plan Review
+**Status**: complete
+**When**: 2026-10-20 11:33 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5) (in-context — author self-review)
+
+**Plan**: `.agent/work-plans/issue-111/plan.md` at `637b6db`
+**PR**: PR-less
+Independence uncertain: this review ran in the same context that authored the plan, with no fresh dispatch.
+**Verdict**: approve-with-suggestions
+
+### Findings
+- [x] (must-fix) contact code ran inside the except-and-reset-to-rest region of Dynamics.update; hook now has its own try/except, logged, uncorrected step kept — plan.md step 2
+- [x] (must-fix) asv_sim_msgs needs a std_msgs dependency (CMake + package.xml) — Files table
+- [x] (suggestion) length >= beam needs a pre-set validator, Model has only post-set callbacks — step 4
+- [x] (suggestion) contact-end timer must use the node clock, not wall time — step 8
+- [ ] (suggestion) other models' footprints stay unverified defaults — Open Questions
+- [ ] (suggestion) wave heave/roll/pitch ignored for clearance — Open Questions
