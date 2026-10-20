@@ -437,7 +437,15 @@ def test_an_unreadable_collision_grid_refuses_to_start(tmp_path):
 def test_the_grid_stops_a_boat_at_the_shore_through_the_node(tmp_path):
     grid = str(tmp_path / 'truth.tif')
     lat, lon = synthetic_grid.write_grid(grid)
-    r = Rig(tmp_path, dict(NO_NOISE, **{'collision.grid_file': grid}))
+    # The node reads the clock for its tide, and the synthetic land (-2 m) is
+    # flooded by a tide above 2.4 m: pin the tide at 0 so the test does not
+    # depend on the time of day.
+    flat_tide = {'environment.tide.constituents.amplitudes': [0.0],
+                 'environment.tide.constituents.speeds': [0.0],
+                 'environment.tide.constituents.phases': [0.0],
+                 'environment.tide.msl_above_mllw': 0.0}
+    r = Rig(tmp_path, dict(NO_NOISE, **flat_tide,
+                           **{'collision.grid_file': grid}))
     try:
         r.wait_for_fixes()
         r.set_pose('alpha', *_east_of(lat, lon, 20.0), 90.0)
