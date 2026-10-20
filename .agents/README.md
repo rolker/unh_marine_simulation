@@ -7,7 +7,7 @@
 | Package | Language | Description |
 |---------|----------|-------------|
 | `asv_sim` | Python | ASV dynamics simulator with configurable platform models and environment |
-| `asv_sim_msgs` | C++ (msg gen) | Service definitions for the ASV simulator (`SetPose`) |
+| `asv_sim_msgs` | C++ (msg gen) | Service and message definitions for the ASV simulator (`SetPose`, `Collision`) |
 | `asv_helm` | C++ | Converts Twist/Helm commands to throttle and rudder outputs |
 | `vrx_project11` | C++ | WAM-V differential-thrust helm with nav2 integration |
 | `mbes_sim` | Python | Multibeam echosounder simulator using bathymetry grids |
@@ -21,10 +21,11 @@
 ```
 unh_marine_simulation/
 ├── asv_sim/                           # ASV dynamics simulator
-│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform)
+│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform, collision)
 │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
 │   └── test/                          #   Linting, tide tests, test_multi_platform.py (in-process)
-├── asv_sim_msgs/                      # Service definitions
+├── asv_sim_msgs/                      # Service and message definitions
+│   ├── msg/Collision.msg
 │   └── srv/SetPose.srv
 ├── asv_helm/                          # Helm controller (Twist → throttle/rudder)
 │   └── src/asv_helm_node.cpp
@@ -167,3 +168,17 @@ Known build issues:
 |-----------|------|---------|-------|--------|
 | `models.<name>.max_step` | double, s | `0.1` | 0.001 to 10 | Longest step integrated in one go; a longer gap is split into equal sub-steps no longer than this |
 | `models.<name>.max_substeps` | int | `100` | 1 to 10000 | Most sub-steps per update; beyond `max_substeps * max_step` seconds the remainder of a gap is dropped, with a warning (at most one per 5 s per platform) |
+
+- **`asv_sim` boats block each other and the bottom (issue #111); contact is resolved inside `Dynamics`, once per integration sub-step, never from the node's update loop.** `Dynamics._step` calls `asv_sim.collision.Collisions.resolve` right after the position and the current are applied; a pass over the platforms after the whole update would tunnel through a shore or a hull after a stalled gap (up to 27 m at top speed in one update). Contact code runs in its own try/except (`Dynamics._resolve_contact`): a bug there is logged once per 5 s and the integrated step stands, it must never look like a numerical excursion (that resets the boat to rest). Boats are indestructible: only position and speed are corrected. Terrain collision exists only when `collision.grid_file` is set (the demo passes the sonars' grid); without it, boats block each other but nothing stops them at a shore. Land, nodata and off-grid cells are walls; a boat that starts aground may move anywhere not shallower. A new obstacle source (charted objects, issue #113) is an object with `correct(step, lat, lon)` appended to `Collisions.sources`. Dynamics noise (`thrust_noise`, `yaw_rate_noise`) makes a head-on meeting glancing, so two boats slide past each other; tests that want an exact stop set the noise to 0.
+
+### `asv_sim` contact parameters (verified against `asv_sim/asv_sim_node.py` and `asv_sim/model.py`)
+
+| Parameter | Type | Default | Range | Effect |
+|-----------|------|---------|-------|--------|
+| `collision.boats` | bool | `true` | | Boats block each other; `false` lets them pass through |
+| `collision.grid_file` | string | `''` | | Bathymetry GeoTIFF read once at start with `mbes_sim.bathy_grid.BathyGrid`; empty means no terrain collision; an unreadable file raises at start |
+| `models.<name>.length` | double, m | `4.0` | 0.01 to 1000, not less than `beam` | Hull length (capsule footprint) |
+| `models.<name>.beam` | double, m | `1.7` | 0.01 to 1000, not more than `length` | Hull width |
+| `models.<name>.draft` | double, m | `0.4` | 0.01 to 1000 | The boat grounds where grid depth + tide is less than this |
+
+Topic: `/asv_sim/collisions` (`asv_sim_msgs/msg/Collision`, reliable, depth 10), one message per contact onset.

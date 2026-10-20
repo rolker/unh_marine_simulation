@@ -752,12 +752,27 @@ namespace; `cube_bathymetry` publishes a relative `grid` in `<boat>/sensors/mbes
 `water_surface_frame` and `water_surface_boat_frame`. Starting the scorer and this node
 together with the boats is the single demo launch (issue #94).
 
+### Boats block each other and the shallows
+
+The demo boats cannot pass through each other and cannot go where the water is
+shallower than their draft (0.4 m) at the current tide: land and no-data cells
+of the truth grid are walls. They are indestructible; a contact only stops
+them, and they can back away. The launch hands `asv_sim` the same grid file the
+sonars sample (`collision.grid_file`). `demo.yaml` gives the `demo` model a
+4.0 x 1.7 m hull, 0.4 m draft. The demo tide is sped up (`tide_speed_factor`),
+so the shallows move in and out within a round; at low water a boat can be
+aground and must back out. Contacts are announced on `/asv_sim/collisions`
+(`asv_sim_msgs/msg/Collision`). To let boats pass through each other, start
+`asv_sim` with `collision.boats:=false` (not a launch argument yet; set it in a
+copy of `demo.yaml`). Charted objects (piers, buoys, rocks) are not obstacles
+yet (issue #113). Details: `asv_sim/README.md`.
+
 ### Known limits
 
 - The nav stack is not wired (`enable_nav`); there is no bridge or command bridge, so the operator mode buttons do nothing.
 - The tide topic `/asv_sim/environment/tide_level` is shared by every boat on purpose.
 - `asv_sim`'s `set_pose` service and `sim_reset` topic work per boat (they were both broken before issue #88).
-- Four `mbes_sim` nodes each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.
+- Four `mbes_sim` nodes and `asv_sim` each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.
 
 ### Tests
 
