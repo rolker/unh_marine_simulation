@@ -28,7 +28,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 """
-Launch the demo boats: several simulated boats at once, no navigation stack.
+Launch the demo boats: several simulated boats at once, with or without a navigation stack.
 
 The boats come from ``config/demo_roster.yaml`` (the only place their names
 appear). Each boat gets its own ROS namespace and TF frame prefix, its own
@@ -37,7 +37,7 @@ node simulates all of them. See ``marine_simulation/README.md``.
 
 The checks that stop a mis-wired demo from starting are plain functions at
 module level (``load_roster``, ``select_boats``, ``assign_joysticks``,
-``refuse_enable_nav``, ``parse_bool``, ``check_datum_grids``, ...) so they can
+``parse_bool``, ``check_datum_grids``, ...) so they can
 be unit tested without a launch context.
 """
 
@@ -70,6 +70,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch_ros.substitutions import FindPackageShare
 from launch_ros.utilities.evaluate_parameters import evaluate_parameter_dict
 # The roster lives in the package so the launch manager can import it too.
+from marine_simulation import demo_nav
+from marine_simulation import demo_support
 from marine_simulation.roster import Boat
 from marine_simulation.roster import load_roster
 from marine_simulation.roster import number
@@ -307,14 +309,6 @@ def check_datum_grids(root: str = DATUM_ROOT) -> None:
             % (root, '; '.join(problems)))
 
 
-def refuse_enable_nav(enable_nav: str) -> None:
-    """Raise if the navigation stack was requested; it is not wired yet."""
-    if parse_bool(enable_nav, 'enable_nav'):
-        raise RuntimeError(
-            'enable_nav:=true is not wired yet: the navigation stack (nav2, mission_manager, '
-            's57_grids) cannot run per boat in this launch. Leave enable_nav at false.')
-
-
 def asv_sim_parameters(
         boats: Sequence[Boat], tide_speed_factor: float, current_speed: float) -> dict:
     """Return the ``asv_sim`` parameters for the selected boats."""
@@ -348,7 +342,8 @@ def asv_sim_remappings(boats: Sequence[Boat]) -> List[Tuple[str, str]]:
     return remaps
 
 
-def lifecycle_guard_command(boats: Sequence[Boat], executable: str) -> List[str]:
+def lifecycle_guard_command(
+        boats: Sequence[Boat], executable: str, enable_nav: bool = False) -> List[str]:
     """
     Return the command of the post-launch lifecycle guard (``launch_manager_proto converge``).
 
@@ -357,10 +352,17 @@ def lifecycle_guard_command(boats: Sequence[Boat], executable: str) -> List[str]
     chain stops and the node sits in ``inactive`` for the whole session (issue 96). The guard
     reads each node's state and takes it the rest of the way, exactly like the launch manager
     does (same convergence code), and prints what it could not fix.
+
+    With ``enable_nav`` it also expects ``mission_manager`` and leaves nav2's own lifecycle
+    nodes alone: nav2's lifecycle manager brings those up, and a second writer on a node is
+    what the guard exists to avoid.
     """
     names = '|'.join(re.escape(b.name) for b in boats)
-    return [executable, 'converge', '--match', '^/(%s)/' % names,
-            '--expect', str(LIFECYCLE_NODES_PER_BOAT * len(boats)),
+    per_boat = demo_nav.lifecycle_nodes_per_boat(LIFECYCLE_NODES_PER_BOAT, enable_nav)
+    exclude = ['--exclude', demo_nav.nav_exclude_regex([b.name for b in boats])] \
+        if enable_nav else []
+    return [executable, 'converge', '--match', '^/(%s)/' % names] + exclude + [
+            '--expect', str(per_boat * len(boats)),
             '--settle', repr(GUARD_SETTLE_SECONDS),
             '--quiet-period', repr(GUARD_QUIET_SECONDS),
             '--timeout', repr(GUARD_TIMEOUT_SECONDS)]
@@ -484,6 +486,13 @@ def boat_actions(
         ]),
     ]
 
+    if settings.get('enable_nav'):
+        # mission_manager turns the task list a mission sends into goals for nav2's
+        # ``run_tasks`` action. Its launch file pushes no namespace of its own (robot_core
+        # puts it inside the boat's), so it sits in this group.
+        actions.append(_include('mission_manager', 'launch', 'mission_manager_launch.py',
+                                launch_arguments={'map_frame': boat.frame('map')}))
+
     if joystick is not None:
         actions.append(Node(
             package='joy_linux', executable='joy_linux_node', name='joy_node',
@@ -502,6 +511,32 @@ def boat_actions(
         _include('joy_to_helm', 'launch', 'joy_to_helm_launch.py'),
     ]))
     return GroupAction(actions)
+
+
+def nav_actions(boat: Boat, params_file: str) -> GroupAction:
+    """
+    Build the nav2 stack of one boat: Ben's real bring-up, in this boat's namespace.
+
+    ``nav2_bringup_launch.py`` pushes the namespace itself (``use_namespace``), so this must
+    sit outside the boat's own ``PushROSNamespace`` or the nodes would land in
+    ``/<boat>/<boat>``. Composition is off (as on the boat, which also runs with
+    ``use_composition: False``); a node that dies is not respawned, because nav2's lifecycle
+    manager takes the whole stack down on a lost bond and a respawned node would not be
+    brought back up. ``params_file`` is the demo's version of Ben's file
+    (``marine_simulation.demo_nav``). nav2's lifecycle manager reads ``bond_timeout`` from the
+    scope it is launched in, so the longer demo value is set here (the platform launch file
+    gives it no parameter of its own).
+    """
+    return GroupAction([
+        ScopedSetParameter(name='bond_timeout', value=demo_nav.BOND_TIMEOUT_S),
+        _include('ben_project11', 'launch', 'nav2_bringup_launch.py', launch_arguments={
+            'namespace': boat.name,
+            'use_namespace': 'true',
+            'use_composition': 'False',
+            'use_respawn': 'False',
+            'params_file': params_file,
+        }),
+    ])
 
 
 def resolve_mbes_grid(requested: str, env, demo_grid: str, chart_grid: str) -> Tuple[str, str]:
@@ -570,7 +605,7 @@ def launch_setup(context, *args, **kwargs):
     def arg(name: str) -> str:
         return LaunchConfiguration(name).perform(context)
 
-    refuse_enable_nav(arg('enable_nav'))
+    enable_nav = parse_bool(arg('enable_nav'), 'enable_nav')
     enable_joysticks = parse_bool(arg('enable_joysticks'), 'enable_joysticks')
     lifecycle_guard = parse_bool(arg('lifecycle_guard'), 'lifecycle_guard')
 
@@ -590,10 +625,18 @@ def launch_setup(context, *args, **kwargs):
         'mbes_grid_file': mbes_grid_file,
         'deadzone': 0.1,
         'autorepeat_rate': 10.0,
+        'enable_nav': enable_nav,
     }
     tide_speed_factor = parse_tide_speed_factor(arg('tide_speed_factor'))
     current_speed = parse_float(arg('current_speed'), 'current_speed', low=0.0)
     check_datum_grids()
+
+    nav_params = None
+    if enable_nav:
+        for package in ('mission_manager', 'ben_project11', 'nav2_bringup'):
+            require_package(package, 'it is part of the navigation stack; launch with '
+                                     'enable_nav:=false to run the boats without it')
+        nav_params = demo_nav.write_params(os.path.join(demo_support.state_dir(), 'nav'))
 
     joysticks = {}
     if enable_joysticks:
@@ -620,11 +663,13 @@ def launch_setup(context, *args, **kwargs):
             remappings=asv_sim_remappings(boats)),
     ]
     actions.extend(boat_actions(b, joysticks.get(b.name), settings) for b in boats)
+    if enable_nav:
+        actions.extend(nav_actions(b, nav_params) for b in boats)
     if lifecycle_guard:
         executable = os.path.join(get_package_prefix('launch_manager_proto'), 'lib',
                                   'launch_manager_proto', 'launch_manager_proto')
         actions.append(ExecuteProcess(
-            cmd=lifecycle_guard_command(boats, executable), name='lifecycle_guard',
+            cmd=lifecycle_guard_command(boats, executable, enable_nav), name='lifecycle_guard',
             output='screen'))
     return actions
 
@@ -649,7 +694,9 @@ def generate_launch_description():
                 'Start a joy_linux driver per boat. joy_to_helm always runs, so '
                 'sensor_msgs/Joy published on <boat>/joy drives the boat either way.'),
         declare('enable_nav', TextSubstitution(text='false'),
-                'Reserved for the navigation stack. Not wired yet: true is refused.'),
+                'Run the navigation stack per boat: mission_manager and the real ben_project11 '
+                'nav2 bring-up (marine_simulation.demo_nav says how its parameters differ). '
+                'Off by default.'),
         declare('tide_speed_factor', TextSubstitution(text='10'),
                 'Tide speed multiplier (10 = ~75 min cycle, 3600 = ~12 sec cycle, '
                 '1 = real-time, 0 = a frozen tide).'),

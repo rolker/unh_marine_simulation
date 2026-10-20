@@ -27,12 +27,16 @@ groups:
       boats: {type: string, default: '${boats}'}
       roster_file: {type: string, default: '${roster_file}'}
       enable_joysticks: {type: bool, default: '${enable_joysticks}'}
+      enable_nav: {type: bool, default: '${enable_nav}'}
       joystick_config: {type: string, default: '${joystick_config}'}
       # The manager is the one convergence loop; the launch's own guard stays off.
       lifecycle_guard: {type: bool, default: false}
     follows: [camp]
     lifecycle:
       match: '^/(${boats_regex})/'
+      # nav2's servers and costmaps (when --nav is on) are brought up by nav2's own lifecycle
+      # manager: a second writer on a node is how one ends up in the wrong state
+      exclude: '${boats_exclude}'
       expect: ${boats_expect}
       target: active
     ready: {timeout: 180}
