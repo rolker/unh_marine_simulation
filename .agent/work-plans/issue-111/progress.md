@@ -19,3 +19,17 @@ issue: 111
 - [ ] Watch: datum caveat from #98 (CCOM compilation datum unstated, treated as MLLW) applies to grounding depth as well; note it in the docs.
 - [ ] Recommendation: land/nodata = wall, no-grid = no collision; keep all later consequences (damage, reset) out of scope as the issue says.
 - [ ] Consequences: asv_sim parameter table in .agents/README.md, asv_sim/README, demo roster/launch, marine_simulation README, package.xml deps, new tests.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-20 11:33 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Plan**: `.agent/work-plans/issue-111/plan.md` at `637b6db`
+**Branch**: feature/issue-111 at `637b6db`
+**Phases**: single
+
+### Open questions
+- [ ] Footprint values for models other than demo/cw4 (unverified defaults 4.0 x 1.7 x 0.4)
+- [ ] Collision default on only where a grid is passed (demo); sim_robot_launch stays off
+- [ ] Wave heave/roll/pitch ignored for clearance
