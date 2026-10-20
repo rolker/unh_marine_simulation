@@ -962,10 +962,10 @@ def main(argv=None):
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
-    if args.startup_timeout is None:
-        args.startup_timeout = 240.0 if args.nav else 90.0
     if args.watchdog:
         args.nav = True
+    if args.startup_timeout is None:
+        args.startup_timeout = 240.0 if args.nav else 90.0
     roster = args.roster or graph.default_roster_path()
     boats = ([b.strip() for b in args.boats.split(',') if b.strip()] if args.boats
              else graph.boats_from_roster(roster))
