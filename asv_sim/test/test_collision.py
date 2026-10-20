@@ -76,42 +76,18 @@ def ns(seconds):
     return Time(nanoseconds=int(round(seconds * 1e9)))
 
 
-@pytest.fixture
-def mdl():
-    rclpy.init()
-    node = rclpy.node.Node('collision_test')
-    try:
-        yield model.Model('demo', node)
-    finally:
-        node.destroy_node()
-        rclpy.shutdown()
-
-
-@pytest.fixture(scope='module')
-def origin_and_grid(tmp_path_factory):
-    path = str(tmp_path_factory.mktemp('grid') / 'truth.tif')
-    lat, lon = synthetic_grid.write_grid(path)
-    return lat, lon, path
-
-
-@pytest.fixture
-def world(origin_and_grid):
-    from mbes_sim.bathy_grid import BathyGrid
-    lat, lon, path = origin_and_grid
-    return lat, lon, BathyGrid(path)
-
-
 class Rig:
     """Boats on the synthetic grid, stepped by hand."""
 
-    def __init__(self, mdl, world, boats=True, terrain=True, tide=0.0):
+    def __init__(self, mdl, world, boats=True, terrain=True, tide=0.0,
+                 objects=None):
         self.lat0, self.lon0, grid = world
         self.mdl = mdl
         self.log = Recorder()
         self.events = []
         self.collisions = collision.Collisions(
             grid=grid if terrain else None, boats=boats,
-            emit=self.events.append, logger=self.log)
+            emit=self.events.append, logger=self.log, objects=objects)
         self.env = Tide(tide)
         self.boats = {}
         self.frozen = {}

@@ -452,3 +452,34 @@ def test_the_grid_stops_a_boat_at_the_shore_through_the_node(tmp_path):
         assert kinds == {Collision.KIND_TERRAIN}
     finally:
         r.close()
+
+
+ENC_DIR = pathlib.Path(__file__).resolve().parents[1] / 'enc'
+
+
+def test_the_node_reads_charted_objects_from_a_cell_directory(tmp_path):
+    r = Rig(tmp_path, {'collision.enc_dir': str(ENC_DIR),
+                       'collision.enc_footprints': ['BOYLAT=2.0', 'UWTROC=0']})
+    try:
+        r.wait_for_fixes()
+        sources = r.sim.collisions.sources
+        objects = [s for s in sources
+                   if type(s).__name__ == 'ChartedObjectSource']
+        assert len(objects) == 1
+        klasses = {p.klass for p in objects[0].primitives}
+        assert 'SLCONS' in klasses and 'UWTROC' not in klasses
+        assert {p.radius for p in objects[0].primitives
+                if p.klass == 'BOYLAT'} == {2.0}
+    finally:
+        r.close()
+
+
+@pytest.mark.parametrize('extra', [
+    {'collision.enc_dir': '/no/such/enc'},
+    {'collision.enc_dir': str(ENC_DIR),
+     'collision.enc_footprints': ['LNDARE=1']},
+])
+def test_unusable_charted_object_settings_refuse_to_start(tmp_path, extra):
+    with pytest.raises((FileNotFoundError, ValueError)):
+        Rig(tmp_path, extra)
+    assert not rclpy.ok()

@@ -11,7 +11,7 @@ step and a boat cannot tunnel through a shore or a hull.
 What a boat can touch is a list of *obstacle sources*. Each source has
 ``correct(step, lat, lon)``, returning the (possibly corrected) position and
 the list of :class:`Contact` it made. Boats and terrain are the two sources
-here; another one (charted objects, issue #113) is added by appending an
+here; another one (charted objects, issue #113, is the third) is added by appending an
 object with the same method to ``Collisions.sources``, nothing in
 :meth:`Collisions.resolve` changes.
 
@@ -49,6 +49,10 @@ CONTACT_RELEASE_NS = 1000000000
 # Contact kinds (the values of asv_sim_msgs/msg/Collision).
 KIND_BOAT = 0
 KIND_TERRAIN = 1
+KIND_OBJECT = 2
+
+# Edge of the squares of the spatial hash over the charted objects, metres.
+BUCKET = 100.0
 
 # A contact: kind, name of the other boat ('' for terrain), unit normal
 # (east, north) pointing away from the obstacle, velocity (east, north) of
@@ -386,6 +390,77 @@ class TerrainSource:
                 return new_lat, new_lon, [contact]
 
 
+class ChartedObjectSource:
+    """Charted objects (piers, pontoons, piles, buoys, rocks, wrecks).
+
+    Obstacles are :class:`asv_sim.charts.Primitive` tuples in a local metric
+    frame: a circle (a segment of no length) or a segment with a half-width.
+    The hull capsule is tested against each primitive near it; a primitive
+    with a charted ``depth`` only blocks a boat while that depth plus the
+    tide is less than the boat's draft, the rest block at every tide. The
+    contact is named by the object class (``other`` of the event).
+
+    :param primitives: Iterable of ``Primitive``.
+    :param project: ``project(lat, lon) -> (x, y)`` in the primitives' frame
+        (radians in, metres out).
+    """
+
+    uses_tide = True
+
+    def __init__(self, primitives, project):
+        self.project = project
+        self.primitives = list(primitives)
+        self.buckets = {}
+        for index, p in enumerate(self.primitives):
+            x0, x1 = sorted((p.x0, p.x1))
+            y0, y1 = sorted((p.y0, p.y1))
+            for ix in range(math.floor((x0 - p.radius) / BUCKET),
+                            math.floor((x1 + p.radius) / BUCKET) + 1):
+                for iy in range(math.floor((y0 - p.radius) / BUCKET),
+                                math.floor((y1 + p.radius) / BUCKET) + 1):
+                    self.buckets.setdefault((ix, iy), []).append(index)
+
+    def _near(self, x, y, reach):
+        found = set()
+        for ix in range(math.floor((x - reach) / BUCKET),
+                        math.floor((x + reach) / BUCKET) + 1):
+            for iy in range(math.floor((y - reach) / BUCKET),
+                            math.floor((y + reach) / BUCKET) + 1):
+                found.update(self.buckets.get((ix, iy), ()))
+        return found
+
+    def correct(self, step, lat, lon):
+        contacts = {}
+        reach = step.length + step.beam
+        for _ in range(3):
+            x, y = self.project(lat, lon)
+            if not _finite(x, y):
+                break
+            moved = False
+            for index in sorted(self._near(x, y, reach)):
+                p = self.primitives[index]
+                if p.depth is not None \
+                        and p.depth + step.tide - step.draft >= 0.0:
+                    continue
+                mine = capsule_axis((x, y), step.heading, step.length,
+                                    step.beam)
+                hit = capsule_penetration(
+                    mine, ((p.x0, p.y0), (p.x1, p.y1), p.radius))
+                if hit is None:
+                    continue
+                depth, normal = hit
+                lat, lon = move_en(
+                    lat, lon, normal[0] * depth, normal[1] * depth)
+                x += normal[0] * depth
+                y += normal[1] * depth
+                contacts[p.klass] = Contact(
+                    KIND_OBJECT, p.klass, normal, (0.0, 0.0), math.nan)
+                moved = True
+            if not moved:
+                break
+        return lat, lon, list(contacts.values())
+
+
 class Collisions:
     """Resolve contacts for every registered boat.
 
@@ -393,17 +468,23 @@ class Collisions:
         ``getXY``, ``getDepth`` and ``geoTransform``), or ``None`` for no
         terrain.
     :param boats: ``False`` lets boats pass through each other.
+    :param objects: A :class:`ChartedObjectSource`, or ``None``.
     :param emit: Called with one dict per contact onset.
     :param logger: Object with ``info`` and ``warning``.
     """
 
-    def __init__(self, grid=None, boats=True, emit=None, logger=None):
+    def __init__(self, grid=None, boats=True, emit=None, logger=None,
+                 objects=None):
         self.dynamics = {}
         self.emit = emit
         self.logger = logger
         self.sources = []
         if boats:
             self.sources.append(BoatSource(self))
+        # Boats, charted objects, then terrain: where they disagree (a boat
+        # between a pier and the shore) the bottom has the last word.
+        if objects is not None:
+            self.sources.append(objects)
         if grid is not None:
             self.sources.append(TerrainSource(grid))
         self._last_seen = {}
@@ -543,8 +624,12 @@ class Collisions:
         onset = last is None or now - last > CONTACT_RELEASE_NS
         if onset:
             if self.logger is not None:
-                what = ('boat ' + contact.other if contact.kind == KIND_BOAT
-                        else 'the bottom or shore')
+                if contact.kind == KIND_BOAT:
+                    what = 'boat ' + contact.other
+                elif contact.kind == KIND_OBJECT:
+                    what = 'charted object ' + contact.other
+                else:
+                    what = 'the bottom or shore'
                 self.logger.info(
                     'asv_sim platform {!r} touched {} at {:.1f} m/s'.format(
                         dyn.name, what, closing))

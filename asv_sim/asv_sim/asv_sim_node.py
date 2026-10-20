@@ -66,6 +66,35 @@ class AsvSim(rclpy.node.Node):
                 description='Bathymetry GeoTIFF (band 1, positive depth, '
                 'as read by mbes_sim.bathy_grid). Empty: no terrain '
                 'collision. Read once at start.')).value
+        enc_dir = self.declare_parameter(
+            'collision.enc_dir', '',
+            ParameterDescriptor(
+                description='S-57 ENC cell (.000) or a directory of cells; '
+                'charted piers, pontoons, piles, buoys, beacons, rocks and '
+                'wrecks block boats. Empty: no charted objects. Read once '
+                'at start; an unreadable path stops the node. Point it at '
+                'the cells of the area only.')).value
+        enc_footprints = self.declare_parameter(
+            'collision.enc_footprints', [''],
+            ParameterDescriptor(
+                description='Overrides of the footprint of a charted class '
+                'as CLASS=metres (radius of a point, half width of a line); '
+                '0 leaves the class out. Example: BOYLAT=1.5, SLCONS=0.')).value
+        objects = None
+        if enc_dir:
+            from asv_sim import charts
+            primitives, project, counts = charts.load(
+                enc_dir, [e for e in enc_footprints if e])
+            objects = asv_sim.collision.ChartedObjectSource(
+                primitives, project)
+            self.get_logger().info(
+                'charted objects on: {} primitives from {} ({})'.format(
+                    len(primitives), enc_dir, ', '.join(
+                        '{} {}'.format(k, v)
+                        for k, v in sorted(counts.items())) or 'none'))
+        else:
+            self.get_logger().info(
+                'charted objects off: collision.enc_dir is not set')
         grid = None
         if grid_file:
             from mbes_sim.bathy_grid import BathyGrid
@@ -80,7 +109,7 @@ class AsvSim(rclpy.node.Node):
             QoSProfile(depth=10, reliability=ReliabilityPolicy.RELIABLE))
         return asv_sim.collision.Collisions(
             grid=grid, boats=boats, emit=self._publishCollision,
-            logger=self.get_logger())
+            logger=self.get_logger(), objects=objects)
 
     def _publishCollision(self, event: dict) -> None:
         msg = Collision()

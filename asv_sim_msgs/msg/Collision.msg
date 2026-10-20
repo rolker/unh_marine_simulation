@@ -11,9 +11,12 @@ string platform
 
 uint8 KIND_BOAT = 0
 uint8 KIND_TERRAIN = 1
+uint8 KIND_OBJECT = 2
 uint8 kind
 
-# Name of the other boat for KIND_BOAT; empty for KIND_TERRAIN.
+# Name of the other boat for KIND_BOAT; the S-57 class of the charted
+# object (SLCONS, PONTON, PILPNT, BOYLAT, UWTROC, WRECKS, ...) for
+# KIND_OBJECT; empty for KIND_TERRAIN.
 string other
 
 # Where the blocked boat is, degrees.
@@ -26,5 +29,5 @@ float32 closing_speed
 
 # KIND_TERRAIN: water depth (grid depth plus tide) in metres under the
 # hull centre at the place the boat tried to go; NaN where there is no
-# water or no data. KIND_BOAT: NaN.
+# water or no data. KIND_BOAT and KIND_OBJECT: NaN.
 float32 water_depth
