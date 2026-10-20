@@ -126,14 +126,40 @@ def test_the_name_can_be_chosen_in_both_option_forms(home):
     assert result.returncode == 1 and 'NOT INSTALLED' in result.stderr
 
 
+def _exec_arguments(exec_value):
+    """Decode an Exec value the way the Desktop Entry specification says a launcher does."""
+    value = exec_value.replace('\\\\', '\\')  # string level: \\ -> \
+    arguments, current, quoted, started, i = [], '', False, False, 0
+    while i < len(value):
+        c = value[i]
+        if quoted and c == '\\':
+            current += value[i + 1]
+            i += 1
+        elif c == '"':
+            quoted, started = not quoted, True
+        elif c == ' ' and not quoted:
+            if started:
+                arguments.append(current)
+            current, started = '', False
+        else:
+            current += c
+            started = True
+        i += 1
+    if started:
+        arguments.append(current)
+    return [a.replace('%%', '%') for a in arguments]
+
+
 def test_a_path_with_spaces_and_shell_characters_is_quoted_for_the_desktop_entry(home):
-    odd = home / 'my demo $x "q"'
+    odd = home / 'my demo $x "q" `b` \\n 100%f'
     odd.mkdir()
     _script(odd / 'run_demo.sh', '#!/bin/sh\nexit 0\n')
-    result = _run(home, run_demo=odd / 'run_demo.sh')
+    result = _run(home, '--joysticks', '/x/a b\\c%u.yaml', run_demo=odd / 'run_demo.sh')
     assert result.returncode == 0, result.stderr
     exec_line = _fields(_entry(home))['Exec']
-    assert exec_line == '"%s/my demo \\$x \\"q\\"/run_demo.sh" "--hold"' % home
+    assert '%f' not in exec_line.replace('%%', '') and '%u' not in exec_line.replace('%%', '')
+    assert _exec_arguments(exec_line) == [
+        str(odd / 'run_demo.sh'), '--hold', '--joysticks', '/x/a b\\c%u.yaml']
 
 
 def test_without_env_bash_it_refuses_and_says_what_to_create(home):
@@ -153,12 +179,24 @@ def test_an_env_bash_that_gives_no_ros2_is_refused(home):
     assert not (home / 'Desktop' / 'marine_simulation_demo.desktop').exists()
 
 
-def test_the_config_dir_override_is_honoured(home):
+def test_the_config_dir_override_is_honoured_and_carried_by_the_icon(home):
     other = home / 'elsewhere'
     other.mkdir()
     shutil.copy(home / '.config' / 'marine_simulation_demo' / 'env.bash', other / 'env.bash')
     (home / '.config' / 'marine_simulation_demo' / 'env.bash').unlink()
     assert _run(home, DEMO_CONFIG_DIR=str(other)).returncode == 0
+    assert _exec_arguments(_fields(_entry(home))['Exec']) == [
+        'env', 'DEMO_CONFIG_DIR=%s' % other, str(home / 'run_demo.sh'), '--hold']
+
+
+def test_the_check_does_not_inherit_ros_from_the_installing_terminal(home):
+    # An env.bash that gives no ros2 must be refused even when the terminal that runs
+    # the installer has ros2 on its PATH (a double click will not).
+    (home / '.config' / 'marine_simulation_demo' / 'env.bash').write_text('true\n')
+    ros_bin = home / 'ros' / 'bin'
+    result = _run(home, PATH='%s:%s/bin:/usr/bin:/bin' % (ros_bin, home))
+    assert result.returncode == 1
+    assert 'does not put ros2 on the PATH' in result.stderr
 
 
 def test_the_desktop_directory_comes_from_xdg_user_dir_when_it_answers(home):

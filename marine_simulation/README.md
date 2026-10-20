@@ -84,7 +84,9 @@ command typed last, so type it once yourself first: `~/bin/run_demo.sh` (any cop
    `run_demo.sh` in `lib/marine_simulation`; `ros2 pkg prefix marine_simulation`
    gives the prefix). It refuses until `env.bash` exists and gives a working
    `ros2`, because a double click starts with no workspace sourced. Run it
-   again if the workspace moves: the icon holds the full path. (The file is
+   again if the workspace moves: the icon holds the full path (and a
+   `DEMO_CONFIG_DIR` given to the installer). The check starts from a plain
+   system `PATH`, so a ROS terminal does not hide a bad `env.bash`. (The file is
    `marine_simulation_demo.desktop` on the desktop; delete it to remove the icon.)
 4. Rehearse from a cold boot: start the computer, double-click the icon, and
    check the card above against what appears. This is a human check; the tests

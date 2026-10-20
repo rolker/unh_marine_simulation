@@ -58,7 +58,9 @@ done
 [ -f "$CONFIG_DIR/env.bash" ] ||
     die "$CONFIG_DIR/env.bash is missing. Put the line that sources the workspace setup.bash in it, e.g.
   mkdir -p $CONFIG_DIR && echo 'source /path/to/workspace/setup.bash' > $CONFIG_DIR/env.bash"
-env -i HOME="$HOME" PATH="${PATH:-/usr/bin:/bin}" bash -c \
+# A fixed system PATH, not the caller's: run from a sourced ROS terminal, the caller's
+# PATH would already hold ros2 and any env.bash would pass.
+env -i HOME="$HOME" PATH=/usr/local/bin:/usr/bin:/bin bash -c \
     'source "$1" > /dev/null 2>&1 && command -v ros2 > /dev/null 2>&1' _ "$CONFIG_DIR/env.bash" ||
     die "$CONFIG_DIR/env.bash does not put ros2 on the PATH; it must source the workspace setup.bash."
 
@@ -68,21 +70,29 @@ fi
 [ -n "${desktop:-}" ] || desktop=$HOME/Desktop
 [ -d "$desktop" ] || die "the desktop directory $desktop does not exist."
 
-desktop_quote() { # one Exec argument, quoted as the Desktop Entry specification asks
+desktop_quote() { # one Exec argument: quoted for the Exec value, then escaped for the file
     local s=$1
     s=${s//\\/\\\\}
     s=${s//\"/\\\"}
     s=${s//\`/\\\`}
     s=${s//\$/\\\$}
-    printf '"%s"' "$s"
+    s=${s//%/%%}
+    s=\"$s\"
+    # The file value is a string too: its backslashes are doubled once more.
+    printf '%s' "${s//\\/\\\\}"
 }
 
 exec_line=$(desktop_quote "$RUN_DEMO")
+# A configuration directory chosen with DEMO_CONFIG_DIR was checked above; the double
+# click has no such variable, so the icon carries it.
+if [ -n "${DEMO_CONFIG_DIR:-}" ]; then
+    exec_line="env $(desktop_quote "DEMO_CONFIG_DIR=$DEMO_CONFIG_DIR") $exec_line"
+fi
 for option in --hold "${options[@]}"; do
     exec_line="$exec_line $(desktop_quote "$option")"
 done
-case "$name" in
-    *$'\n'*) die "the name must be one line." ;;
+case "$name$exec_line" in
+    *$'\n'*) die "the name and the options must be one line each." ;;
 esac
 
 file=$desktop/marine_simulation_demo.desktop
