@@ -107,3 +107,18 @@ Roland's decisions folded into plan.md. Deliberate simplification (decision 5): 
 - [ ] (suggestion) keep the standalone guard alive for the nav case or add a read-only nav2 state check to READY — `demo_boats_launch.py` (Lens B; left open: the manager path is the demo's, Stage 2's watchdog will see an unavailable navigator)
 
 Specialists: static analysis (pre-commit flake8 on every commit, passed), governance (ADR-0008 headers present, ADR-0009 no new dependency, ADR-0013 entries, consequences: README, .agents/README.md, plan, tests done), plan drift (resolution/size delta, SurveyPattern self-test and the `check_multi_boat_graph.py` no-change are recorded in the plan), two Claude adversarial passes (Lens A, Lens B), cross-model (codex ran; gemini failed: headless tool denial, exit 1).
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-20 13:25 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-112 at `bb1847d`
+**Stage**: 1 of 3 (nav stack per boat; Stage 2 watchdog and section missions, Stage 3 attract mode and polish follow)
+
+### Evidence
+- Suite (marine_simulation and launch_manager_proto): 918 tests, 8 failures, the same 8 lint failures in untouched launch files as the baseline (882 tests, 8 failures before the work).
+- Self-test `--nav` through the launch (2 boats) 17 of 17; through the launch manager `--demo --nav` (2 boats) 19 of 19 on the final code; four boats through the manager 23 of 23 (before the last self-test fixes, which only touch the self-test); no nav, four boats 16 of 16.
+- Per-boat nav2 lifecycle nodes pinned from the headless run: controller_server, smoother_server, planner_server, behavior_server, manda_coverage, velocity_smoother, collision_monitor, bt_task_navigator, waypoint_follower, docking_server, local_costmap/local_costmap, global_costmap/global_costmap (24 for two boats, 48 for four, all active before and after the mission); `lifecycle_manager_navigation` is a plain node; the manager owns ten lifecycle nodes per boat (nine and `mission_manager`).
+- Load, 16 core dev computer: 2 boats 26 processes 2.1 GB (no nav) vs 50 processes 4.4 GB (nav); 4 boats 50 processes 4.5 GB vs about 100 processes 11 GB, saturating the 16 cores for about 100 s while starting. At nav2's defaults one of four boats' bring-up aborted on its 4 s bond timeout and a planner missed the 10 s acknowledge timeout on the 5.8 M-cell global costmap; `bond_timeout` 30 s and a 2 m, 2400 m global costmap fixed both (`ros2 param get` showed 30.0 on the lifecycle manager).
+- Not verified: the event computer's load; the Stage 2 watchdog (not built); nav2 behaviour at the first mission line after a very loaded start beyond the above.
