@@ -63,7 +63,7 @@ step and a boat cannot tunnel through a shore or another hull.
   shore cannot be jumped.
 - **Speed.** A boat moving into the obstacle keeps only the part of its speed
   that is along the hull axis and across the contact: `speed * (1 - cos^2)`
-  of the angle between its heading and the contact normal. Head on it stops,
+  of the angle between its heading and the contact normal. With several contacts at once the most restrictive one decides (a corner stops the boat as the wall it faces does). Head on it stops,
   at a glancing angle it keeps sliding, reversing is free. Heading, rpm and
   rudder are not changed.
 - **Event.** `~/collisions` (`asv_sim_msgs/msg/Collision`, reliable) gets one

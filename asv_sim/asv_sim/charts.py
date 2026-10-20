@@ -120,7 +120,11 @@ def read_features(cells, classes):
     wanted = set(classes)
     features = []
     for cell in cells:
-        dataset = ogr.Open(cell)
+        try:
+            dataset = ogr.Open(cell)
+        except RuntimeError as e:    # GDAL exceptions are on
+            raise OSError('cannot open the S-57 cell {!r}: {}'.format(
+                cell, e)) from e
         if dataset is None:
             raise OSError('cannot open the S-57 cell {!r}: {}'.format(
                 cell, gdal.GetLastErrorMsg() or 'not an S-57 file'))

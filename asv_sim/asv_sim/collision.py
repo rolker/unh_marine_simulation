@@ -571,6 +571,7 @@ class Collisions:
         forward = (math.sin(heading), math.cos(heading))
         speed0 = dyn.speed
         closings = []
+        keep = 1.0
         for contact in contacts.values():
             normal = contact.normal
             relative = (attempted[0] - contact.other_velocity[0],
@@ -578,8 +579,12 @@ class Collisions:
             closings.append(max(0.0, -(relative[0] * normal[0]
                                        + relative[1] * normal[1])))
             along = forward[0] * normal[0] + forward[1] * normal[1]
-            if dyn.speed * along < 0.0:
-                dyn.speed *= 1.0 - along * along
+            if speed0 * along < 0.0:
+                # The most restrictive contact decides: a corner stops the
+                # boat as the wall it faces does, and the many hops and
+                # passes of one grind along a buoy do not compound.
+                keep = min(keep, 1.0 - along * along)
+        dyn.speed = speed0 * keep
         if reverted:
             dyn.yaw_rate = 0.0
         dyn.latitude, dyn.longitude, dyn.heading = lat, lon, heading

@@ -326,17 +326,45 @@ def test_charted_soundings_reach_the_primitives():
 def test_an_unreadable_cell_is_named_in_the_error(tmp_path):
     bad = tmp_path / 'US9BAD01.000'
     bad.write_bytes(b'this is not an S-57 cell')
-    with pytest.raises(Exception, match='US9BAD01'):
+    with pytest.raises(OSError, match='US9BAD01'):
         charts.load(str(bad))
 
 
 def test_cells_too_far_apart_are_refused_naming_the_outermost(monkeypatch):
     monkeypatch.setattr(charts, 'MAX_SPAN_DEGREES', 0.01)
-    with pytest.raises(ValueError, match='US5PSMC'):
+    with pytest.raises(ValueError) as error:
         charts.load(str(ENC_DIR))
+    named = str(error.value)
+    # the two installed cells are side by side: each holds an outermost feature
+    assert 'US5PSMCC.000' in named and 'US5PSMCD.000' in named
 
 
 def test_no_charted_objects_found_is_an_empty_result_not_a_crash():
     primitives, project, counts = charts.load(
         str(ENC_DIR), ['%s=0' % k for k in charts.DEFAULT_FOOTPRINTS])
     assert primitives == [] and counts == {}
+
+
+def test_a_corner_of_two_walls_of_one_class_is_two_contacts(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    source = source_for(rig, [
+        solid('SLCONS', 4.0, -60.0, 4.0, 60.0, 1.0),
+        solid('SLCONS', -60.0, 1.5, 60.0, 1.5, 1.0)])
+    a = rig.add('a', 2.0, -0.2, 90.0)
+    step = collision._Step(a, (a.latitude, a.longitude), a.heading,
+                           a.heading, 0.0)
+    _, _, found = source.correct(step, a.latitude, a.longitude)
+    normals = {(round(c.normal[0]), round(c.normal[1])) for c in found}
+    assert len(found) >= 2 and len(normals) >= 2, found
+
+
+def test_grinding_along_a_buoy_does_not_compound_the_speed_rule(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    rig.collisions.sources.append(source_for(rig, [
+        solid('BOYLAT', 20.0, 1.0, 20.0, 1.0, 1.0)]))
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(16.0, {'a': 1.0})
+    # a glancing pass loses speed once per contact normal (1 - cos^2), not
+    # once per hop and pass: it is past the buoy and back near top speed
+    assert rig.en(a)[0] > 22.0
+    assert a.speed > 2.0
