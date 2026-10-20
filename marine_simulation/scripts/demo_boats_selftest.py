@@ -753,10 +753,16 @@ class SelfTest:
                     'still reported: %s' % self.own_tasks(boat, first)[:3])
         self._next_pad = 0.0
         self.pad_boat = boat
-        again = self.wait_until(lambda: self.wd(boat, 'state') == 'AUTONOMOUS'
-                                and self.wd(boat, 'mission') == 'RUNNING'
-                                and self.wd(boat, 'generation', 0) > first,
-                                WATCHDOG_IDLE + mission_seconds)
+
+        def restarted():
+            # the state and the task report are separate topics: wait for both
+            generation = self.wd(boat, 'generation', 0)
+            return (self.wd(boat, 'state') == 'AUTONOMOUS'
+                    and self.wd(boat, 'mission') == 'RUNNING' and generation > first
+                    and ('%s_s%s/%s_s%s_l000' % (boat, generation, boat, generation))
+                    in self.own_tasks(boat, generation))
+
+        again = self.wait_until(restarted, WATCHDOG_IDLE + mission_seconds)
         second = self.wd(boat, 'generation')
         ids = self.own_tasks(boat, second)
         self.record('%s: idle again sends the whole section anew from the first line' % boat,

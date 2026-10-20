@@ -193,3 +193,18 @@ def test_node_counts_and_names():
 
 def test_the_bond_timeout_is_longer_than_nav2s_default_of_four_seconds():
     assert demo_nav.BOND_TIMEOUT_S > 4.0
+
+
+def test_the_port_offsets_step_by_boat_and_the_first_boat_keeps_its_ports():
+    assert [demo_nav.zmq_port_offset(i) for i in range(4)] == [0, 10, 20, 30]
+    with pytest.raises(ValueError):
+        demo_nav.zmq_port_offset(-1)
+
+
+def test_the_preload_has_the_shim_first_and_keeps_the_rest_once():
+    shim = '/p/libdemo_zmq_ports.so'
+    assert demo_nav.preload(shim) == shim
+    assert demo_nav.preload(shim, '/a.so:/b.so') == shim + ' /a.so /b.so'
+    assert demo_nav.preload(shim, shim + ' /a.so') == shim + ' /a.so'
+    assert demo_nav.zmq_shim_path('/prefix') == '/prefix/lib/marine_simulation/' + \
+        demo_nav.ZMQ_SHIM_LIBRARY

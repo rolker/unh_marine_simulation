@@ -398,6 +398,41 @@ def test_with_nav_every_boat_gets_mission_manager_and_nav2_in_its_own_namespace(
     assert sum(isinstance(a, GroupAction) for a in actions) == 2 * len(roster)
 
 
+def test_each_boat_gets_its_own_zeromq_port_offset_and_it_ends_with_the_group(
+        monkeypatch, roster):
+    monkeypatch.setenv('LD_PRELOAD', '/lib/other.so')
+    inside = []
+
+    def record(package, *path, launch_arguments=None):
+        def run(context):
+            inside.append((context.environment.get('LD_PRELOAD'),
+                           context.environment.get('DEMO_ZMQ_PORT_OFFSET')))
+        return OpaqueFunction(function=run)
+
+    monkeypatch.setattr(demo, '_include', record)
+    after = []
+    shim = '/x/libdemo_zmq_ports.so'
+    groups = [demo.nav_actions(b, '/p.yaml', i, shim) for i, b in enumerate(roster[:3])]
+    _run([*groups, OpaqueFunction(function=lambda c: after.append(
+        (c.environment.get('LD_PRELOAD'), c.environment.get('DEMO_ZMQ_PORT_OFFSET'))))])
+    assert [offset for _, offset in inside] == ['0', '10', '20']
+    assert all(p == shim + ' /lib/other.so' for p, _ in inside)
+    assert after == [('/lib/other.so', None)]          # nothing leaks past the groups
+
+
+def test_without_the_shim_the_environment_is_untouched(included):
+    group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml')
+    from launch.actions import SetEnvironmentVariable
+    assert not any(isinstance(e, SetEnvironmentVariable) for e in group.get_sub_entities())
+
+
+def test_a_missing_shim_is_refused_with_the_reason(
+        tmp_path, no_host_checks, nav_state, monkeypatch, included):
+    monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/nonexistent/' + package)
+    with pytest.raises(RuntimeError, match='only one boat can run a navigation goal'):
+        demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+
+
 def test_nav2_sits_outside_the_boats_namespace_with_a_longer_bond_timeout(included):
     from launch_ros.actions import PushROSNamespace
     group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml')
@@ -678,10 +713,16 @@ def _processes(actions):
 
 
 @pytest.fixture
-def no_host_checks(monkeypatch):
+def no_host_checks(monkeypatch, tmp_path_factory):
+    prefix = tmp_path_factory.mktemp('prefix')
+    shim = pathlib.Path(demo.demo_nav.zmq_shim_path(str(prefix)))
+    shim.parent.mkdir(parents=True)
+    shim.write_bytes(b'x')              # the shim only has to exist here
     monkeypatch.setattr(demo, 'check_datum_grids', lambda *a, **k: None)
     monkeypatch.setattr(demo, 'check_mbes_grid', lambda *a, **k: [])    # the grid is a stub
-    monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/opt/' + package)
+    monkeypatch.setattr(demo, 'get_package_prefix',
+                        lambda package: str(prefix) if package == 'marine_simulation'
+                        else '/opt/' + package)
 
 
 def test_the_guard_runs_by_default_after_the_boats(tmp_path, no_host_checks):

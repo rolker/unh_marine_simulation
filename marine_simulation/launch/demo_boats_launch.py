@@ -55,6 +55,7 @@ from launch.actions import ExecuteProcess
 from launch.actions import GroupAction
 from launch.actions import IncludeLaunchDescription
 from launch.actions import OpaqueFunction
+from launch.actions import SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command
 from launch.substitutions import LaunchConfiguration
@@ -557,7 +558,7 @@ def boat_actions(
     return GroupAction(actions)
 
 
-def nav_actions(boat: Boat, params_file: str) -> GroupAction:
+def nav_actions(boat: Boat, params_file: str, index: int = 0, shim: str = '') -> GroupAction:
     """
     Build the nav2 stack of one boat: Ben's real bring-up, in this boat's namespace.
 
@@ -569,9 +570,19 @@ def nav_actions(boat: Boat, params_file: str) -> GroupAction:
     brought back up. ``params_file`` is the demo's version of Ben's file
     (``marine_simulation.demo_nav``). nav2's lifecycle manager reads ``bond_timeout`` from the
     scope it is launched in, so the longer demo value is set here (the platform launch file
-    gives it no parameter of its own).
+    gives it no parameter of its own). The navigator's Groot publisher binds fixed ZeroMQ
+    ports, so with ``shim`` the boat's processes get their ports moved by ``index`` times
+    ``demo_nav.ZMQ_PORT_STEP`` (``demo_nav`` says why); the group's environment changes end
+    with the group.
     """
-    return GroupAction([
+    environment = []
+    if shim:
+        environment = [
+            SetEnvironmentVariable('LD_PRELOAD', demo_nav.preload(
+                shim, os.environ.get('LD_PRELOAD', ''))),
+            SetEnvironmentVariable('DEMO_ZMQ_PORT_OFFSET', str(demo_nav.zmq_port_offset(index))),
+        ]
+    return GroupAction(environment + [
         ScopedSetParameter(name='bond_timeout', value=demo_nav.BOND_TIMEOUT_S),
         _include('ben_project11', 'launch', 'nav2_bringup_launch.py', launch_arguments={
             'namespace': boat.name,
@@ -711,6 +722,10 @@ def launch_setup(context, *args, **kwargs):
 
     if enable_nav:
         # after every check that can refuse the start, so a refused start leaves no file
+        shim = demo_nav.zmq_shim_path(get_package_prefix('marine_simulation'))
+        if not os.path.isfile(shim):
+            raise RuntimeError('%s is not installed (build marine_simulation); without it only '
+                               'one boat can run a navigation goal' % shim)
         nav_params = demo_nav.write_params(os.path.join(demo_support.state_dir(), 'nav'))
 
     actions = [
@@ -728,7 +743,7 @@ def launch_setup(context, *args, **kwargs):
     actions.extend(boat_actions(b, joysticks.get(b.name), settings, (i, len(boats)))
                    for i, b in enumerate(boats))
     if enable_nav:
-        actions.extend(nav_actions(b, nav_params) for b in boats)
+        actions.extend(nav_actions(b, nav_params, i, shim) for i, b in enumerate(boats))
     if lifecycle_guard:
         executable = os.path.join(get_package_prefix('launch_manager_proto'), 'lib',
                                   'launch_manager_proto', 'launch_manager_proto')

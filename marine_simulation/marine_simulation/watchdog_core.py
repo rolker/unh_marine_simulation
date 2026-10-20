@@ -74,7 +74,7 @@ class Params:
     activity_threshold: float = 0.05    # axis distance from the pad's rest that counts
     tf_settle: float = 3.0              # s the boat's map frame must have been there
     command_gap: float = 2.0            # s between commands (mission_manager reads depth 1)
-    resend_period: float = 30.0         # s without an acknowledgement before sending again
+    resend_period: float = 15.0         # s without an acknowledgement before sending again
     unavailable_after: float = 120.0    # s without one before the state says so
     tasks_silence: float = 60.0         # s of silence from a running mission before a re-send
     reconcile_after: float = 2.0        # s the heartbeat may disagree before a re-publish

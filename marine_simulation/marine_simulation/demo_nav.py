@@ -86,6 +86,14 @@ PLANNER_PLUGIN = 'nav2_navfn_planner::NavfnPlanner'
 # neither, and its boats are put on open water.
 CHART_LAYER = 'chart_layer'
 
+# marine_nav_bt_task_navigator opens a BT::Groot2Publisher (ZeroMQ, ports 1667 and 1668) on every
+# goal with no way to change or switch it off, so a second boat on the same computer cannot run a
+# goal ("Address already in use", seen live: only one boat ever ran its section). The nav2
+# processes of each boat are started with this library preloaded and DEMO_ZMQ_PORT_OFFSET set
+# to a different number, which moves their ZeroMQ binds (src/demo_zmq_ports.c).
+ZMQ_SHIM_LIBRARY = 'libdemo_zmq_ports.so'
+ZMQ_PORT_STEP = 10
+
 SOURCE_PACKAGE = 'ben_project11'
 SOURCE_FILE = 'nav2_params.yaml'
 
@@ -193,3 +201,21 @@ def lifecycle_nodes_per_boat(base: int, enable_nav: bool) -> int:
 def nav_node_names(boat: str) -> Dict[str, str]:
     """Return ``{short name: fully qualified name}`` of one boat's nav2 lifecycle nodes."""
     return {n: '/%s/%s' % (boat, n) for n in NAV2_SERVERS + NAV2_COSTMAPS}
+
+
+def zmq_port_offset(index: int) -> int:
+    """Return the ZeroMQ port offset of the ``index``-th boat that runs (the first keeps 0)."""
+    if index < 0:
+        raise ValueError('a boat index is not negative')
+    return index * ZMQ_PORT_STEP
+
+
+def zmq_shim_path(prefix: str) -> str:
+    """Return where the ZeroMQ port shim is installed under a package ``prefix``."""
+    return os.path.join(prefix, 'lib', 'marine_simulation', ZMQ_SHIM_LIBRARY)
+
+
+def preload(shim: str, existing: str = '') -> str:
+    """Return an ``LD_PRELOAD`` value that has ``shim`` first and keeps what was there."""
+    kept = [p for p in existing.replace(':', ' ').split() if p != shim]
+    return ' '.join([shim] + kept)
