@@ -316,13 +316,21 @@ def refuse_enable_nav(enable_nav: str) -> None:
 
 
 def asv_sim_parameters(
-        boats: Sequence[Boat], tide_speed_factor: float, current_speed: float) -> dict:
-    """Return the ``asv_sim`` parameters for the selected boats."""
+        boats: Sequence[Boat], tide_speed_factor: float, current_speed: float,
+        grid_file: str = '') -> dict:
+    """
+    Return the ``asv_sim`` parameters for the selected boats.
+
+    ``grid_file`` is the bathymetry the sonars sample; ``asv_sim`` grounds the boats on it
+    (empty: boats still block each other but the sea floor and shore do not stop them).
+    """
     params = {
         'platforms': [b.name for b in boats],
         'environment.tide.speed_factor': tide_speed_factor,
         'environment.current.speed': current_speed,
     }
+    if grid_file:
+        params['collision.grid_file'] = grid_file
     for b in boats:
         prefix = 'platforms.%s.' % b.name
         params[prefix + 'model'] = 'demo'
@@ -615,7 +623,7 @@ def launch_setup(context, *args, **kwargs):
             package='asv_sim', executable='asv_sim', name='asv_sim', emulate_tty=True,
             parameters=[
                 PathJoinSubstitution([FindPackageShare('asv_sim'), 'config', 'demo.yaml']),
-                asv_sim_parameters(boats, tide_speed_factor, current_speed),
+                asv_sim_parameters(boats, tide_speed_factor, current_speed, mbes_grid_file),
             ],
             remappings=asv_sim_remappings(boats)),
     ]

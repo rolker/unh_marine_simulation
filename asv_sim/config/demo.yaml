@@ -30,3 +30,9 @@ asv_sim:
     models.demo.max_rudder_change_rate: 30.0
     models.demo.max_turn_rate:          25.0
     models.demo.rudder_distance:        2.0
+
+    # Contact footprint and draft (issue #111): the C-Worker 4 hull, as in
+    # cw4.yaml. A boat grounds where grid depth + tide is less than the draft.
+    models.demo.length:                 4.0
+    models.demo.beam:                   1.7
+    models.demo.draft:                  0.4

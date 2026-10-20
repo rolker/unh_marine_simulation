@@ -33,3 +33,8 @@ asv_sim:
     models.cw4.max_rudder_change_rate: 30.0
     models.cw4.max_turn_rate:          25.0
     models.cw4.rudder_distance:        2.0
+
+    # Contact footprint and draft (issue #111), from the notes at the top.
+    models.cw4.length:                 4.0
+    models.cw4.beam:                   1.7
+    models.cw4.draft:                  0.4

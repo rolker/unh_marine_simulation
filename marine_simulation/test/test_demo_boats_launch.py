@@ -527,6 +527,18 @@ def test_asv_sim_parameters_are_derived_from_the_roster(roster):
         assert params['platforms.%s.model' % b.name] == 'demo'
 
 
+def test_asv_sim_grounds_the_boats_on_the_sonar_grid_when_there_is_one(roster):
+    params = demo.asv_sim_parameters(roster, 10.0, 0.0, '/data/truth.tif')
+    assert params['collision.grid_file'] == '/data/truth.tif'
+    # no grid: the key is left out (asv_sim then keeps terrain collision off)
+    assert 'collision.grid_file' not in demo.asv_sim_parameters(roster, 10.0, 0.0)
+
+
+def test_the_launch_hands_asv_sim_the_grid_the_sonars_use():
+    text = LAUNCH.read_text()
+    assert 'asv_sim_parameters(boats, tide_speed_factor, current_speed, mbes_grid_file)' in text
+
+
 def test_asv_sim_remappings_are_five_per_boat_and_stay_in_the_boats_namespace(roster):
     remaps = demo.asv_sim_remappings(roster)
     assert len(remaps) == 5 * len(roster)
