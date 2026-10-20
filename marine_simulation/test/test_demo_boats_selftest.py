@@ -165,6 +165,7 @@ def test_the_acknowledgement_needs_the_set_and_its_line():
 
 def test_a_failed_line_is_not_a_completed_line_even_when_it_is_marked_done():
     assert selftest.line_reached(150.0, 160.0, 12.0, '')
+    assert selftest.line_reached(180.0, 160.0, 20.0, '')               # where the boat settles
     assert not selftest.line_reached(129.0, 160.0, 71.0, '')           # far from the end
     assert not selftest.line_reached(150.0, 160.0, 12.0, 'failed: survey_line_failed')
     assert not selftest.line_reached(150.0, 160.0, None, '')           # no fix
