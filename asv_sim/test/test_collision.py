@@ -15,6 +15,7 @@ Runs under plain pytest (``colcon test``); no launch_test runner needed.
 """
 
 import math
+import signal
 
 from asv_sim import collision
 from asv_sim import dynamics
@@ -196,7 +197,7 @@ def test_capsules_with_crossing_axes_still_separate():
     a = collision.capsule_axis((0.0, 0.0), 0.0, 4.0, 1.7)
     b = collision.capsule_axis((0.0, 0.0), math.pi / 2, 4.0, 1.7)
     depth, normal = collision.capsule_penetration(a, b)
-    assert depth == pytest.approx(1.7)
+    assert depth == pytest.approx(1.7 + 1.15)
     assert math.hypot(*normal) == pytest.approx(1.0)
 
 
@@ -391,7 +392,8 @@ def test_a_boat_is_never_damaged_or_reset(mdl, world):
     stuck = rig.en(a)
     rig.run(5.0, {'a': 1.0})
     # still where it was, still able to move when told to
-    assert rig.en(a) == pytest.approx(stuck, abs=0.2)
+    assert rig.en(a) == pytest.approx(stuck, abs=0.02)
+    assert abs(a.speed) < 0.2
     rig.run(5.0, {'a': -1.0})
     assert rig.en(a)[0] < stuck[0]
     assert not rig.log.at('error')
@@ -482,3 +484,184 @@ def test_a_hull_shorter_than_it_is_wide_is_refused():
     finally:
         node.destroy_node()
         rclpy.shutdown()
+
+
+# review findings (round 1) -------------------------------------------------
+
+@pytest.mark.parametrize('heading_a, heading_b, centre', [
+    (0.0, math.pi / 2, (0.0, 0.0)),
+    (0.0, math.pi / 2, (0.4, -0.3)),
+    (0.3, 1.1, (0.0, 0.0)),
+    (0.0, 0.0, (0.0, 0.0)),
+    (0.0, math.pi, (0.0, 0.5)),
+])
+@pytest.mark.parametrize('length, beam', [(4.0, 1.7), (20.0, 1.0)])
+def test_overlapping_capsules_are_separated_by_the_returned_push(
+        heading_a, heading_b, centre, length, beam):
+    a = collision.capsule_axis(centre, heading_a, length, beam)
+    b = collision.capsule_axis((0.0, 0.0), heading_b, length, beam)
+    depth, normal = collision.capsule_penetration(a, b)
+    moved = collision.capsule_axis(
+        (centre[0] + normal[0] * depth, centre[1] + normal[1] * depth),
+        heading_a, length, beam)
+    left = collision.capsule_penetration(moved, b)
+    assert left is None or left[0] < 1e-6, left
+
+
+def test_a_hull_may_be_as_short_as_it_is_wide():
+    a = collision.capsule_axis((0.0, 0.0), 0.0, 1.7, 1.7)
+    b = collision.capsule_axis((0.0, 0.0), 0.0, 1.7, 1.7)
+    depth, normal = collision.capsule_penetration(a, b)
+    assert depth == pytest.approx(1.7) and math.hypot(*normal) == 1.0
+
+
+def test_a_turn_that_swings_the_hull_onto_land_is_put_back(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 48.5, 0.0, 0.0)
+    a.speed = 0.0
+    lat, lon = a.latitude, a.longitude
+    a.heading = math.pi / 2     # the bow would now be over land
+    a.yaw_rate = 0.3
+    rig.collisions.resolve(a, lat, lon, ns(1.0), 0.05, last_heading=0.0)
+    assert a.heading == pytest.approx(0.0)
+    assert a.yaw_rate == 0.0
+    assert [e['kind'] for e in rig.events] == [collision.KIND_TERRAIN]
+
+
+def test_a_turn_in_open_water_is_left_alone(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 0.0)
+    lat, lon = a.latitude, a.longitude
+    a.heading = math.pi / 2
+    rig.collisions.resolve(a, lat, lon, ns(1.0), 0.05, last_heading=0.0)
+    assert a.heading == pytest.approx(math.pi / 2)
+    assert not rig.events
+
+
+def test_a_boat_off_the_grid_cannot_sail_onto_the_land_of_the_grid(
+        mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', -330.0, 0.0, 90.0)
+    rig.run(160.0, {'a': 1.0})
+    assert rig.en(a)[0] > -300.0, 'it did not even reach the grid'
+    assert bow_east(rig, a) <= SHORE_EAST + TOL
+    warnings = rig.log.at('warning')
+    assert len(warnings) == 1 and "'a'" in warnings[0]
+
+
+def test_a_long_step_is_checked_in_pieces_against_the_shore(mdl, world):
+    mdl.max_step = 10.0
+    rig = Rig(mdl, world)
+    a = rig.add('a', 25.0, 0.0, 90.0)
+    a.speed = 2.75
+    a.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    a.update(1.0, 0.0, ns(10.0), apply_noise=False)
+    assert bow_east(rig, a) <= SHORE_EAST + TOL
+
+
+def test_a_long_step_is_checked_in_pieces_against_a_boat(mdl, world):
+    mdl.max_step = 10.0
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', -20.0, 0.0, 90.0)
+    b = rig.add('b', 0.0, 0.0, 90.0, frozen=True)
+    a.speed = 2.75
+    a.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    a.update(1.0, 0.0, ns(10.0), apply_noise=False)
+    assert rig.en(a)[0] < rig.en(b)[0]
+    assert overlap(a, b) < 0.05
+
+
+def test_a_failing_event_publisher_does_not_leave_the_boat_inside(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+
+    def broken(event):
+        raise RuntimeError('publisher is gone')
+
+    rig.collisions.emit = broken
+    a = rig.add('a', -8.0, 0.0, 90.0)
+    rig.add('b', 0.0, 0.0, 90.0, frozen=True)
+    rig.run(10.0, {'a': 1.0})
+    assert overlap(a, rig.boats['b']) < 0.05
+    assert rig.log.at('warning')
+
+
+def test_a_boat_on_the_other_side_of_the_world_does_not_hang_the_resolver(
+        mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    b = rig.add('b', 0.0, 0.0, 90.0)
+    b.latitude = math.radians(0.3)
+    b.longitude = math.radians(179.9)
+    a.latitude = 0.0
+    a.longitude = 0.0
+
+    def stuck(signum, frame):
+        raise AssertionError('the resolver is stuck in the geodesic')
+
+    previous = signal.signal(signal.SIGALRM, stuck)
+    signal.alarm(10)
+    try:
+        for i in range(1, 20):
+            a.update(1.0, 0.0, ns(i * 0.05), apply_noise=False)
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, previous)
+    assert not rig.events
+
+
+def test_a_boat_with_a_non_finite_position_is_not_an_obstacle(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    b = rig.add('b', 5.0, 0.0, 90.0)
+    b.latitude = math.nan
+    for i in range(1, 20):
+        a.update(1.0, 0.0, ns(i * 0.05), apply_noise=False)
+    assert math.isfinite(a.latitude)
+
+
+def test_the_tide_is_only_read_for_terrain(mdl, world):
+    class Counting(Tide):
+        reads = 0
+
+        def getTide(self, timestamp):  # noqa: N802
+            Counting.reads += 1
+            return 0.0
+
+    rig = Rig(mdl, world, terrain=False)
+    rig.env = Counting()
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    a.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    a.update(1.0, 0.0, ns(0.05), apply_noise=False)
+    # Dynamics itself reads it once per update for its diagnostics
+    assert Counting.reads == 2
+
+
+def test_a_short_boat_can_be_declared_with_overrides():
+    rclpy.init(args=['--ros-args', '-p', 'models.tiny.length:=1.2',
+                     '-p', 'models.tiny.beam:=0.5'])
+    node = rclpy.node.Node('collision_small_hull_test')
+    try:
+        tiny = model.Model('tiny', node)
+        assert (tiny.length, tiny.beam) == (1.2, 0.5)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_a_hull_declared_shorter_than_it_is_wide_is_refused_at_start():
+    rclpy.init(args=['--ros-args', '-p', 'models.odd.length:=1.0'])
+    node = rclpy.node.Node('collision_odd_hull_test')
+    try:
+        with pytest.raises(ValueError, match='shorter than beam'):
+            model.Model('odd', node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+def test_between_a_boat_and_the_shore_the_shore_wins(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 44.0, 0.0, 90.0)
+    rig.add('b', 40.0, 0.0, 90.0, frozen=True)
+    rig.run(20.0, {'a': 1.0})
+    assert bow_east(rig, a) <= SHORE_EAST + TOL

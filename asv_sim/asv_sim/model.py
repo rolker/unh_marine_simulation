@@ -161,6 +161,11 @@ class Model:
                     floating_point_range=[FloatingPointRange(
                         from_value=0.01, to_value=1000.0, step=0.0)]))
 
+        if self.length < self.beam:
+            raise ValueError(
+                'models.{}: length {} is shorter than beam {}'.format(
+                    name, self.length, self.beam))
+
         self.parameters_ready = True
         self.update_coefficients()
 
@@ -168,12 +173,17 @@ class Model:
         return 'models.' + self.name + '.' + key
 
     def validateParameters(self, parameters: List[Parameter]):
-        """Refuse a hull longer than it is wide the wrong way round."""
+        """Refuse a hull shorter than it is wide.
+
+        Not while the parameters are being declared one after another (the
+        pair is checked once at the end of ``__init__``): an override of a
+        short boat sets ``length`` while ``beam`` still has its default.
+        """
+        if not self.parameters_ready:
+            return SetParametersResult(successful=True)
         values = {p.name: p.value for p in parameters}
-        length = values.get(
-            self.ns('length'), getattr(self, 'length', DEFAULT_LENGTH))
-        beam = values.get(
-            self.ns('beam'), getattr(self, 'beam', DEFAULT_BEAM))
+        length = values.get(self.ns('length'), self.length)
+        beam = values.get(self.ns('beam'), self.beam)
         if length < beam:
             return SetParametersResult(
                 successful=False,

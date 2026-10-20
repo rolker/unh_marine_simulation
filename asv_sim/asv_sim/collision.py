@@ -24,9 +24,23 @@ import math
 
 from . import geodesic
 
-# What a boat that is on land, on a nodata cell or off the grid is treated
-# as drawing against: a fixed depth of water far below any draft.
-WALL_CLEARANCE = -10.0
+# Clearance of a hull point on a nodata cell or off the grid: the void. It
+# is far below any real clearance (land is graded by its height, never
+# clamped), so "no data" is told apart from "high ground".
+VOID_CLEARANCE = -1.0e6
+
+# Another boat further away than this many hull lengths plus beams cannot be
+# touching; checking first keeps the (iterative) geodesic away from far pairs.
+REACH_FACTOR = 2.0
+
+# The longest hop between two obstacle checks, as a fraction of the beam: a
+# bigger step (a long max_step, a fast current) is checked in pieces so a
+# thin hull or shore cannot be jumped.
+MAX_HOP_BEAMS = 0.5
+MAX_HOPS = 500
+
+# Passes of "boats, then terrain" until neither moves the boat any more.
+MAX_PASSES = 3
 
 # A contact that has not been seen for this long (node clock) is over; the
 # next one is a new event.
@@ -103,13 +117,61 @@ def capsule_penetration(a, b):
     if depth <= 0.0:
         return None
     if distance < 1e-9:
-        # Axes cross: any direction separates them; take the one from b's
-        # centre to a's, else east.
-        cx = (a[0][0] + a[1][0] - b[0][0] - b[1][0]) / 2.0
-        cy = (a[0][1] + a[1][1] - b[0][1] - b[1][1]) / 2.0
-        norm = math.hypot(cx, cy)
-        return (depth, (cx / norm, cy / norm) if norm > 1e-9 else (1.0, 0.0))
+        return _crossing_penetration(a, b)
     return depth, (dx / distance, dy / distance)
+
+
+def _crossing_penetration(a, b):
+    """Return the exact way out for capsules whose axes cross.
+
+    The offset ``c`` of a's centre from b's centre separates the hulls when
+    it leaves the rounded parallelogram ``{x*da + y*db}`` (``|x| <= half_a``,
+    ``|y| <= half_b``) grown by the radii. From inside, the shortest way out
+    is through the nearest edge.
+    """
+    ra, rb = a[2], b[2]
+    da, half_a = _axis(a)
+    db, half_b = _axis(b)
+    centre_a = ((a[0][0] + a[1][0]) / 2.0, (a[0][1] + a[1][1]) / 2.0)
+    centre_b = ((b[0][0] + b[1][0]) / 2.0, (b[0][1] + b[1][1]) / 2.0)
+    c = (centre_a[0] - centre_b[0], centre_a[1] - centre_b[1])
+    sin = da[0] * db[1] - da[1] * db[0]
+    if abs(sin) < 1e-9:
+        # Parallel axes that overlap: leave sideways.
+        side = (-da[1], da[0])
+        offset = c[0] * side[0] + c[1] * side[1]
+        sign = -1.0 if offset < 0.0 else 1.0
+        return (ra + rb + abs(offset), (side[0] * sign, side[1] * sign))
+    # c = x*da + y*db
+    x = (c[0] * db[1] - c[1] * db[0]) / sin
+    y = (da[0] * c[1] - da[1] * c[0]) / sin
+    # Edge x = +-half_a runs along db; its outward normal is db's
+    # perpendicular on the side of +-da. Likewise for y.
+    perp_b = (-db[1], db[0])
+    if perp_b[0] * da[0] + perp_b[1] * da[1] < 0.0:
+        perp_b = (-perp_b[0], -perp_b[1])
+    perp_a = (-da[1], da[0])
+    if perp_a[0] * db[0] + perp_a[1] * db[1] < 0.0:
+        perp_a = (-perp_a[0], -perp_a[1])
+    dist_x = (half_a - abs(x)) * abs(sin)
+    dist_y = (half_b - abs(y)) * abs(sin)
+    if dist_x <= dist_y:
+        sign = -1.0 if x < 0.0 else 1.0
+        normal = (perp_b[0] * sign, perp_b[1] * sign)
+        return ra + rb + max(0.0, dist_x), normal
+    sign = -1.0 if y < 0.0 else 1.0
+    normal = (perp_a[0] * sign, perp_a[1] * sign)
+    return ra + rb + max(0.0, dist_y), normal
+
+
+def _axis(capsule):
+    """Return the unit direction and half length of a capsule's axis."""
+    dx = capsule[1][0] - capsule[0][0]
+    dy = capsule[1][1] - capsule[0][1]
+    length = math.hypot(dx, dy)
+    if length < 1e-12:
+        return (0.0, 1.0), 0.0
+    return (dx / length, dy / length), length / 2.0
 
 
 def offset_en(lat0, lon0, lat1, lon1):
@@ -129,17 +191,23 @@ def move_en(lat, lon, east, north):
 
 
 class _Step:
-    """The boat being stepped and where it was and is."""
+    """One hop of the boat being stepped: where it was, what it turns to."""
 
-    def __init__(self, dyn, prev, tide):
+    def __init__(self, dyn, prev, prev_heading, heading, tide):
         self.dyn = dyn
-        self.prev = prev        # (lat, lon) radians before the sub-step
-        self.heading = dyn.heading
+        self.prev = prev                  # (lat, lon) radians before the hop
+        self.prev_heading = prev_heading
+        self.heading = heading            # a source may put it back
         self.tide = tide
+        self.in_void = False              # set by TerrainSource
         model = dyn.model
         self.length = model.length
         self.beam = model.beam
         self.draft = model.draft
+
+
+def _finite(*values):
+    return all(math.isfinite(v) for v in values)
 
 
 class BoatSource:
@@ -151,11 +219,17 @@ class BoatSource:
     def correct(self, step, lat, lon):
         contacts = {}
         others = [d for d in self.collisions.dynamics.values()
-                  if d is not step.dyn]
+                  if d is not step.dyn
+                  and _finite(d.latitude, d.longitude, d.heading, d.speed)]
         # A push away from one boat can push into another: a few passes.
         for _ in range(3):
             moved = False
             for other in others:
+                reach = REACH_FACTOR * (
+                    step.length + step.beam
+                    + other.model.length + other.model.beam)
+                if self._far(lat, lon, other, reach):
+                    continue
                 east, north = offset_en(lat, lon, other.latitude,
                                         other.longitude)
                 mine = capsule_axis(
@@ -178,14 +252,33 @@ class BoatSource:
                 break
         return lat, lon, list(contacts.values())
 
+    @staticmethod
+    def _far(lat, lon, other, reach):
+        """Cheap flat-earth test that keeps far boats out of the geodesic.
+
+        ``geodesic.inverse`` iterates without a bound and does not converge
+        for nearly antipodal points, so it must only see boats that are
+        close (a ``set_pose`` can put one anywhere).
+        """
+        dlat = other.latitude - lat
+        dlon = (other.longitude - lon + math.pi) % (2.0 * math.pi) - math.pi
+        north = dlat * 6371000.0
+        east = dlon * math.cos(lat) * 6371000.0
+        return math.hypot(east, north) > reach
+
 
 class TerrainSource:
     """The sea floor: a boat cannot get shallower than its draft allows.
 
     Clearance is the least, over five hull points (centre, bow, stern, port,
-    starboard), of grid depth plus tide minus draft. Land, nodata cells and
-    positions off the grid count as :data:`WALL_CLEARANCE`.
+    starboard), of grid depth plus tide minus draft. Land is graded by its
+    height. A nodata cell or a position off the grid is the void
+    (:data:`VOID_CLEARANCE`), a wall: a boat in the water cannot enter it
+    and a boat in the void can only move through the void or into water,
+    never onto land or a shoal.
     """
+
+    uses_tide = True
 
     def __init__(self, grid):
         self.grid = grid
@@ -209,9 +302,9 @@ class TerrainSource:
             return None
         return float(depth) + tide
 
-    def clearance(self, frame, east, north, step):
+    def clearance(self, frame, east, north, step, heading):
         """Return the hull clearance with the boat centred at an offset."""
-        direction = (math.sin(step.heading), math.cos(step.heading))
+        direction = (math.sin(heading), math.cos(heading))
         right = (direction[1], -direction[0])
         half_length = step.length / 2.0
         half_beam = step.beam / 2.0
@@ -224,45 +317,69 @@ class TerrainSource:
         least = math.inf
         for de, dn in points:
             depth = self._depth(frame, east + de, north + dn, step.tide)
-            value = (WALL_CLEARANCE if depth is None
-                     else max(WALL_CLEARANCE, depth - step.draft))
+            value = (VOID_CLEARANCE if depth is None
+                     else depth - step.draft)
             least = min(least, value)
-        return least
+        return max(least, VOID_CLEARANCE)
 
     def correct(self, step, lat, lon):
         frame = self._frame(*step.prev)
         east, north = offset_en(step.prev[0], step.prev[1], lat, lon)
-        before = self.clearance(frame, 0.0, 0.0, step)
-        after = self.clearance(frame, east, north, step)
-        # Aground already is not a reason to stay: a boat may go anywhere
-        # that is not shallower than where it is.
-        if after >= 0.0 or after >= before:
+        before = self.clearance(frame, 0.0, 0.0, step, step.prev_heading)
+        step.in_void = before <= VOID_CLEARANCE
+
+        def acceptable(clearance):
+            if clearance >= 0.0:
+                return True
+            if before <= VOID_CLEARANCE:
+                return clearance <= VOID_CLEARANCE
+            # Aground already is not a reason to stay: a boat may go
+            # anywhere that is not shallower than where it is.
+            return clearance >= before
+
+        after = self.clearance(frame, east, north, step, step.heading)
+        if acceptable(after):
             return lat, lon, []
 
         h = self.cell
-        ge = (self.clearance(frame, east + h, north, step)
-              - self.clearance(frame, east - h, north, step))
-        gn = (self.clearance(frame, east, north + h, step)
-              - self.clearance(frame, east, north - h, step))
+        ge = (self.clearance(frame, east + h, north, step, step.heading)
+              - self.clearance(frame, east - h, north, step, step.heading))
+        gn = (self.clearance(frame, east, north + h, step, step.heading)
+              - self.clearance(frame, east, north - h, step, step.heading))
         norm = math.hypot(ge, gn)
-        speed = math.hypot(east, north)
+        distance = math.hypot(east, north)
         if norm > 0.0:
             normal = (ge / norm, gn / norm)
-        elif speed > 0.0:
-            normal = (-east / speed, -north / speed)
+        elif distance > 0.0:
+            normal = (-east / distance, -north / distance)
         else:
             normal = (-math.sin(step.heading), -math.cos(step.heading))
 
         depth = self._depth(frame, east, north, step.tide)
         contact = Contact(KIND_TERRAIN, '', normal, (0.0, 0.0),
                           math.nan if depth is None else depth)
+
+        # The way to be as far along as allowed, best first: the shallower
+        # going part of the motion removed; no motion; then the same with the
+        # heading put back (a turn that swings the hull onto land is a
+        # motion into it too).
+        candidates = []
         along = east * normal[0] + north * normal[1]
+        slid = None
         if norm > 0.0 and along < 0.0:
             slid = (east - along * normal[0], north - along * normal[1])
-            clearance = self.clearance(frame, slid[0], slid[1], step)
-            if clearance >= 0.0 or clearance >= before:
+            candidates.append((slid, step.heading))
+        candidates.append(((0.0, 0.0), step.heading))
+        if step.heading != step.prev_heading:
+            if slid is not None:
+                candidates.append((slid, step.prev_heading))
+        candidates.append(((0.0, 0.0), step.prev_heading))
+        for (e, n), heading in candidates:
+            if heading == step.prev_heading and (e, n) == (0.0, 0.0) or \
+                    acceptable(self.clearance(frame, e, n, step, heading)):
+                step.heading = heading
                 new_lat, new_lon = move_en(
-                    step.prev[0], step.prev[1], slid[0], slid[1])
+                    step.prev[0], step.prev[1], e, n)
                 return new_lat, new_lon, [contact]
         return step.prev[0], step.prev[1], [contact]
 
@@ -288,73 +405,141 @@ class Collisions:
         if grid is not None:
             self.sources.append(TerrainSource(grid))
         self._last_seen = {}
+        self._void_warned = set()
 
     def register(self, dyn):
         """Add a boat; its ``name`` must be unique."""
         self.dynamics[dyn.name] = dyn
 
-    def resolve(self, dyn, last_lat, last_lon, timestamp, delta_t):
+    def resolve(self, dyn, last_lat, last_lon, timestamp, delta_t,
+                last_heading=None):
         """Correct ``dyn`` after a sub-step that took it from ``last``.
 
-        Position, speed and acceleration of ``dyn`` are changed in place;
-        nothing else is.
+        Position, heading (only to put a turn into land back), speed and
+        acceleration of ``dyn`` are changed in place; nothing else is. A
+        long hop is checked in pieces no longer than a fraction of the beam.
         """
         if not self.sources or not delta_t:
             return
-        if not all(math.isfinite(v) for v in (
-                dyn.latitude, dyn.longitude, dyn.heading, dyn.speed,
-                last_lat, last_lon)):
+        if last_heading is None:
+            last_heading = dyn.heading
+        if not _finite(dyn.latitude, dyn.longitude, dyn.heading, dyn.speed,
+                       last_lat, last_lon, last_heading):
             return
         tide = 0.0
-        if dyn.environment is not None:
+        if dyn.environment is not None and any(
+                getattr(s, 'uses_tide', False) for s in self.sources):
             tide = dyn.environment.getTide(timestamp)
-        step = _Step(dyn, (last_lat, last_lon), tide)
 
-        lat, lon = dyn.latitude, dyn.longitude
-        contacts = []
-        for source in self.sources:
-            lat, lon, found = source.correct(step, lat, lon)
-            contacts.extend(found)
+        east, north = offset_en(last_lat, last_lon,
+                                dyn.latitude, dyn.longitude)
+        turn = (dyn.heading - last_heading + math.pi) % (2.0 * math.pi) \
+            - math.pi
+        hops = max(1, min(MAX_HOPS, math.ceil(
+            math.hypot(east, north) / (MAX_HOP_BEAMS * dyn.model.beam))))
+
+        position = (last_lat, last_lon)
+        heading = last_heading
+        contacts = {}
+        in_void = False
+        for k in range(1, hops + 1):
+            target = move_en(position[0], position[1],
+                             east / hops, north / hops)
+            wanted = last_heading + turn * k / hops
+            position, heading, found, void = self._hop(
+                dyn, position, heading, target, wanted, tide)
+            in_void = in_void or void
+            for contact in found:
+                contacts[(contact.kind, contact.other)] = contact
+        lat, lon = position
+        if not _finite(lat, lon, heading):
+            raise ArithmeticError('contact moved the boat to a non-finite '
+                                  'pose')
+
+        if in_void:
+            self._warn_void(dyn)
         if not contacts:
             return
-        if not all(math.isfinite(v) for v in (lat, lon)):
-            raise ArithmeticError('contact moved the boat to a non-finite '
-                                  'position')
 
+        attempted = (east / delta_t, north / delta_t)
         forward = (math.sin(dyn.heading), math.cos(dyn.heading))
-        velocity = (dyn.speed * forward[0], dyn.speed * forward[1])
         speed0 = dyn.speed
-        for contact in contacts:
+        closings = []
+        for contact in contacts.values():
             normal = contact.normal
-            relative = (velocity[0] - contact.other_velocity[0],
-                        velocity[1] - contact.other_velocity[1])
-            closing = max(0.0, -(relative[0] * normal[0]
-                                 + relative[1] * normal[1]))
+            relative = (attempted[0] - contact.other_velocity[0],
+                        attempted[1] - contact.other_velocity[1])
+            closings.append(max(0.0, -(relative[0] * normal[0]
+                                       + relative[1] * normal[1])))
             along = forward[0] * normal[0] + forward[1] * normal[1]
             if dyn.speed * along < 0.0:
                 dyn.speed *= 1.0 - along * along
-            self._report(dyn, contact, closing, lat, lon, timestamp)
-        dyn.latitude, dyn.longitude = lat, lon
+        if heading != dyn.heading:
+            dyn.yaw_rate = 0.0
+        dyn.latitude, dyn.longitude, dyn.heading = lat, lon, heading
         dyn.a += (dyn.speed - speed0) / delta_t
+        for contact, closing in zip(contacts.values(), closings):
+            try:
+                self._report(dyn, contact, closing, lat, lon, timestamp)
+            except Exception as e:  # noqa: B902 - the boat is already fixed
+                self._warn_once(
+                    ('report', dyn.name),
+                    'asv_sim platform {!r}: reporting a contact failed '
+                    '({}: {})'.format(dyn.name, type(e).__name__, e))
+
+    def _hop(self, dyn, prev, prev_heading, target, heading, tide):
+        """Run the sources over one hop; return pose, contacts, void flag."""
+        step = _Step(dyn, prev, prev_heading, heading, tide)
+        lat, lon = target
+        contacts = {}
+        void = False
+        for _ in range(MAX_PASSES):
+            moved = False
+            for source in self.sources:
+                new_lat, new_lon, found = source.correct(step, lat, lon)
+                if (new_lat, new_lon) != (lat, lon):
+                    moved = True
+                lat, lon = new_lat, new_lon
+                for contact in found:
+                    contacts[(contact.kind, contact.other)] = contact
+            void = void or step.in_void
+            # Only boats and terrain together can undo each other's push.
+            if not moved or len(self.sources) < 2:
+                break
+        return (lat, lon), step.heading, list(contacts.values()), void
+
+    def _warn_void(self, dyn):
+        self._warn_once(
+            ('void', dyn.name),
+            'asv_sim platform {!r} is on a no-data cell or off the bathymetry '
+            'grid: terrain collision cannot stop it there, and keeps it off '
+            'land and shoals until it is in charted water'.format(dyn.name))
+
+    def _warn_once(self, key, message):
+        if key in self._void_warned:
+            return
+        self._void_warned.add(key)
+        if self.logger is not None:
+            self.logger.warning(message)
 
     def _report(self, dyn, contact, closing, lat, lon, timestamp):
         key = (dyn.name, contact.kind, contact.other)
         now = timestamp.nanoseconds
         last = self._last_seen.get(key)
+        onset = last is None or now - last > CONTACT_RELEASE_NS
+        if onset:
+            if self.logger is not None:
+                what = ('boat ' + contact.other if contact.kind == KIND_BOAT
+                        else 'the bottom or shore')
+                self.logger.info(
+                    'asv_sim platform {!r} touched {} at {:.1f} m/s'.format(
+                        dyn.name, what, closing))
+            if self.emit is not None:
+                self.emit({
+                    'stamp': timestamp, 'platform': dyn.name,
+                    'kind': contact.kind, 'other': contact.other,
+                    'latitude': math.degrees(lat),
+                    'longitude': math.degrees(lon),
+                    'closing_speed': closing,
+                    'water_depth': contact.water_depth})
         self._last_seen[key] = now
-        if last is not None and now - last <= CONTACT_RELEASE_NS:
-            return
-        if self.logger is not None:
-            what = ('boat ' + contact.other if contact.kind == KIND_BOAT
-                    else 'the bottom or shore')
-            self.logger.info(
-                'asv_sim platform {!r} touched {} at {:.1f} m/s'.format(
-                    dyn.name, what, closing))
-        if self.emit is not None:
-            self.emit({
-                'stamp': timestamp, 'platform': dyn.name,
-                'kind': contact.kind, 'other': contact.other,
-                'latitude': math.degrees(lat),
-                'longitude': math.degrees(lon),
-                'closing_speed': closing,
-                'water_depth': contact.water_depth})

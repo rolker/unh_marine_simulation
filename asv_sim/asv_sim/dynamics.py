@@ -201,7 +201,7 @@ class Dynamics(object):
 
         return diagnostics
 
-    def _resolve_contact(self, last_lat, last_long, delta_t):
+    def _resolve_contact(self, last_lat, last_long, delta_t, last_heading):
         """Let the contact resolver correct the sub-step just taken.
 
         A failure in contact code must not look like a numerical excursion
@@ -212,7 +212,8 @@ class Dynamics(object):
             return
         try:
             self.contact.resolve(
-                self, last_lat, last_long, self.last_update, delta_t)
+                self, last_lat, last_long, self.last_update, delta_t,
+                last_heading)
         except Exception as e:  # noqa: B902 - contact must never end the node
             self._log(
                 'error', 'contact',
@@ -490,6 +491,7 @@ class Dynamics(object):
 
         diagnostics['yaw_rate'] = self.yaw_rate
 
+        heading0 = self.heading
         if delta_t is not None:
             self.heading += self.yaw_rate * delta_t
             self.heading = math.fmod(self.heading, math.radians(360))
@@ -564,7 +566,7 @@ class Dynamics(object):
                         self.longitude, self.latitude,
                         current_direction, current_speed * delta_t)
             self._require_finite()
-            self._resolve_contact(last_lat, last_long, delta_t)
+            self._resolve_contact(last_lat, last_long, delta_t, heading0)
             self.cog, self.sog = geodesic.inverse(
                 last_long, last_lat, self.longitude, self.latitude)
             self.sog /= delta_t
