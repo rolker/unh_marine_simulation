@@ -118,3 +118,29 @@ Independence uncertain: this review ran in the same context that authored the pl
 
 ### Open questions
 - [ ] No open questions.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-20 13:32 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-111 at `692ec07`
+**Mode**: pre-push (the #113 charted-object commits, 4e45c10..692ec07)
+**Depth**: Deep (reason: new reader, new obstacle source, installed data, launch change)
+**Must-fix**: 3 | **Suggestions**: 8
+**Round**: 3 of the branch (round 1 of #113) | **Ship**: continue — the launch tests were broken and contact normals were lost
+**Sources**: 2 Claude adversarial passes (Sonnet, Lens A and B), Codex; Gemini timed out (420 s) again.
+
+### Findings
+- [x] (must-fix, B+Codex) 5 launch tests failed: the new charted_objects argument was missing from the fake launch context and a literal match on the asv_sim_parameters call — `test_demo_boats_launch.py`
+- [x] (must-fix, Codex) contacts were keyed by class, so two walls of one class lost a normal in the speed rule — `collision.py`
+- [x] (must-fix, B) an unreadable cell crashed without naming it — `charts.py`
+- [x] (suggestion, A+B) explicit axis order for the projection — `charts.py`
+- [x] (suggestion, B) warn when no charted object was found — `asv_sim_node.py`
+- [x] (suggestion, A) span error names the outermost cells — `charts.py`
+- [x] (suggestion, A) VALSOU path, depth boundary and hollow areas tested or documented — tests, README
+- [x] (suggestion, A) OBSTRN with a sounding differs from the costmap: documented as deliberate — README
+- [ ] (suggestion, B) global gdal.UseExceptions inside the node (the 20 Hz projection can raise; Dynamics' contact try/except keeps the step) — `charts.py`
+- [ ] (suggestion, B) find_cells has no bound; a whole ENC_ROOT is parsed before the span check refuses it (loud, slow) — `charts.py`
+- [ ] (suggestion, A) areas are hollow: a boat placed inside one is not pushed out (documented) — `charts.py`
