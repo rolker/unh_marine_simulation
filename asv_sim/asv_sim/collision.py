@@ -214,6 +214,16 @@ def _finite(*values):
     return all(math.isfinite(v) for v in values)
 
 
+def _contact_key(contact):
+    """Key that keeps every physically different contact of one object.
+
+    Two walls of one class meet the boat at different normals; each must
+    reach the speed rule. Only the *report* is deduplicated, by onset.
+    """
+    return (contact.kind, contact.other,
+            round(contact.normal[0], 3), round(contact.normal[1], 3))
+
+
 class BoatSource:
     """Other boats: no interpenetration, tangential motion is kept."""
 
@@ -453,8 +463,9 @@ class ChartedObjectSource:
                     lat, lon, normal[0] * depth, normal[1] * depth)
                 x += normal[0] * depth
                 y += normal[1] * depth
-                contacts[p.klass] = Contact(
+                contact = Contact(
                     KIND_OBJECT, p.klass, normal, (0.0, 0.0), math.nan)
+                contacts[_contact_key(contact)] = contact
                 moved = True
             if not moved:
                 break
@@ -543,7 +554,7 @@ class Collisions:
                 reverted = True
             in_void = in_void or void
             for contact in found:
-                contacts[(contact.kind, contact.other)] = contact
+                contacts[_contact_key(contact)] = contact
         lat, lon = position
         # Only a heading a source put back replaces the dynamics' own.
         heading = heading % (2.0 * math.pi) if reverted else dyn.heading
@@ -596,7 +607,7 @@ class Collisions:
                     moved = True
                 lat, lon = new_lat, new_lon
                 for contact in found:
-                    contacts[(contact.kind, contact.other)] = contact
+                    contacts[_contact_key(contact)] = contact
             void = void or step.in_void
             # Only boats and terrain together can undo each other's push.
             if not moved or len(self.sources) < 2:

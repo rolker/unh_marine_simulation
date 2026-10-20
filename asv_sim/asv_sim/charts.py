@@ -30,7 +30,8 @@ Primitive = namedtuple(
 
 # A feature read from a cell: ``parts`` are lists of (lon, lat) degrees;
 # ``kind`` is 'point', 'line' or 'area' (its rings are the parts).
-Feature = namedtuple('Feature', ['klass', 'kind', 'parts', 'depth'])
+Feature = namedtuple(
+    'Feature', ['klass', 'kind', 'parts', 'depth', 'cell'], defaults=[''])
 
 # Radius (point) or half-width (line, ring of an area) in metres; 0 leaves a
 # class out. Overridable with ``collision.enc_footprints``.
@@ -120,6 +121,9 @@ def read_features(cells, classes):
     features = []
     for cell in cells:
         dataset = ogr.Open(cell)
+        if dataset is None:
+            raise OSError('cannot open the S-57 cell {!r}: {}'.format(
+                cell, gdal.GetLastErrorMsg() or 'not an S-57 file'))
         for index in range(dataset.GetLayerCount()):
             layer = dataset.GetLayerByIndex(index)
             klass = layer.GetName()
@@ -137,7 +141,9 @@ def read_features(cells, classes):
                     if feature.IsFieldSetAndNotNull(i):
                         depth = feature.GetFieldAsDouble(i)
                 for kind, parts in _parts(geometry):
-                    features.append(Feature(klass, kind, parts, depth))
+                    features.append(Feature(
+                        klass, kind, parts, depth, os.path.basename(cell)))
+        dataset = None
     return features
 
 
@@ -169,6 +175,8 @@ def make_projection(lon0, lat0):
     from osgeo import osr
     source = osr.SpatialReference()
     source.SetWellKnownGeogCS('WGS84')
+    # Latitude first, as ``project`` passes it; explicit, not GDAL's default.
+    source.SetAxisMappingStrategy(osr.OAMS_AUTHORITY_COMPLIANT)
     target = osr.SpatialReference()
     target.ImportFromProj4(
         '+proj=aeqd +lat_0={:.9f} +lon_0={:.9f} +x_0=0 +y_0=0 '
@@ -236,12 +244,16 @@ def load(path, footprint_overrides=()):
         return [], make_projection(0.0, 0.0), {}
     if max(lons) - min(lons) > MAX_SPAN_DEGREES \
             or max(lats) - min(lats) > MAX_SPAN_DEGREES:
+        far = sorted({f.cell for f in features for ring in f.parts
+                      for lon, lat in ring
+                      if lon in (min(lons), max(lons))
+                      or lat in (min(lats), max(lats))})
         raise ValueError(
             'the charted objects in {!r} span {:.2f} x {:.2f} degrees, more '
-            'than the {} a local frame holds; point collision.enc_dir at '
-            'the cells of the area'.format(
+            'than the {} a local frame holds (outermost features come from '
+            '{}); point collision.enc_dir at the cells of the area'.format(
                 path, max(lons) - min(lons), max(lats) - min(lats),
-                MAX_SPAN_DEGREES))
+                MAX_SPAN_DEGREES, ', '.join(far)))
     project = make_projection((max(lons) + min(lons)) / 2.0,
                               (max(lats) + min(lats)) / 2.0)
     primitives, counts = build_primitives(

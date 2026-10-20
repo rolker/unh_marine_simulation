@@ -542,7 +542,7 @@ def test_asv_sim_gets_the_charted_objects_when_a_cell_directory_is_given(roster)
 
 def test_the_launch_hands_asv_sim_the_grid_the_sonars_use():
     text = LAUNCH.read_text()
-    assert 'asv_sim_parameters(boats, tide_speed_factor, current_speed, mbes_grid_file)' in text
+    assert 'asv_sim_parameters(\n                    boats, tide_speed_factor, current_speed, mbes_grid_file, enc_dir)' in text
 
 
 def test_asv_sim_remappings_are_five_per_boat_and_stay_in_the_boats_namespace(roster):
@@ -575,6 +575,7 @@ def _setup_context(tmp_path, **overrides):
         'enable_joysticks': 'false', 'enable_nav': 'false', 'tide_speed_factor': '10',
         'current_speed': '0.0', 'mbes_grid_file': str(grid), 'cell_size': '1.0',
         'ping_interval': '0.2', 'beam_count': '120', 'lifecycle_guard': 'true',
+        'charted_objects': 'false',
     }
     values.update(overrides)
     context = LaunchContext()
@@ -607,6 +608,45 @@ def test_the_guard_can_be_turned_off_for_the_launch_manager(tmp_path, no_host_ch
 def test_a_bad_guard_value_is_refused(tmp_path, no_host_checks):
     with pytest.raises(ValueError, match='lifecycle_guard'):
         demo.launch_setup(_setup_context(tmp_path, lifecycle_guard='ture'))
+
+
+def _recorded_asv_sim_arguments(monkeypatch):
+    calls = []
+
+    def record(*args, **kwargs):
+        calls.append(args)
+        return {}
+
+    monkeypatch.setattr(demo, 'asv_sim_parameters', record)
+    return calls
+
+
+def test_charted_objects_on_hands_asv_sim_the_installed_cell_directory(
+        tmp_path, no_host_checks, monkeypatch):
+    share = tmp_path / 'share'
+    (share / 'enc').mkdir(parents=True)
+    monkeypatch.setattr(demo, 'get_package_share_directory', lambda package: str(share))
+    calls = _recorded_asv_sim_arguments(monkeypatch)
+    demo.launch_setup(_setup_context(tmp_path, charted_objects='true'))
+    assert calls[0][-1] == str(share / 'enc')
+
+
+def test_charted_objects_off_hands_asv_sim_no_cells(tmp_path, no_host_checks, monkeypatch):
+    calls = _recorded_asv_sim_arguments(monkeypatch)
+    demo.launch_setup(_setup_context(tmp_path, charted_objects='false'))
+    assert calls[0][-1] == ''
+
+
+def test_charted_objects_on_without_the_installed_cells_is_refused(
+        tmp_path, no_host_checks, monkeypatch):
+    monkeypatch.setattr(demo, 'get_package_share_directory', lambda package: str(tmp_path))
+    with pytest.raises(RuntimeError, match='charted_objects'):
+        demo.launch_setup(_setup_context(tmp_path, charted_objects='true'))
+
+
+def test_a_bad_charted_objects_value_is_refused(tmp_path, no_host_checks):
+    with pytest.raises(ValueError, match='charted_objects'):
+        demo.launch_setup(_setup_context(tmp_path, charted_objects='ture'))
 
 
 def test_the_guard_waits_for_exactly_the_selected_boats(roster):

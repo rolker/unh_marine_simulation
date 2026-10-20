@@ -102,8 +102,8 @@ The defaults are the C-Worker 4 (`cw4.yaml`). `coastal_surveyor`, `drix` and
 
 `asv_sim/charts.py` reads the S-57 cells and turns the features of the classes
 below into circles (points) and segments with a half-width (lines; the rings of
-areas, which are hollow: a boat cannot cross the ring, the inside is never
-entered). The classes follow the classification of `marine_charts`'s
+areas, which are hollow: a boat cannot cross the ring, so it cannot get inside,
+but a boat placed inside one is not pushed out). The classes follow the classification of `marine_charts`'s
 `S57Dataset::getGrid`, the one behind the real boats' costmap: what it rasterises
 as lethal, plus the discrete hazards. Buoys and beacons are ignored there but a
 boat can hit them, so they are here. Land (`LNDARE`, `COALNE`) is left to the
@@ -122,8 +122,12 @@ bathymetry grid.
 | `BOYCAR`, `BOYINB`, `BOYISD`, `BOYLAT`, `BOYSAW`, `BOYSPP` | 1.0 | buoys |
 
 `UWTROC`, `WRECKS` and `OBSTRN` with a charted `VALSOU` block only while that depth
-plus the tide is less than the boat's draft; without one (the costmap assumes the
-same) and every other class, at every tide. The footprints are choices made here, not
+plus the tide is less than the boat's draft; without one, and every other class, at
+every tide. (The costmap treats `OBSTRN` as always lethal and `UWTROC`/`WRECKS`
+without a sounding as awash; going by the sounding for `OBSTRN` too is a deliberate
+difference: the two charted `OBSTRN` soundings in the demo cells are 9 to 10 m.)
+Two objects of one class touched within a second are one event (the speed rule still
+sees every contact). The footprints are choices made here, not
 chart data; a pontoon or pier outline of the chart is thin, so the half-width is
 what makes it a thing a hull can hit. Frame: an azimuthal equidistant projection
 centred on the loaded data (below a centimetre per kilometre within the half

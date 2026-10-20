@@ -92,6 +92,11 @@ class AsvSim(rclpy.node.Node):
                     len(primitives), enc_dir, ', '.join(
                         '{} {}'.format(k, v)
                         for k, v in sorted(counts.items())) or 'none'))
+            if not primitives:
+                self.get_logger().warning(
+                    'collision.enc_dir {} gave no charted objects: wrong '
+                    'cells, or every class set to 0 in collision.enc_footprints'
+                    .format(enc_dir))
         else:
             self.get_logger().info(
                 'charted objects off: collision.enc_dir is not set')

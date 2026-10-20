@@ -288,3 +288,55 @@ def test_the_package_ships_the_cells_it_documents():
     for needed in ('US5PSMCC.000', 'US5PSMCD.000', 'US5PSMCD.001',
                    'README.md', 'NOAA_USERAGREEMENT.TXT'):
         assert needed in names
+
+
+# review findings ------------------------------------------------------------
+
+def test_two_walls_of_one_class_both_reach_the_speed_rule(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    # a corner: a north-south wall ahead and an east-west one beside it, same class
+    rig.collisions.sources.append(source_for(rig, [
+        solid('SLCONS', 20.0, -60.0, 20.0, 60.0, 1.0),
+        solid('SLCONS', -60.0, 1.8, 60.0, 1.8, 1.0)]))
+    a = rig.add('a', 10.0, 0.0, 90.0)
+    rig.run(15.0, {'a': 1.0})
+    assert abs(a.speed) < 0.3, 'the wall ahead must stop it, whatever the other wall did'
+    assert bow_east(rig, a) < 20.0
+
+
+def test_the_charted_depth_boundary_does_not_block_exactly_at_the_draft(mdl, world):
+    # depth + tide - draft == 0: the keel just clears
+    rig = Rig(mdl, world, terrain=False, tide=0.25)
+    mdl.draft = 0.5
+    rig.collisions.sources.append(source_for(rig, [
+        solid('UWTROC', 20.0, 0.0, 20.0, 0.0, 1.0, depth=0.25)]))
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(20.0, {'a': 1.0})
+    assert rig.en(a)[0] > 20.0
+
+
+def test_charted_soundings_reach_the_primitives():
+    primitives, _, _ = charts.load(str(ENC_DIR))
+    sounded = [p for p in primitives if p.klass == 'UWTROC' and p.depth is not None]
+    assert sounded, 'some charted rocks carry a depth'
+    assert all(p.depth is not None for p in sounded)
+    assert any(p.klass == 'UWTROC' and p.depth is None for p in primitives)
+
+
+def test_an_unreadable_cell_is_named_in_the_error(tmp_path):
+    bad = tmp_path / 'US9BAD01.000'
+    bad.write_bytes(b'this is not an S-57 cell')
+    with pytest.raises(Exception, match='US9BAD01'):
+        charts.load(str(bad))
+
+
+def test_cells_too_far_apart_are_refused_naming_the_outermost(monkeypatch):
+    monkeypatch.setattr(charts, 'MAX_SPAN_DEGREES', 0.01)
+    with pytest.raises(ValueError, match='US5PSMC'):
+        charts.load(str(ENC_DIR))
+
+
+def test_no_charted_objects_found_is_an_empty_result_not_a_crash():
+    primitives, project, counts = charts.load(
+        str(ENC_DIR), ['%s=0' % k for k in charts.DEFAULT_FOOTPRINTS])
+    assert primitives == [] and counts == {}
