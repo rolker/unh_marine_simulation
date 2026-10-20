@@ -404,8 +404,8 @@ class RclpyServices(mc.Services):
         self._spec = spec
         self._log = log
 
-    def discover(self, pattern: str) -> List[str]:
-        return discover_lifecycle_nodes(self._node, pattern)
+    def discover(self, pattern: str, exclude: Optional[str] = None) -> List[str]:
+        return discover_lifecycle_nodes(self._node, pattern, exclude)
 
     def node_visible(self, name: str) -> bool:
         for node_name, namespace in self._node.get_node_names_and_namespaces():

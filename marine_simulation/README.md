@@ -2,7 +2,8 @@
 
 Scenario launch files and configs that compose the simulation packages. This file
 covers the **demo boats** (Ocean Discovery Day, issues #87 and #88): several
-simulated boats at once, each driven by its own gamepad, with no navigation stack.
+simulated boats at once, each driven by its own gamepad; with `--nav` (`enable_nav`) each also
+runs the navigation stack, off unless asked for.
 The older launch files (`sim_robot_launch.py`, `simulator_launch.py`, ...) are
 described in the repository's `.agents/README.md`.
 
@@ -114,6 +115,7 @@ profiles are in "Demo launch manager" below.
 | `--roster FILE` | `config/demo_roster.yaml` | Boat roster: the only place boat names live. |
 | `--joysticks FILE` | `config/demo_joysticks.yaml` (`run_demo.sh`: `~/.config/marine_simulation_demo/joysticks.yaml`) | Gamepad bindings of this computer. |
 | `--no-joysticks` | off | Do not start the `joy_linux` drivers. |
+| `--nav` / `--no-nav` | off | Run the navigation stack on every boat (see "The navigation stack"); nothing else changes, and the boats stay in `manual`. |
 | `--layout FILE` | `config/demo_layout.yaml` (`run_demo.sh`: `layout.yaml` in the config directory) | Window layout of this computer. |
 | `--no-layout` | off | Do not move the windows. |
 | `--camp-fresh` | off | Discard the window and map view CAMP saved when it last closed, for this start (see "First start on a computer"). |
@@ -139,9 +141,9 @@ ros2 run marine_simulation demo_manager.py --profile headless cell_size:=2 ping_
 Each name is checked against what `demo_boats_launch.py` itself declares (read from the launch
 file, so the list cannot drift), and a name the launch does not declare is refused as `THE
 DEMO DID NOT START: tide_speed_fcator:= is not an argument of the boats launch; it has ...`
-(exit 2). The five the manager sets itself from its own options (`boats`, `roster_file`,
-`enable_joysticks`, `joystick_config`, `lifecycle_guard`) are refused too: use `--boats`,
-`--roster`, `--no-joysticks`/`--joysticks`. A name given twice keeps the last value. The
+(exit 2). The six the manager sets itself from its own options (`boats`, `roster_file`,
+`enable_joysticks`, `enable_nav`, `joystick_config`, `lifecycle_guard`) are refused too: use `--boats`,
+`--roster`, `--no-joysticks`/`--joysticks`, `--nav`/`--no-nav`. A name given twice keeps the last value. The
 arguments reach only the `boats` group.
 
 **Closing the CAMP window (or CAMP dying) stops everything and the manager exits**, so
@@ -477,8 +479,9 @@ launch files the real boats use): `robot_state_publisher`, `joint_state_publishe
 `sea_surface_estimator`, `chart_datum`, `asv_helm`, `helm_manager`,
 `platform_sender`, `mbes_sim`, `detections_to_pointcloud` (in `<boat>/sensors/mbes`),
 `cube_bathymetry` (same namespace), `joy_to_helm`, and with joysticks on a
-`joy_node` (the `joy_linux` driver). There is no `udp_bridge`, `command_bridge`,
-`mission_manager`, nav2 or `s57_grids`.
+`joy_node` (the `joy_linux` driver). There is no `udp_bridge`, `command_bridge` or
+`s57_grids`; `mission_manager` and nav2 run only with `enable_nav`
+(see [The navigation stack](#the-navigation-stack)).
 
 The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth grid
 (see [Demo truth bathymetry](#demo-truth-bathymetry)) when it has been built, and the packaged
@@ -492,7 +495,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `roster_file` | `config/demo_roster.yaml` | Boat names, platform colours, start poses. |
 | `joystick_config` | `config/demo_joysticks.yaml` | Joystick device links; copy and edit per host. |
 | `enable_joysticks` | `true` | Start a `joy_linux` driver per boat. `joy_to_helm` runs either way, so `sensor_msgs/Joy` on `<boat>/joy` drives the boat. |
-| `enable_nav` | `false` | Reserved. `true` is refused ("not wired yet"). |
+| `enable_nav` | `false` | Run the navigation stack on every boat: `mission_manager` and the real `ben_project11` nav2 bring-up. See [The navigation stack](#the-navigation-stack). |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
 | `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why, on stderr). An explicit path must be a file. |
@@ -513,7 +516,7 @@ argument is anything but `true`/`1`/`yes`/`on` or `false`/`0`/`no`/`off`,
 an explicit `mbes_grid_file` (or `$MBES_DEMO_GRID`) is not a file, `cell_size`, `beam_count` or `ping_interval` is
 not positive (or not finite), `tide_speed_factor` or `current_speed` is negative
 (or not finite; 0 is allowed for both), the datum grids above are missing, or
-`enable_nav` is true. It also refuses a truth grid GDAL cannot read or whose CRS is not projected in metres, and prints a warning for every boat whose start position has no water in the grid (the sonar publishes nothing there).
+`enable_nav` is true and `mission_manager`, `ben_project11` or `nav2_bringup` is not installed. It also refuses a truth grid GDAL cannot read or whose CRS is not projected in metres, and prints a warning for every boat whose start position has no water in the grid (the sonar publishes nothing there).
 
 ### The roster is the only place boat names live
 
@@ -611,7 +614,8 @@ or any other config that sets `draft_dir` or `prior_store_dir` onto the demo**.
 `demo_boats_selftest.py` needs no gamepad. It publishes Xbox-shaped
 `sensor_msgs/Joy` (8 axes, 11 buttons) to each `<boat>/joy`, with `joy_to_helm`,
 `helm_manager`, `asv_helm` and `asv_sim` in the loop, and checks the node set (one
-`asv_sim`, twelve nodes per boat, plus a `joy_node` each with `--joysticks`), every boat's TF frames, the graph
+`asv_sim`, twelve nodes per boat, plus a `joy_node` each with `--joysticks`, and fourteen more per
+boat with `--nav`), every boat's TF frames, the graph
 check below, that driving one boat moves only that boat, that with all boats driven
 at once an idle boat stays put and only the boats given a rudder turn, and that
 every boat's `cube_bathymetry/coverage_catalog` and `coverage_tiles` deliver, and
@@ -620,7 +624,12 @@ and colour (the CAMP tab names and colours). With `--start-launch` it passes
 `--boats` and `--roster` on to the launch (`--joysticks` starts the real
 `joy_linux` drivers instead of `enable_joysticks:=false`), stops the launch on any
 exit including SIGINT and SIGTERM, and fails at once if the launch exits early.
-It resets the boats at the end and exits non-zero if a check fails. It needs the
+With `--nav` the launch gets `enable_nav:=true` (`--nav` of the manager with `--demo`) and the
+self-test also checks that every nav2 lifecycle node of every boat is `active`, that the first boat,
+set to `autonomous` and sent a one-line `SurveyPattern` as CAMP sends it, reports the mission's tasks
+on `marine/status/mission_tasks` and drives the line, that the other boats stay in `manual` and
+do not move, and that the nodes are still active afterwards (`--nav-seconds` is the time allowed
+for the line). It resets the boats at the end and exits non-zero if a check fails. It needs the
 datum grids above: the launch refuses to start without them. Run it on a
 private `ROS_DOMAIN_ID` and leave discovery at its default: with
 `ROS_LOCALHOST_ONLY=1` (or `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) a second
@@ -637,9 +646,75 @@ a subscription to another boat's topic or a wrong topic published by `asv_sim`
 itself is not caught here (the self-test's presence checks cover `asv_sim`'s
 per-boat topics).
 
+### The navigation stack
+
+`enable_nav:=true` (or `run_demo.sh --nav`, `demo_manager.py --nav`) adds to every boat what the
+real boats run, from the real launch files:
+
+- `mission_manager` (`mission_manager_launch.py`, `map_frame` = the boat's own `<boat>/map`),
+  one more lifecycle node the manager and the guard own (ten per boat), inside the boat's
+  namespace;
+- `ben_project11/launch/nav2_bringup_launch.py` with the boat's namespace (`use_namespace`,
+  no composition, no respawn): the ten nav2 servers `controller_server` (the
+  `CrabbingPathFollower`), `smoother_server`, `planner_server`, `behavior_server` (the hover
+  plugin), `manda_coverage`, `velocity_smoother`, `collision_monitor`, `bt_task_navigator`,
+  `waypoint_follower`, `docking_server`, the costmap nodes `local_costmap/local_costmap` and
+  `global_costmap/global_costmap`, and nav2's own `lifecycle_manager_navigation`. That include sits
+  outside the boat's namespace group because it pushes the namespace itself. `velocity_smoother`
+  publishes `piloting_mode/autonomous/cmd_vel`, which `helm_manager` passes through in `autonomous`.
+
+The boats start in `manual` as before; nothing in the demo sets `autonomous` yet. To drive one by
+hand, the way CAMP does (`mission_manager` reads the plan from `<boat>/marine/mission_manager/command`):
+
+```bash
+ros2 topic pub --once /bluefin/piloting_mode std_msgs/msg/String "{data: autonomous}"
+ros2 topic pub --once /bluefin/marine/mission_manager/command std_msgs/msg/String \
+  "{data: 'replace_task mission_plan [{\"type\":\"Waypoint\",\"latitude\":43.0752,\"longitude\":-70.7092}]'}"
+ros2 topic pub --once /bluefin/piloting_mode std_msgs/msg/String "{data: manual}"
+```
+
+The self-test `--nav` does the same with a one-line `SurveyPattern`. `marine_simulation.demo_nav` holds
+the one difference from Ben's nav2 parameters (`ben_project11/config/nav2_params.yaml`, read at
+every start and written, with the change, to `~/.local/state/marine_simulation_demo/nav/`): the
+`chart_layer` is removed from both costmaps (it needs the S57 ENC tree and one `s57_grids` node per
+boat, and the demo has neither), and the global costmap is 2400 m square at 2 m instead of 5000 m at 1 m (the
+local costmap is Ben's); the launch also sets nav2's `bond_timeout` to 30 s (default 4 s) for each
+boat's stack. `mission_manager` converts a mission's latitude and longitude to the
+boat's own map frame, so the per-boat map origins need no change.
+
+nav2's lifecycle nodes are brought up by nav2's own lifecycle manager; the launch manager's `boats`
+group (`exclude` in `demo_manager.yaml`) and the guard (`--exclude`) leave them alone, so each node
+has one writer. nav2 takes its whole stack down when one of its nodes dies, and the boats' nodes
+are not respawned, so a nav2 failure shows as a dead boat navigator, not as a restart. Two things nothing
+checks outside the self-test: the manager's `READY` for the boats counts `mission_manager` and
+not nav2 (which it does not own), so a boat whose nav2 bring-up failed still shows `READY`; and
+the launch's own guard (without the manager) exits once the nodes are up, so a `mission_manager`
+that respawns after that stays `unconfigured` (the manager keeps converging, the guard does
+not). `demo_boats_selftest.py --nav` is the check for both. Stopping the
+demo takes about fifteen seconds longer with nav on: `behavior_server` is still running its
+`hover` action and is killed after the launch's SIGINT/SIGTERM timeouts.
+
+**What it costs** (measured with `demo_boats_selftest.py` on the development computer, 16 cores and
+31 GB, sampled every 10 s once the boats were up; the event computer is not measured):
+
+| | processes | resident memory | CPU, settled | CPU, first minute or two |
+|---|---|---|---|---|
+| 2 boats, no nav | 26 | 2.1 GB | 0.5 to 1.0 cores | |
+| 2 boats, nav | 50 | 4.4 GB | 1.3 to 1.5 cores | up to 3.7 cores |
+| 4 boats, no nav | 50 | 4.5 GB | 2.2 to 2.4 cores | |
+| 4 boats, nav | about 100 | about 11 GB | 4 to 7 cores | 14 to 16 cores for about 100 s |
+
+Four boats with nav therefore saturate a 16 core computer while they start. That showed two ways
+at nav2's default settings: its lifecycle manager gave up on one boat's whole stack
+(`Server controller_server was unable to be reached after 4.00s by bond`, the boat's nav2 stayed
+`inactive`), and the planner of a boat missed nav2's ten second acknowledge timeout with the 1 m
+global costmap, so the first mission line was marked failed. `demo_nav.BOND_TIMEOUT_S` (30 s) and
+the coarser global costmap are the answer; with them four boats passed the self-test through the
+launch manager. A slower computer than this one may still need fewer boats (`--boats`) with nav.
+
 ### The lifecycle guard
 
-Each boat runs nine lifecycle nodes, configured and activated by one-shot chains in the
+Each boat runs nine lifecycle nodes (ten with `enable_nav`), configured and activated by one-shot chains in the
 per-package launch files. Intermittently a chain stops (a `change_state` reply or a
 transition event is lost under load) and a node sits in `inactive` for the whole session:
 no sonar, no datum frames, a boat that never drives (issue #96). `lifecycle_guard` starts
@@ -754,7 +829,8 @@ together with the boats is the single demo launch (issue #94).
 
 ### Known limits
 
-- The nav stack is not wired (`enable_nav`); there is no bridge or command bridge, so the operator mode buttons do nothing.
+- There is no bridge or command bridge, so the pad's mode buttons (`joy_to_helm` sends them to `marine/send_command`, which nothing receives) do nothing, with the navigation stack on or off. A boat leaves `manual` only when something publishes on `<boat>/piloting_mode`.
+- With the navigation stack on, nav2 knows no land and no other boat (no chart layer, no obstacle layer): a mission that crosses land or a boat is driven anyway.
 - The tide topic `/asv_sim/environment/tide_level` is shared by every boat on purpose.
 - `asv_sim`'s `set_pose` service and `sim_reset` topic work per boat (they were both broken before issue #88).
 - Four `mbes_sim` nodes each load the whole truth grid (69 MB for the packaged chart grid, about 27 MB for the demo truth grid); expect memory use to scale with the boat count.

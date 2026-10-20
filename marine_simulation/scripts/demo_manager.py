@@ -61,6 +61,7 @@ from typing import Dict, List, Sequence
 
 from ament_index_python.packages import get_package_share_directory, PackageNotFoundError
 from launch_manager_proto.config import ArgumentSpec
+from marine_simulation import demo_nav
 from marine_simulation import demo_support
 from marine_simulation import roster
 import yaml
@@ -116,12 +117,17 @@ def boats_launch_arguments(spec, items: Sequence[str], declared: Sequence[str] =
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
                   scorer_params: str, roster_file: str, joystick_config: str,
                   layout_config: str, target_file: str,
-                  camp_fresh: bool = False, rqt_fresh: bool = False) -> Dict[str, str]:
+                  camp_fresh: bool = False, rqt_fresh: bool = False,
+                  enable_nav: bool = False) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
         'boats': boats_argument,
         'boats_regex': boats_regex(names),
-        'boats_expect': str(MIN_LIFECYCLE_NODES_PER_BOAT * len(names)),
+        'boats_expect': str(demo_nav.lifecycle_nodes_per_boat(
+            MIN_LIFECYCLE_NODES_PER_BOAT, enable_nav) * len(names)),
+        # nav2's own lifecycle manager owns these; the manager leaves them alone
+        'boats_exclude': demo_nav.nav_exclude_regex(names),
+        'enable_nav': 'true' if enable_nav else 'false',
         'enable_joysticks': 'true' if enable_joysticks else 'false',
         'scorer_params': scorer_params,
         'roster_file': roster_file,
@@ -219,6 +225,9 @@ def build_parser() -> argparse.ArgumentParser:
                         help='manager configuration (default: the installed one)')
     parser.add_argument('--no-joysticks', action='store_true',
                         help='do not start the joy_linux drivers (pads not plugged in)')
+    parser.add_argument('--nav', action=argparse.BooleanOptionalAction, default=False,
+                        help='run the navigation stack on every boat (mission_manager and the '
+                             'real ben_project11 nav2 bring-up); off unless given')
     parser.add_argument('--joysticks', type=non_empty, metavar='FILE',
                         help="this computer's gamepad bindings (default: the installed example)")
     layout = parser.add_mutually_exclusive_group()
@@ -284,7 +293,7 @@ def main(argv: List[str] = None) -> int:
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
                               roster_file, joysticks, layout, target, args.camp_fresh,
-                              args.rqt_fresh))
+                              args.rqt_fresh, args.nav))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2

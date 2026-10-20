@@ -171,6 +171,18 @@ def test_bad_regex_and_relative_node_names_are_rejected():
     assert 'regular expression' in text and 'fully qualified' in text
 
 
+def test_exclude_is_a_regex_that_needs_a_match():
+    data = good()
+    data['groups']['boats']['lifecycle']['exclude'] = '^/(a|b)/(nav)$'
+    assert config.parse_config(data).groups['boats'].lifecycle.exclude == '^/(a|b)/(nav)$'
+    data['groups']['boats']['lifecycle']['exclude'] = '('
+    assert 'exclude is not a valid regular expression' in problems(data)
+    data['groups']['boats']['lifecycle']['exclude'] = ''
+    assert 'exclude must not be empty' in problems(data)
+    data['groups']['boats']['lifecycle'] = {'nodes': ['/a'], 'exclude': '^/a'}
+    assert 'exclude needs a match' in problems(data)
+
+
 def test_restart_policy_values():
     data = good()
     data['groups']['camp']['restart'] = 'always'

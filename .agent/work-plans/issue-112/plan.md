@@ -1,0 +1,121 @@
+# Plan: Demo boats: nav stack per boat, and a joystick watchdog that switches an idle or pad-less boat to an autonomous survey of its section
+
+## Issue
+
+https://github.com/rolker/unh_marine_simulation/issues/112
+
+## Context
+
+The demo boats (`marine_simulation/launch/demo_boats_launch.py`, roster `config/demo_roster.yaml`) run asv_sim, helm_manager (`initial_piloting_mode: manual`), joy_to_helm, sonar and CUBE per boat, and **no navigation stack**: `refuse_enable_nav` stops `enable_nav:=true`. Everything below was read from source, not assumed.
+
+**What the real boats run** (`ben_project11/launch/ben_core_launch.py`, which the Ben sim path `sim_robot_launch.py` includes):
+- `marine_autonomy/robot_core_launch.py`: udp_bridge (optional), command_bridge_receiver, helm_manager, mission_manager, platform_sender. The demo already runs helm_manager and platform_sender on their own; it has no command_bridge and no mission_manager.
+- `ben_project11/launch/nav2_bringup_launch.py` (namespace, `use_namespace`, `params_file`) including `navigation_launch.py`: 10 lifecycle servers (controller_server with the CrabbingPathFollower, smoother, planner (SmacHybrid), behavior_server with the hover plugin, manda_coverage, velocity_smoother, collision_monitor, bt_task_navigator, waypoint_follower, docking_server) plus nav2's own `lifecycle_manager_navigation`. Parameters: `ben_project11/config/nav2_params.yaml` with `<tf_prefix>` / `<robot_namespace>` placeholders that `nav2_bringup_launch.py` fills per namespace, so it is already multi-vehicle capable.
+- `s57_grids` per boat plus an `s57_layer` chart layer in both costmaps (needs the ENC tree, one grid publisher per boat, frames hard-coded `ben/` in `ben.yaml`).
+
+**How autonomy is driven** (verified): CAMP sends `mission_manager replace_task mission_plan <json>` through command_bridge, which republishes on `<boat>/marine/mission_manager/command` (String, payload `replace_task mission_plan <json>`). `camp_interface.parseMission` accepts a JSON array of items: `Waypoint`, `SurveyPattern` (-> `survey_line_set`), `TrackLine` (-> `survey_line`, child Waypoints become the poses), `SurveyArea` (-> `survey_area`, child Waypoints are the polygon). Lat/lon go to the boat's map frame through TF `earth` -> `<boat>/map` (`EarthTransforms`, parameter `map_frame`). mission_manager sends the task list to the nav2 action `run_tasks` (bt_task_navigator). Piloting mode is a String on `<boat>/piloting_mode` (`standby|manual|autonomous`); nav2's velocity_smoother publishes `piloting_mode/autonomous/cmd_vel`, which helm_manager passes through only in `autonomous`. helm_manager's `heartbeat` (remapped `marine/heartbeat`) carries key `piloting_mode`, and joy_to_helm follows that heartbeat.
+
+**Findings that shape the plan**
+1. No shared map origin exists in the demo (no `map_origin_*` in this repo; mru_transform#49 added the capability only). Each `<boat>/map` is anchored at its own first fix. Mission lat/lon works per boat regardless, so the plan leaves it alone (decision 7).
+2. `mission_manager/track_patterns.py` is an expanding-box and a racetrack builder used as a library; `multibeam_coverage_adapter.py` is a stand-in `run_tasks` server that computes a coverage path and never drives. Neither is a section survey. The real survey paths are a CAMP `SurveyPattern` (pre-computed lines) or a `SurveyArea` (bt `SonarCoverageTask` -> `manda_coverage`, which seeds line 1 from the polygon's first two vertices, spaces later lines from the measured swath of `sensors/mbes/soundings`, keeps its state in the action server and cannot resume).
+3. `joy_linux` runs with `autorepeat_rate: 10`: a Joy message every 100 ms with no input. Idleness is therefore message content; a missing pad is message absence (`joy_linux` logs "Couldn't open ... Will retry every second" / "Connection ... lost ... Will reopen").
+4. joy_to_helm sends mode buttons to `marine/send_command`; nothing receives it in the demo. Pad buttons cannot change the mode today, so the watchdog is the only mode writer.
+5. `demo_manager.yaml`'s `boats` group converges every node matching `^/(boat)/` to active and expects 9 per boat. nav2's servers are self-managed by its lifecycle manager (bond-based), so they would get two writers; `mission_manager` is a Python lifecycle node that the manager must own (+1 per boat).
+6. A mission item sets the speed in knots (`speed`), converted to m/s; a line is skipped as failed after FollowPath retries (progress checker 0.5 m in 10 s, 3 retries) and the mission moves on. A boat that keeps running a mission while a player holds it still would burn through lines, so hand-back to manual clears the mission (decision 5, restart not resume).
+7. The target polygon (`config/demo_target_polygon_camp.json`, 10 vertices, concave, about 1.77 km2, bbox about 1.77 x 1.41 km). The sim sonar swath is 120 degrees (about 55 m each side at 16 m depth).
+
+## Approach
+
+Three stages, three PRs, each leaves the demo working with `enable_nav` default false until the rehearsal.
+
+### Stage 1: nav stack per boat (PR 1)
+1. **`boat_actions(..., enable_nav)`** — two pieces per boat. `mission_manager_launch.py` (arg `map_frame: <boat>/map`) goes inside the boat's `PushROSNamespace` (its `LifecycleNode` has `namespace=''` and pushes none; without it `/mission_manager` would be shared by all boats). `ben_project11/launch/nav2_bringup_launch.py` goes in a `GroupAction` **outside** it, because it pushes the namespace itself (inside, it would double) (`namespace`, `use_namespace: true`, `use_composition: False`, `use_respawn: False`, `params_file`). Frame and parameter actions use the existing scoped classes; a test captures what every nav node received so no value leaks to the next boat (`navigation_launch.py` uses a plain `SetParameter('use_sim_time')`).
+2. **`marine_simulation/demo_nav.py`** (importable, pure) — `nav2_params(source) -> dict`: reads the installed `ben_project11/config/nav2_params.yaml` and applies a named, tested delta: remove `chart_layer` from both costmaps' `plugins` (no ENC, no s57_grids; costmaps keep the inflation layer only), shrink the global costmap (5000 m x 1.0 m, always sent in full, is 25 M cells per boat) to 2400 m x 2400 m (the target is 1.8 km across and the window follows the boat); the resolution is coarsened to 2.0 m only because four boats' planners timed out at 1.0 m on the dev computer (see Implementation Notes). Written to a per-start file under the demo state directory and passed as `params_file`. A test asserts that everything outside the delta equals Ben's file, so a platform change flows through.
+3. **Lifecycle ownership** — the `boats` group must not touch nav2's nodes. `match` is a `re.search`, so a negative lookahead would work with no change to `launch_manager_proto`; the plan still adds an optional `exclude` regex beside `match` (config schema, `converge --exclude`, tests, README) because a long lookahead is unreadable and unreviewable. `demo_manager.yaml` excludes the 10 servers plus the costmap nodes `local_costmap/local_costmap` and `global_costmap/global_costmap`, `lifecycle_guard_command` passes the same exclusion, and `boats_expect` becomes 9 (+1 `mission_manager`) per boat when nav is on; `LIFECYCLE_NODES_PER_BOAT` (launch) and `MIN_LIFECYCLE_NODES_PER_BOAT` (manager) stay equal, with a test. The exact per-boat node list is captured from a live run and pinned in a test constant, as the 9 was.
+4. **Switches** — remove `refuse_enable_nav` (validate `enable_nav` with `parse_bool`); `demo_manager.py` gets `--nav` / `--no-nav` (default off) that sets `enable_nav` for the boats group and the expected counts; `package.xml` adds `mission_manager`, `ben_project11` stays, `marine_nav_interfaces`.
+5. **Self-test** (`demo_boats_selftest.py --nav`; the existing scenarios, `check_solo` included, run with `enable_watchdog:=false` or nav off, since a Joy-less boat would otherwise go autonomous after 10 s; `BOAT_NODES` and the graph check's `SHARED_TOPICS` updated on purpose, nav2's bond topic being the likeliest unprefixed publisher) — start two boats with nav, then for boat A: publish `piloting_mode autonomous` and a two-waypoint `replace_task mission_plan` straight to `<boat>/marine/mission_manager/command`; check `marine/status/mission_tasks` lists the tasks, A moves toward the goal and gets there within a time budget, B (manual, no Joy) did not move, and every nav node of both boats is still active at the end (nav2 tears its stack down silently on a bond break). The old `enable_nav is refused` tests are replaced.
+6. **Measure and record** — CPU/RAM of 2 and 4 boats with nav on the dev machine, and the live node list, in the progress entry (the process count roughly doubles from about 50 to about 100 for four boats; if that is too heavy for the event machine the platform-repo issue below is the next step, not a demo-only stack).
+
+### Stage 2: watchdog and section mission (PR 2)
+7. **`marine_simulation/survey_sections.py`** (pure, stdlib only; no shapely, ADR-0009) — local tangent plane at the polygon centroid; line heading = parameter or the minimum-area bounding rectangle's long side; the polygon is cut across the lines into N bands of **equal area** (scan-line integration, N = selected boats, band i = the i-th selected boat in roster order); lines at `line_spacing` inside each band (first line half a spacing from the band edge, so neighbouring boats never share a line), clipped to the polygon inset by `edge_margin`, one or more segments per line for the concave outline, segments shorter than `min_line_length` dropped, alternate direction per line. Output: the CAMP mission JSON `[{"type":"SurveyPattern","label":"<boat>_section","speed":<kn>,"children":[{"type":"TrackLine","label":"<boat>_line_<k>","speed":<kn>,"children":[Waypoint, Waypoint]}, ...]}]` (the shape `SurveyPattern.write` produces and `parseMission` reads); labels are stable so done flags map back to lines.
+8. **`marine_simulation/watchdog_core.py`** (pure state machine, injected clock, no ROS) and **`scripts/demo_watchdog.py`** (thin plain rclpy node, one per boat, `respawn=True`, launched from `boat_actions` when nav is on and `enable_watchdog` true). Interfaces, all relative to `/<boat>` unless absolute: in `joy` (Joy), `marine/heartbeat` (Heartbeat, key `piloting_mode`), `marine/status/mission_tasks` (TaskFeedback, per-task `done`/`status`), `/survey_area` (SurveyArea, reliable + transient_local, depth 100: the first area by id); out `piloting_mode` (String), `marine/mission_manager/command` (String), `demo_watchdog/state` (latched JSON: state, reason, idle seconds, lines done/failed/total) for tests and the helper's eyes. It owns the piloting-mode decision and the mission send, nothing else.
+9. **Rules**
+   - *Activity* of a Joy message: any button set, or any axis farther than `activity_threshold` (0.05, below the driver's 0.1 deadzone) from the **baseline** (the first message after the pad appeared, which makes trigger rest values irrelevant), or any axis that moved more than 0.05 since the previous message. Autorepeat copies of a neutral state are never activity. A pad that is merely plugged in does not take a boat.
+   - *States*: `BOOT` (no decision until the first helm heartbeat or 30 s) -> `MANUAL` (a pad is sending) or `AUTONOMOUS(pad_missing)` (no Joy for `missing_pad_grace` 10 s since start, or for `pad_lost_timeout` 3 s after one stopped); `MANUAL` -> `AUTONOMOUS(idle)` after `idle_timeout` (30 s) without activity; **`AUTONOMOUS` -> `MANUAL` in the callback of the first active Joy message** (publish `piloting_mode manual` first, then `clear_tasks`), whatever the reason it was autonomous.
+   - *Mission sub-states* in `AUTONOMOUS`: `NOT_LOADED -> LOADING` (send `replace_task mission_plan <json>`; an acknowledgement is the mission's task ids appearing in `mission_tasks`; resend with back-off and a cap, at most one command per 2 s because mission_manager's command subscription is depth 1 and its callbacks block up to 2 s waiting for `run_tasks`; **the first send waits for the boat's TF `earth` -> `<boat>/map` (or its first fix)**, because `geoToPose` returns None without it and `parseMission` then crashes mission_manager, which respawns after 5 s; no ack after the cap is a `NAVIGATOR_UNAVAILABLE` state, logged and published, not a silent wait) -> `RUNNING` -> `COMPLETE` (all lines done: `on_complete: repeat` re-sends after `repeat_delay`, `hold` stays hovering).
+   - *`mission_tasks` is not a stable feed*: it is published only from navigator feedback/done, every `replace_task` sends two goals, and a preempted goal's done callback publishes an empty or stale list. The watchdog therefore latches a line as done monotonically (only to detect completion), ignores empty or transient lists, never reads one as `COMPLETE`, and treats the feed silent for `tasks_silence` seconds while it believes `RUNNING` as `LOADING` again (mission_manager respawn).
+   - *No area*: `/survey_area` comes only from the manager's `target_area` group. Without one the watchdog waits in `NO_AREA` (published, logged once), keeps the boat manual, and takes an optional `area_file` parameter (CAMP project file, same parser as `publish_survey_area.py`) as fallback for the `boats` profile and the self-test.
+   - *Reconcile*: if the heartbeat mode differs from the desired one for 2 s, re-publish (rate-limited), which covers a helm_manager respawn that returns to `initial_piloting_mode`. A heartbeat of `standby` is respected (the watchdog stays out until the next activity).
+10. **Restart, not resume (Roland's decision, a deliberate simplification)** — every hand-over to autonomy clears and sends the **whole section survey from the first line** (`replace_task mission_plan <json>`, which clears first). On takeover (first active Joy message) the watchdog publishes `piloting_mode manual` and then `clear_tasks`, so the navigator does not keep chasing lines (and failing them against the progress checker) while a player holds the boat. There is no pause (`override hover`/`cancel_override`) and no remaining-lines bookkeeping; a watchdog restart simply starts the section again when the boat is autonomous. A boat that was interrupted therefore re-runs lines it had already surveyed; accepted for the demo.
+11. **Parameters** in `config/demo_params.yaml` (`/**/demo_watchdog`) and the roster file: `idle_timeout`, `missing_pad_grace`, `pad_lost_timeout`, `activity_threshold`, `line_spacing` (demo value 80 m), `edge_margin`, `min_line_length`, `survey_speed_knots` (4), `line_heading_deg`, `on_complete`, `repeat_delay`; section index/count come from the launch (selected boats, roster order). `pad_lost_timeout` is validated against the pad autorepeat rate at launch.
+12. **Tests** — core: fake clock and fake outputs for idle -> autonomous with a mission send; first active message -> manual in the same callback; missing pad from start; pad lost mid-play; late pad with neutral baseline does not take the boat; held stick counts; trigger rest values; autorepeat noise; reconcile after a helm restart; mission ack and resend; takeover sends manual then `clear_tasks`; a second hand-over re-sends the whole mission; complete then repeat. Planner: the shipped polygon for 1 to 4 boats (areas equal within tolerance, bands disjoint, every waypoint inside the inset polygon, deterministic), degenerate and concave inputs, the JSON uses exactly the keys and item types `camp_interface.parseMission` reads (checked against a copy of its rules, since it needs a node). Node: an in-process rclpy test with real topics and a fake helm heartbeat. Live: a bench check with a real pad that unplugging it stops Joy messages and that a neutral pad keeps autorepeating (from log strings only so far); self-test scenario with `idle_timeout` 5 s: boat B idle -> autonomous and moving; stick -> manual within one second and stops following; release -> the whole section is sent again from line 1.
+
+### Stage 3: attract mode and polish (PR 3)
+13. `run_demo.sh --no-joysticks` needs no new mechanism (no pad -> `pad_missing` -> all boats autonomous on their sections); add a self-test scenario for it, flip the demo profile to nav on after the rehearsal (`--no-nav` stays as the escape), README helper card ("if nobody drives it for 30 s the boat surveys on its own; touch the stick to take over"), `.agents/README.md` updates, a cold-boot rehearsal checklist entry, and the process-load numbers from Stage 1.
+
+## Files to Change
+
+| File | Change |
+|------|--------|
+| `marine_simulation/launch/demo_boats_launch.py` | Nav group, watchdog node, `enable_nav` / `enable_watchdog`, exclusion in the guard; remove `refuse_enable_nav`; module docstring |
+| `marine_simulation/marine_simulation/demo_nav.py` (new) | nav2 parameter delta |
+| `marine_simulation/marine_simulation/survey_sections.py` (new) | section split and mission JSON |
+| `marine_simulation/marine_simulation/watchdog_core.py` (new) | state machine |
+| `marine_simulation/scripts/demo_watchdog.py` (new) | rclpy node |
+| `marine_simulation/scripts/demo_manager.py`, `config/demo_manager.yaml` | `--nav`, expected counts, exclusion |
+| `marine_simulation/scripts/demo_boats_selftest.py`, `test/test_demo_boats_selftest.py` (`scripts/check_multi_boat_graph.py` needed no change: its graph check passes with nav on) (line 142 asserts `enable_nav:=true` is an overridden argument) | nav and watchdog scenarios, node sets, `watchdog:=false` for the old scenarios |
+| `marine_simulation/config/demo_params.yaml` | watchdog parameters |
+| `launch_manager_proto/launch_manager_proto/{config,manager,cli}.py`, `README.md`, tests | `exclude` |
+| `marine_simulation/package.xml`, `CMakeLists.txt` | dependencies, install, pytest registrations |
+| `marine_simulation/test/` (new tests per module, edits to `test_demo_boats_launch.py`, `test_demo_manager.py`) | as in step 12 |
+| `marine_simulation/README.md`, `.agents/README.md` | see Documentation impact |
+
+## Principles Self-Check
+
+| Principle | Consideration |
+|---|---|
+| Human control and transparency | Every mode change is logged with its reason and published in `demo_watchdog/state`; `--no-nav` and `enable_watchdog:=false` turn it off. |
+| A change includes its consequences | README, `.agents/README.md` parameter table, manager yaml, selftest and the replaced refusal tests are in the PRs. |
+| Only what's needed | One new node and two pure modules; no change to real-boat packages; no new Python dependency; `SurveyArea`/manda option not built. |
+| Test what breaks | Timing logic under a fake clock; planner on the shipped polygon; live scenarios for hand-back and restart. |
+| Improve incrementally | Three PRs, nav off by default until rehearsed. |
+| Workspace vs project separation | All demo-specific; nothing added to the workspace repo. |
+
+## ADR Compliance
+
+| ADR | Triggered | How addressed |
+|---|---|---|
+| 0008 ROS 2 conventions | Yes | Standard launch/`package.xml`/license headers; lifecycle left to the manager. |
+| 0009 Python packages | Yes | stdlib only for geometry. |
+| 0013 progress.md | Yes | Entry per phase. |
+
+## Consequences
+
+| If we change... | Also update... | Included? |
+|---|---|---|
+| Package parameters, topics (watchdog) | `marine_simulation/README.md`, `.agents/README.md` verified-parameter table | Yes |
+| Lifecycle match / expected counts | `demo_manager.yaml`, `demo_manager.py`, `test_demo_manager.py`, `launch_manager_proto/README.md` | Yes |
+| `enable_nav` semantics | `test_demo_boats_launch.py` refusal tests, `run_demo.sh --help`, `declared_launch_arguments` consumers | Yes |
+| Roster/params yaml | `test_no_boat_name_is_hard_coded_in_the_launch_or_params` | Yes |
+
+## Documentation & Instruction Impact
+
+- **Stale docs** (must land in these PRs): `marine_simulation/README.md` (lines about `enable_nav` being refused, about 495 and 757; the helper card says a button press also counts as activity; new options, helper card, attract mode); `.agents/README.md` (Cross-Layer Dependencies row for `mission_manager`, `ben_project11`, `marine_nav_interfaces`; pitfalls; watchdog parameter table verified against the node); the `demo_params.yaml` comment "Nothing else can change the mode"; the `demo_boats_launch.py` docstring ("no navigation stack"); `launch_manager_proto/README.md` (`exclude`).
+- **Agent-instruction candidates** (proposals only): (1) autorepeat hides pad idleness, use message content; (2) never put nav2's self-managed lifecycle nodes under the manager's `match`; (3) `nav2_bringup_launch.py` pushes its own namespace, include it outside the boat's `PushROSNamespace`; (4) joy_to_helm's mode buttons go nowhere without command_bridge.
+
+## Open Questions
+
+Decided by Roland 2026-10-20: stages 1 and 2 now with nav off by default until rehearsed; watchdog as a new node here; pre-planned lines as a SurveyPattern; pad buttons inert; restart not resume; chart layer dropped; per-boat map origin kept; repeat on completion; no collision avoidance (issue 111 makes contact harmless). Unverified until Stage 1 or 2 runs live (a live run is not allowed in the planning stage): open-loop speed mapping (helm_manager turns 2.06 m/s into throttle 0.75 whatever speed the sim gives, so Ben's follower PID and the 0.5 m / 10 s progress checker may mark lines failed on a slow sim boat), nav2 behaviour on an obstacle-free costmap (`track_unknown_space`), the demo hull under the CrabbingPathFollower's tuning, CPU/RAM at four boats, nav2 bond timeouts under load.
+
+## Implementation Notes (Stage 1)
+
+- `exclude` was added to `launch_manager_proto` (config, `converge --exclude`, manager core), as planned; the exclusion regex is `demo_nav.nav_exclude_regex` and is used by the manager substitutions and the launch's guard, so the node list lives in one place (a test compares `NAV2_SERVERS` with Ben's `lifecycle_nodes`).
+- The pinned per-boat nav2 lifecycle nodes, from a headless run, are the ten servers plus `local_costmap/local_costmap` and `global_costmap/global_costmap`; `lifecycle_manager_navigation` is a plain node. With `mission_manager` that is 26 graph nodes more than a boat without nav (12 base + `mission_manager` + `lifecycle_manager_navigation` + 12), and ten lifecycle nodes per boat for the manager and the guard.
+- The self-test mission is a one-line `SurveyPattern` (not two Waypoints), because that is the task type Stage 2 sends.
+- The TF gate before the first mission send, the rate limit and the `NAVIGATOR_UNAVAILABLE` state belong to the Stage 2 watchdog; the Stage 1 self-test repeats the command every 15 s until the tasks show.
+- Measured on the dev computer (16 cores, 31 GB; table in `marine_simulation/README.md`): two boats cost about 24 processes and 2.3 GB more with nav on; four boats with nav are about 100 processes, 11 GB and saturate the 16 cores for about 100 s while starting. At nav2's defaults that broke one of four boats' bring-up (bond timeout 4 s) and made a planner miss nav2's 10 s acknowledge timeout (5.8 M-cell global costmap), so the demo sets `bond_timeout` to 30 s and coarsens the global costmap to 2 m (1.4 M cells). With both, four boats passed the self-test through the launch manager.
+- The self-test through the launch's own guard (`--start-launch` without `--demo`) can lose a Python lifecycle node to the guard/launch_ros two-writer race under that load (the known pitfall; the manager path has one writer), so its mission wait is four minutes and repeats the command.
+
+## Estimated Scope
+
+Three PRs: Stage 1 about 6 to 8 h of agent time, Stage 2 about 8 to 10 h, Stage 3 about 3 to 4 h (about 1 h of Roland's time for the rehearsal), plus review rounds. Stages 1 and 2 together are the minimum for a demonstrable idle-to-autonomous boat; the event is 2026-10-23/24.
