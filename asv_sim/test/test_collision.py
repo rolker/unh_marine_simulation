@@ -1,0 +1,484 @@
+"""Contact resolution of ``asv_sim`` (issue #111): blocking only.
+
+Pure geometry, then ``Dynamics`` with a ``Collisions`` resolver on a
+synthetic bathymetry GeoTIFF (UTM 19N, 2 m cells) built here:
+
+- water 10 m deep west of a straight shore at 50 m east of the grid origin;
+- land (depth -2 m) east of it, with a 1 m deep shelf from 30 to 50 m east
+  of the origin;
+- no data north of 120 m.
+
+The grid is a few degrees off true north (UTM grid convergence, 1.2 degrees
+at Portsmouth), so distances to the shore are checked to a cell and a bit.
+
+Runs under plain pytest (``colcon test``); no launch_test runner needed.
+"""
+
+import math
+
+from asv_sim import collision
+from asv_sim import dynamics
+from asv_sim import model
+import pytest
+import rclpy
+import rclpy.node
+from rclpy.parameter import Parameter
+from rclpy.time import Time
+import synthetic_grid
+
+SHORE_EAST = synthetic_grid.SHORE_EAST
+SHELF_EAST = synthetic_grid.SHELF_EAST
+NODATA_NORTH = synthetic_grid.NODATA_NORTH
+TOL = 3.0          # a cell, plus the grid's rotation over the run
+DEFAULT_HULL = (4.0, 1.7, 0.4)
+
+
+class Recorder:
+    """Stand-in for a logger: keeps (level, message) pairs."""
+
+    def __init__(self):
+        self.records = []
+
+    def info(self, message):
+        self.records.append(('info', message))
+
+    def warning(self, message):
+        self.records.append(('warning', message))
+
+    def error(self, message):
+        self.records.append(('error', message))
+
+    def at(self, level):
+        return [m for lv, m in self.records if lv == level]
+
+
+class Tide:
+    """Environment stand-in: a settable tide and nothing else."""
+
+    def __init__(self, level=0.0):
+        self.level = level
+
+    def getTide(self, timestamp):  # noqa: N802
+        return self.level
+
+    def getCurrent(self, lat, lon, apply_noise):  # noqa: N802
+        return None
+
+    def getWaves(self, timestamp):  # noqa: N802
+        return {'heave': 0.0, 'roll': 0.0, 'pitch': 0.0}
+
+    def getEllipsoidalAltitude(self, timestamp):  # noqa: N802
+        return 0.0
+
+
+def ns(seconds):
+    return Time(nanoseconds=int(round(seconds * 1e9)))
+
+
+@pytest.fixture
+def mdl():
+    rclpy.init()
+    node = rclpy.node.Node('collision_test')
+    try:
+        yield model.Model('demo', node)
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()
+
+
+@pytest.fixture(scope='module')
+def origin_and_grid(tmp_path_factory):
+    path = str(tmp_path_factory.mktemp('grid') / 'truth.tif')
+    lat, lon = synthetic_grid.write_grid(path)
+    return lat, lon, path
+
+
+@pytest.fixture
+def world(origin_and_grid):
+    from mbes_sim.bathy_grid import BathyGrid
+    lat, lon, path = origin_and_grid
+    return lat, lon, BathyGrid(path)
+
+
+class Rig:
+    """Boats on the synthetic grid, stepped by hand."""
+
+    def __init__(self, mdl, world, boats=True, terrain=True, tide=0.0):
+        self.lat0, self.lon0, grid = world
+        self.mdl = mdl
+        self.log = Recorder()
+        self.events = []
+        self.collisions = collision.Collisions(
+            grid=grid if terrain else None, boats=boats,
+            emit=self.events.append, logger=self.log)
+        self.env = Tide(tide)
+        self.boats = {}
+        self.frozen = {}
+        self.t = 0.0
+
+    def add(self, name, east, north, heading, frozen=False):
+        """Add a boat; a frozen one stays put (a moored target)."""
+        d = dynamics.Dynamics(
+            self.mdl, self.env, name=name, logger=self.log,
+            contact=self.collisions)
+        self.collisions.register(d)
+        self.place(d, east, north, heading)
+        self.boats[name] = d
+        if frozen:
+            self.frozen[name] = (d.latitude, d.longitude)
+        return d
+
+    def place(self, d, east, north, heading):
+        lat, lon = collision.move_en(
+            math.radians(self.lat0), math.radians(self.lon0), east, north)
+        d.set(math.degrees(lat), math.degrees(lon), heading)
+        d.last_update = None
+
+    def en(self, d):
+        return collision.offset_en(
+            math.radians(self.lat0), math.radians(self.lon0),
+            d.latitude, d.longitude)
+
+    def run(self, seconds, throttles, step=0.05, watch=None):
+        """Step every boat; ``throttles`` maps name to throttle.
+
+        :param watch: Called after every step.
+        """
+        steps = int(round(seconds / step))
+        for _ in range(steps):
+            self.t += step
+            for name, d in self.boats.items():
+                d.update(throttles.get(name, 0.0), 0.0, ns(self.t),
+                         apply_noise=False)
+                if name in self.frozen:
+                    d.speed = 0.0
+                    d.latitude, d.longitude = self.frozen[name]
+            if watch is not None:
+                watch()
+
+
+def overlap(a, b):
+    """Return the capsule overlap in metres of two ``Dynamics`` (0: none)."""
+    east, north = collision.offset_en(
+        a.latitude, a.longitude, b.latitude, b.longitude)
+    hit = collision.capsule_penetration(
+        collision.capsule_axis((0.0, 0.0), a.heading, a.model.length,
+                               a.model.beam),
+        collision.capsule_axis((east, north), b.heading, b.model.length,
+                               b.model.beam))
+    return 0.0 if hit is None else hit[0]
+
+
+# geometry ------------------------------------------------------------------
+
+def test_capsules_side_by_side_overlap_by_the_missing_gap():
+    a = collision.capsule_axis((0.0, 0.0), 0.0, 4.0, 1.7)
+    b = collision.capsule_axis((1.0, 0.0), 0.0, 4.0, 1.7)
+    depth, normal = collision.capsule_penetration(a, b)
+    assert depth == pytest.approx(0.7)
+    assert normal == pytest.approx((-1.0, 0.0))
+
+
+@pytest.mark.parametrize('gap, depth', [(3.0, 1.0), (4.0, None),
+                                        (5.0, None)])
+def test_capsules_end_to_end_touch_at_the_length(gap, depth):
+    a = collision.capsule_axis((0.0, 0.0), 0.0, 4.0, 1.7)
+    b = collision.capsule_axis((0.0, gap), 0.0, 4.0, 1.7)
+    hit = collision.capsule_penetration(a, b)
+    if depth is None:
+        assert hit is None
+    else:
+        assert hit[0] == pytest.approx(depth)
+        assert hit[1] == pytest.approx((0.0, -1.0))
+
+
+def test_capsules_with_crossing_axes_still_separate():
+    a = collision.capsule_axis((0.0, 0.0), 0.0, 4.0, 1.7)
+    b = collision.capsule_axis((0.0, 0.0), math.pi / 2, 4.0, 1.7)
+    depth, normal = collision.capsule_penetration(a, b)
+    assert depth == pytest.approx(1.7)
+    assert math.hypot(*normal) == pytest.approx(1.0)
+
+
+def test_degenerate_segments_do_not_divide_by_zero():
+    point = ((1.0, 1.0), (1.0, 1.0))
+    assert collision.segment_closest(
+        point[0], point[1], (0.0, 0.0), (0.0, 0.0)) == (
+        (1.0, 1.0), (0.0, 0.0))
+    near, far = collision.segment_closest(
+        (0.0, 0.0), (0.0, 0.0), (1.0, -1.0), (1.0, 1.0))
+    assert near == (0.0, 0.0) and far == pytest.approx((1.0, 0.0))
+
+
+# boat to boat --------------------------------------------------------------
+
+def test_boats_driven_at_each_other_never_overlap_and_stop_touching(
+        mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', -15.0, 0.0, 90.0)
+    b = rig.add('b', 15.0, 0.0, 270.0)
+    worst = [0.0]
+
+    def watch():
+        worst[0] = max(worst[0], overlap(a, b))
+
+    rig.run(30.0, {'a': 1.0, 'b': 1.0}, watch=watch)
+    assert worst[0] < 0.05
+    ea, na = rig.en(a)
+    eb, nb = rig.en(b)
+    # bow to bow: two lengths of hull between the centres at least
+    assert math.hypot(eb - ea, nb - na) == pytest.approx(4.0, abs=0.1)
+    assert abs(a.speed) < 0.2 and abs(b.speed) < 0.2
+
+
+def test_a_boat_can_always_back_out_of_contact(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', -8.0, 0.0, 90.0)
+    b = rig.add('b', 0.0, 0.0, 90.0, frozen=True)
+    rig.run(10.0, {'a': 1.0})
+    before = math.hypot(*[x - y for x, y in zip(rig.en(a), rig.en(b))])
+    rig.run(10.0, {'a': -1.0})
+    after = math.hypot(*[x - y for x, y in zip(rig.en(a), rig.en(b))])
+    assert after > before + 3.0
+    assert overlap(a, b) == 0.0
+
+
+def test_the_other_boat_is_not_moved_by_a_contact(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    rig.add('a', -8.0, 0.0, 90.0)
+    b = rig.add('b', 0.0, 0.0, 90.0)
+    rig.run(10.0, {'a': 1.0})
+    # the same boat alone (idle thrust creeps it forward either way)
+    twin = Rig(mdl, world, terrain=False)
+    twin_b = twin.add('b', 0.0, 0.0, 90.0)
+    twin.run(10.0, {})
+    assert rig.en(b) == pytest.approx(twin.en(twin_b), abs=1e-6)
+
+
+def test_boats_placed_on_top_of_each_other_are_pushed_apart(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', 0.0, 0.0, 0.0)
+    b = rig.add('b', 0.3, 0.0, 0.0)
+    rig.run(1.0, {})
+    assert overlap(a, b) < 1e-6 and overlap(b, a) < 1e-6
+    assert rig.events and rig.events[0]['kind'] == collision.KIND_BOAT
+
+
+def test_boats_pass_through_each_other_when_boats_are_off(mdl, world):
+    rig = Rig(mdl, world, boats=False, terrain=False)
+    a = rig.add('a', -8.0, 0.0, 90.0)
+    rig.add('b', 0.0, 0.0, 90.0)
+    rig.run(10.0, {'a': 1.0})
+    assert rig.en(a)[0] > 3.0
+    assert not rig.events
+
+
+def test_a_stalled_gap_does_not_tunnel_through_a_boat(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    a = rig.add('a', -20.0, 0.0, 90.0)
+    b = rig.add('b', 0.0, 0.0, 90.0, frozen=True)
+    a.speed = 2.75
+    a.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    a.update(1.0, 0.0, ns(10.0), apply_noise=False)
+    assert rig.en(a)[0] < rig.en(b)[0]
+    assert overlap(a, b) < 0.05
+
+
+# terrain -------------------------------------------------------------------
+
+def bow_east(rig, d):
+    return rig.en(d)[0] + d.model.length / 2.0
+
+
+def test_a_boat_driven_at_the_shore_stops_at_it(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    assert bow_east(rig, a) <= SHORE_EAST + TOL
+    assert bow_east(rig, a) >= SHELF_EAST + 10.0
+    assert abs(a.speed) < 0.3
+
+
+def test_a_boat_at_forty_five_degrees_slides_along_the_shore(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 45.0)
+    rig.run(30.0, {'a': 1.0})
+    east, north = rig.en(a)
+    assert north > 15.0
+    assert east + 2.0 <= SHORE_EAST + TOL
+
+
+def test_a_boat_that_hit_the_shore_can_back_off(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    stuck = rig.en(a)[0]
+    rig.run(10.0, {'a': -1.0})
+    assert rig.en(a)[0] < stuck - 3.0
+
+
+def test_no_data_is_a_wall(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 0.0)
+    rig.run(60.0, {'a': 1.0})
+    assert rig.en(a)[1] + 2.0 <= NODATA_NORTH + TOL
+
+
+def test_a_boat_off_the_grid_cannot_go_further_off_it(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 270.0)
+    rig.run(120.0, {'a': 1.0})
+    # the grid ends 300 m west of the origin
+    assert rig.en(a)[0] - 2.0 >= -300.0 - TOL
+
+
+def test_a_boat_that_starts_aground_may_leave_but_not_go_shallower(
+        mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 60.0, 0.0, 270.0)
+    rig.run(40.0, {'a': 1.0})
+    assert rig.en(a)[0] < SHORE_EAST - 5.0
+
+    b = rig.add('b', 60.0, 20.0, 90.0)
+    here = rig.en(b)[0]
+    rig.run(10.0, {'b': 1.0})
+    assert rig.en(b)[0] >= here
+
+
+def test_low_tide_grounds_a_boat_on_the_shelf_and_high_tide_frees_it(
+        mdl, world):
+    rig = Rig(mdl, world, tide=-0.8)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    assert bow_east(rig, a) <= SHELF_EAST + TOL
+    rig.env.level = 0.0
+    rig.run(20.0, {'a': 1.0})
+    assert bow_east(rig, a) > SHELF_EAST + 8.0
+
+
+def test_draft_decides_where_a_boat_grounds(mdl, world):
+    mdl.draft = 1.5
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    assert bow_east(rig, a) <= SHELF_EAST + TOL
+
+
+def test_a_stalled_gap_does_not_tunnel_through_the_shore(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 25.0, 0.0, 90.0)
+    a.speed = 2.75
+    a.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    a.update(1.0, 0.0, ns(10.0), apply_noise=False)
+    assert bow_east(rig, a) <= SHORE_EAST + TOL
+
+
+def test_nothing_blocks_a_boat_without_a_resolver(mdl, world):
+    d = dynamics.Dynamics(mdl, Tide(), name='free', logger=Recorder())
+    d.set(world[0], world[1], 90.0)
+    d.speed = 2.0
+    run_to = 0.0
+    d.update(1.0, 0.0, ns(run_to), apply_noise=False)
+    for i in range(1, 400):
+        d.update(1.0, 0.0, ns(i * 0.05), apply_noise=False)
+    assert d.speed > 2.0
+
+
+def test_a_boat_is_never_damaged_or_reset(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    stuck = rig.en(a)
+    rig.run(5.0, {'a': 1.0})
+    # still where it was, still able to move when told to
+    assert rig.en(a) == pytest.approx(stuck, abs=0.2)
+    rig.run(5.0, {'a': -1.0})
+    assert rig.en(a)[0] < stuck[0]
+    assert not rig.log.at('error')
+
+
+# events --------------------------------------------------------------------
+
+def test_one_event_per_contact_not_one_per_step(mdl, world):
+    rig = Rig(mdl, world)
+    rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    terrain = [e for e in rig.events if e['kind'] == collision.KIND_TERRAIN]
+    assert len(terrain) == 1
+    event = terrain[0]
+    assert event['platform'] == 'a' and event['other'] == ''
+    assert event['closing_speed'] > 0.0
+    assert math.isfinite(event['latitude'])
+    assert len(rig.log.at('info')) == 1
+
+
+def test_a_second_contact_after_separating_is_a_second_event(mdl, world):
+    rig = Rig(mdl, world)
+    rig.add('a', 0.0, 0.0, 90.0)
+    rig.run(40.0, {'a': 1.0})
+    rig.run(8.0, {'a': -1.0})
+    rig.run(20.0, {'a': 1.0})
+    assert len(rig.events) == 2
+
+
+def test_a_boat_contact_names_the_other_boat(mdl, world):
+    rig = Rig(mdl, world, terrain=False)
+    rig.add('a', -8.0, 0.0, 90.0)
+    rig.add('b', 0.0, 0.0, 90.0, frozen=True)
+    rig.run(10.0, {'a': 1.0})
+    assert len(rig.events) == 1
+    assert rig.events[0]['other'] == 'b'
+    assert rig.events[0]['kind'] == collision.KIND_BOAT
+
+
+# robustness ----------------------------------------------------------------
+
+class Broken:
+
+    def resolve(self, *args):
+        raise ValueError('contact bug')
+
+
+def test_a_failure_in_contact_code_is_logged_and_does_not_reset_the_boat(
+        mdl):
+    log = Recorder()
+    d = dynamics.Dynamics(mdl, name='boat', logger=log, contact=Broken())
+    d.update(1.0, 0.0, ns(0.0), apply_noise=False)
+    for i in range(1, 100):
+        d.update(1.0, 0.0, ns(i * 0.05), apply_noise=False)
+    assert d.speed > 0.1
+    errors = log.at('error')
+    assert len(errors) == 1 and 'contact resolution failed' in errors[0]
+
+
+def test_a_boat_with_a_non_finite_position_is_left_alone(mdl, world):
+    rig = Rig(mdl, world)
+    a = rig.add('a', 0.0, 0.0, 90.0)
+    a.latitude = math.nan
+    rig.collisions.resolve(a, 0.7, -1.2, ns(1.0), 0.05)
+    assert math.isnan(a.latitude)
+
+
+# parameters ----------------------------------------------------------------
+
+def test_the_hull_defaults_are_the_cworker_4(mdl):
+    assert (mdl.length, mdl.beam, mdl.draft) == DEFAULT_HULL
+
+
+def test_a_hull_shorter_than_it_is_wide_is_refused():
+    rclpy.init()
+    node = rclpy.node.Node('collision_param_test')
+    try:
+        mdl = model.Model('demo', node)
+        for name, value in (('length', 1.0), ('beam', 5.0),
+                            ('draft', 0.0), ('beam', -1.0)):
+            result = node.set_parameters(
+                [Parameter('models.demo.' + name, value=value)])[0]
+            assert not result.successful, (name, value)
+        assert (mdl.length, mdl.beam) == DEFAULT_HULL[:2]
+        assert node.set_parameters(
+            [Parameter('models.demo.length', value=6.0)])[0].successful
+        assert mdl.length == 6.0
+    finally:
+        node.destroy_node()
+        rclpy.shutdown()

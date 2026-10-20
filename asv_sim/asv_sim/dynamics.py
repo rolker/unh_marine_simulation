@@ -39,15 +39,19 @@ class Dynamics(object):
 
     def __init__(self, mdl: model.Model,
                  env: environment.Environment = None, start=None,
-                 name='', logger=None):
+                 name='', logger=None, contact=None):
         """Initialize the simulation with a model and optional environment.
 
         :param name: Platform name, used in log messages.
         :param logger: Object with ``warning`` and ``error`` methods (an
             rclpy logger or a ``logging.Logger``). Defaults to the
             ``asv_sim.dynamics`` Python logger.
+        :param contact: Optional ``asv_sim.collision.Collisions``; after each
+            integration sub-step it keeps the boat out of whatever it would
+            otherwise have moved into. ``None``: nothing blocks the boat.
         """
         self.name = name
+        self.contact = contact
         self.logger = logger or logging.getLogger('asv_sim.dynamics')
         self._last_logged = {}
         # Portsmouth, New Hampshire, cod rock
@@ -196,6 +200,25 @@ class Dynamics(object):
                 diagnostics['wave_pitch'] = math.degrees(waves['pitch'])
 
         return diagnostics
+
+    def _resolve_contact(self, last_lat, last_long, delta_t):
+        """Let the contact resolver correct the sub-step just taken.
+
+        A failure in contact code must not look like a numerical excursion
+        (which resets the boat to rest) or end the node: it is logged and
+        the uncorrected step stands.
+        """
+        if self.contact is None:
+            return
+        try:
+            self.contact.resolve(
+                self, last_lat, last_long, self.last_update, delta_t)
+        except Exception as e:  # noqa: B902 - contact must never end the node
+            self._log(
+                'error', 'contact',
+                'asv_sim platform {!r}: contact resolution failed ({}: {}); '
+                'the step is kept as integrated'.format(
+                    self.name, type(e).__name__, e))
 
     def _log(self, level, key, message):
         """Log at most once per ``_LOG_INTERVAL`` seconds for each key."""
@@ -541,6 +564,7 @@ class Dynamics(object):
                         self.longitude, self.latitude,
                         current_direction, current_speed * delta_t)
             self._require_finite()
+            self._resolve_contact(last_lat, last_long, delta_t)
             self.cog, self.sog = geodesic.inverse(
                 last_long, last_lat, self.longitude, self.latitude)
             self.sog /= delta_t

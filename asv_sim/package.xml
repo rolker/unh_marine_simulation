@@ -13,11 +13,15 @@
   <depend>sensor_msgs</depend>
   <depend>std_msgs</depend>
   <depend>python3-transforms3d</depend>
+  <!-- Only needed when collision.grid_file is set (BathyGrid reader). -->
+  <exec_depend>mbes_sim</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>
   <test_depend>ament_pep257</test_depend>
   <test_depend>python3-pytest</test_depend>
+  <test_depend>python3-gdal</test_depend>
+  <test_depend>python3-numpy</test_depend>
   <test_depend>launch_testing</test_depend>
   <test_depend>launch_testing_ros</test_depend>
   <test_depend>launch_ros</test_depend>

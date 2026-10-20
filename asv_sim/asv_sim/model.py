@@ -7,7 +7,14 @@ from rcl_interfaces.msg import FloatingPointRange
 from rcl_interfaces.msg import IntegerRange
 from rcl_interfaces.msg import Parameter
 from rcl_interfaces.msg import ParameterDescriptor
+from rcl_interfaces.msg import SetParametersResult
 import rclpy.node
+
+
+# Hull defaults: the C-Worker 4 (4 m long, 1.7 m wide, 0.4 m draft; cw4.yaml).
+DEFAULT_LENGTH = 4.0
+DEFAULT_BEAM = 1.7
+DEFAULT_DRAFT = 0.4
 
 
 class Model:
@@ -16,6 +23,7 @@ class Model:
         self.name = name
         self.parameters_ready = False
 
+        node.add_on_set_parameters_callback(self.validateParameters)
         node.add_post_set_parameters_callback(self.updateParameters)
 
         node.declare_parameter(
@@ -139,11 +147,39 @@ class Model:
                 integer_range=[IntegerRange(
                     from_value=1, to_value=10000, step=1)]))
 
+        for key, default, text in (
+                ('length', DEFAULT_LENGTH, 'Hull length in metres; with '
+                 'beam it sets the contact footprint (a capsule)'),
+                ('beam', DEFAULT_BEAM, 'Hull width in metres'),
+                ('draft', DEFAULT_DRAFT, 'Depth of the keel below the '
+                 'water line in metres; the boat grounds where the water '
+                 'is shallower')):
+            node.declare_parameter(
+                self.ns(key), default,
+                ParameterDescriptor(
+                    description=text,
+                    floating_point_range=[FloatingPointRange(
+                        from_value=0.01, to_value=1000.0, step=0.0)]))
+
         self.parameters_ready = True
         self.update_coefficients()
 
     def ns(self, key: str) -> str:
         return 'models.' + self.name + '.' + key
+
+    def validateParameters(self, parameters: List[Parameter]):
+        """Refuse a hull longer than it is wide the wrong way round."""
+        values = {p.name: p.value for p in parameters}
+        length = values.get(
+            self.ns('length'), getattr(self, 'length', DEFAULT_LENGTH))
+        beam = values.get(
+            self.ns('beam'), getattr(self, 'beam', DEFAULT_BEAM))
+        if length < beam:
+            return SetParametersResult(
+                successful=False,
+                reason='models.{}: length {} is shorter than beam {}'.format(
+                    self.name, length, beam))
+        return SetParametersResult(successful=True)
 
     def updateParameters(self, parameters: List[Parameter]):
         need_update = False
@@ -209,6 +245,12 @@ class Model:
             if param.name == self.ns('drag_noise'):
                 self.drag_noise = param.value
                 need_update = True
+            if param.name == self.ns('length'):
+                self.length = param.value
+            if param.name == self.ns('beam'):
+                self.beam = param.value
+            if param.name == self.ns('draft'):
+                self.draft = param.value
             if param.name == self.ns('max_step'):
                 self.max_step = param.value
             if param.name == self.ns('max_substeps'):
