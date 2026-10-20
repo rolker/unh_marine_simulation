@@ -50,6 +50,13 @@ TO START THE DEMO
      and one multibeam profile per boat. It comes up filled in the first time
      on a computer; if you rearrange it, close it and it is remembered.
 
+  7. With the navigation stack on (the demo started with --nav): a boat that
+     nobody drives for 30 seconds starts surveying its own part of the survey
+     box by itself, and a boat with no controller plugged in does that from the
+     start. Touch the stick (or any button) and the boat is yours at once; if
+     you leave it alone for 30 seconds it surveys again, from the beginning of
+     its part.
+
 TO STOP EVERYTHING: close the map window (the big one). Everything else
 shuts down by itself; wait until the terminal window says "Press ENTER to
 close this window", then press ENTER. (If that does not work: click the
@@ -616,7 +623,7 @@ or any other config that sets `draft_dir` or `prior_store_dir` onto the demo**.
 `sensor_msgs/Joy` (8 axes, 11 buttons) to each `<boat>/joy`, with `joy_to_helm`,
 `helm_manager`, `asv_helm` and `asv_sim` in the loop, and checks the node set (one
 `asv_sim`, twelve nodes per boat, plus a `joy_node` each with `--joysticks`, and fourteen more per
-boat with `--nav`), every boat's TF frames, the graph
+boat with `--nav`, one more with `--watchdog`), every boat's TF frames, the graph
 check below, that driving one boat moves only that boat, that with all boats driven
 at once an idle boat stays put and only the boats given a rudder turn, and that
 every boat's `cube_bathymetry/coverage_catalog` and `coverage_tiles` deliver, and
@@ -630,7 +637,16 @@ self-test also checks that every nav2 lifecycle node of every boat is `active`, 
 set to `autonomous` and sent a one-line `SurveyPattern` as CAMP sends it, reports the mission's tasks
 on `marine/status/mission_tasks` and drives the line, that the other boats stay in `manual` and
 do not move, and that the nodes are still active afterwards (`--nav-seconds` is the time allowed
-for the line). It resets the boats at the end and exits non-zero if a check fails. It needs the
+for the line). With `--watchdog pad` or `--watchdog attract` (both imply `--nav`; use `--demo`, the manager's
+target-area publisher gives the watchdog its area) the boats run the watchdog and the older
+scenarios are skipped, because the watchdog drives boats nobody is driving. `pad` simulates an
+untouched pad on the first boat (short idle timeout, no missing-pad rule): it must go
+autonomous, have its section mission taken and drive it; one active Joy message must hand it
+back to manual that moment and clear the mission; idle again must send the whole section anew
+(the next generation, line 0 first, nothing done); the boat without a pad stays put. `attract` has
+no pad at all: every boat must go autonomous, get a mission of its own and drive. Both end with
+every nav2 node still active.
+It resets the boats at the end and exits non-zero if a check fails. It needs the
 datum grids above: the launch refuses to start without them. Run it on a
 private `ROS_DOMAIN_ID` and leave discovery at its default: with
 `ROS_LOCALHOST_ONLY=1` (or `ROS_AUTOMATIC_DISCOVERY_RANGE=LOCALHOST`) a second
@@ -678,8 +694,9 @@ The self-test `--nav` does the same with a one-line `SurveyPattern`. `marine_sim
 the one difference from Ben's nav2 parameters (`ben_project11/config/nav2_params.yaml`, read at
 every start and written, with the change, to `~/.local/state/marine_simulation_demo/nav/`): the
 `chart_layer` is removed from both costmaps (it needs the S57 ENC tree and one `s57_grids` node per
-boat, and the demo has neither), and the global costmap is 2400 m square at 2 m instead of 5000 m at 1 m (the
-local costmap is Ben's); the launch also sets nav2's `bond_timeout` to 30 s (default 4 s) for each
+boat, and the demo has neither), the global costmap is 3200 m square at 2 m instead of 5000 m at 1 m (the
+local costmap is Ben's), and the `GridBased` planner is NavFn instead of `SmacPlannerHybrid`,
+which gave up on the 700 m transit to a survey section's first line over the empty costmap; the launch also sets nav2's `bond_timeout` to 30 s (default 4 s) for each
 boat's stack. `mission_manager` converts a mission's latitude and longitude to the
 boat's own map frame, so the per-boat map origins need no change.
 
@@ -712,6 +729,77 @@ at nav2's default settings: its lifecycle manager gave up on one boat's whole st
 global costmap, so the first mission line was marked failed. `demo_nav.BOND_TIMEOUT_S` (30 s) and
 the coarser global costmap are the answer; with them four boats passed the self-test through the
 launch manager. A slower computer than this one may still need fewer boats (`--boats`) with nav.
+
+### The joystick watchdog
+
+With `enable_nav`, each boat also runs `demo_watchdog.py` (switch it off with
+`enable_watchdog:=false`; it does nothing without nav). It decides who drives the boat:
+
+- While somebody touches the boat's pad, the boat stays in `manual`.
+- When nobody has for `idle_timeout` (30 s), or no pad has sent anything `missing_pad_grace`
+  (10 s) after the start, or the pad stops sending for `pad_lost_timeout` (3 s), it publishes
+  `autonomous` on `<boat>/piloting_mode` and sends the boat's section of the target area to
+  `mission_manager`.
+- The first Joy message that shows activity puts the boat back in `manual` (that message's turn:
+  `manual` first, then `clear_tasks`). **Handing the boat to autonomy again restarts the whole
+  section from its first line**: nothing is paused or resumed.
+- `run_demo.sh --nav --no-joysticks` is the unattended attract mode: no pad, so every boat
+  surveys its own section from the start.
+
+*Activity* of a Joy message is a button that differs from the pad's rest state or from the
+previous message, an axis farther than `activity_threshold` (0.05) from its rest value, or an
+axis that moved more than that since the previous message. Rest is the first message after the
+pad appeared (so trigger rest values need no knowledge, and a pad that is merely plugged in does
+not take a boat), and `joy_linux` repeats an untouched pad at 10 Hz, so message times say
+nothing; only the content does. The pad's mode buttons stay inert (there is no `command_bridge`);
+`joy_to_helm` still turns the sticks into helm commands while the boat is `manual`.
+
+The section: the target area (the latched `/survey_area`, the first area by id) is cut across the
+survey lines into as many bands of equal area as there are boats that run, the *i*-th boat in
+roster order getting the *i*-th band. Inside its band a boat runs parallel lines `line_spacing`
+apart (80 m), along the long side of the area unless `line_heading_deg` says otherwise, shortened
+by `edge_margin` (15 m) at both ends, alternating direction, and sends them as a CAMP
+`SurveyPattern` (one `TrackLine` per segment; a concave outline gives several segments on one
+line) at `survey_speed_knots` (4): the plan `mission_manager` reads from
+`marine/mission_manager/command`, so a real boat would run the same thing. The shipped target
+(1.77 km2) for four boats is 3 to 6 lines and 5 to 6 km per boat, about three quarters of an
+hour at 4 knots; a finished section repeats after `repeat_delay` (10 s; `on_complete: hold`
+stays). Every send has its own label (`<boat>_s<n>`), so feedback of an earlier send is never
+taken for the current one.
+
+What the watchdog does about the things that go wrong:
+
+- No target area yet (`NO_AREA` in its state): the boat goes autonomous and hovers; the section
+  is sent when an area arrives (the `boats` profile of the manager has none, the `demo` and
+  `headless` profiles have the target-area publisher).
+- `mission_manager` dies on a plan sent before TF `earth -> <boat>/map` exists, so the first send
+  waits for that frame (settled for 3 s). A goal sent while nav2 is still starting is rejected
+  by it for good, so an unacknowledged send is repeated every 15 s (the acknowledgement is the
+  section's tasks appearing on `marine/status/mission_tasks`); after 120 s the state says
+  `navigator_unavailable`, and it keeps trying.
+- A running mission that goes silent for 60 s is sent again; a helm that comes back in `manual`
+  (it respawned) is told again after 2 s; a helm that reports `standby` is left alone until the
+  pad is touched.
+- A line that cannot be driven (a boat that is aground or held by a charted object or another
+  boat, see "Boats block each other and the shallows") is not driven forever: nav2's progress
+  checker (0.5 m in 10 s) aborts the follower, retries three times and the navigator records the
+  line failed and goes on to the next one, so a blocked boat loses about a minute per line
+  (`lines_failed` in the state) and then surveys what it can.
+
+The state is published as JSON on `<boat>/demo_watchdog/state` (latched): `state` (`BOOT`,
+`MANUAL`, `AUTONOMOUS`), `reason` (`idle`, `pad_missing`), `mission` (`NOT_LOADED`, `LOADING`,
+`RUNNING`, `COMPLETE`, `NO_AREA`), the lines done, failed and in total, the pad and the helm
+mode. The decisions are in `marine_simulation/watchdog_core.py` (no ROS in it, tested with fake
+Joy), the section in `survey_sections.py`. The watchdog's launch arguments are `enable_watchdog`,
+`idle_timeout`, `missing_pad_grace` and `line_spacing` (empty: the values of
+`config/demo_params.yaml`, `/**/demo_watchdog`).
+
+nav2's behaviour tree navigator opens a Groot publisher with fixed ZeroMQ ports on every goal
+(`BT::Groot2Publisher` in `marine_nav_bt_task_navigator`), so on one computer only the first
+boat could run a goal (`Address already in use`). Each boat's nav2 processes are therefore started
+with `libdemo_zmq_ports.so` preloaded (`src/demo_zmq_ports.c`) and `DEMO_ZMQ_PORT_OFFSET` set to ten
+times the boat's place among the boats that run, which moves their ZeroMQ binds; a navigator that
+takes the port as a parameter makes it unnecessary.
 
 ### The lifecycle guard
 
