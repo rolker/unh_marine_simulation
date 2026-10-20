@@ -51,3 +51,31 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [x] (suggestion) contact-end timer must use the node clock, not wall time — step 8
 - [ ] (suggestion) other models' footprints stay unverified defaults — Open Questions
 - [ ] (suggestion) wave heave/roll/pitch ignored for clearance — Open Questions
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-20 12:44 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-111 at `503a01a`
+**Mode**: pre-push
+**Depth**: Deep (reason: 1438 lines in 24 files, new safety-relevant simulation logic; static analysis passed via pre-commit)
+**Must-fix**: 7 | **Suggestions**: 6
+**Round**: 1 | **Ship**: continue — must-fix included real design/correctness defects (a node hang, tunnelling, heading handling)
+**Sources**: 2 Claude adversarial passes (Sonnet, Lens A and Lens B), Codex; Gemini timed out (420 s) and gave no review. Governance and plan drift checked by the lead.
+
+### Findings
+- [x] (must-fix, A+B+Codex) length/beam validator rejected a short boat at declare time because beam still had its default — `asv_sim/model.py`
+- [x] (must-fix, A+Codex) terrain clearance compared old position at the new heading, so a turn onto land was accepted — `collision.py TerrainSource.correct`
+- [x] (must-fix, A+B) -10 m clamp let a boat in the void or on high ground move anywhere, and a void boat could sail onto land — `collision.py`
+- [x] (must-fix, A+Codex) terrain correction could undo the boat push (wedge); sources ran once — `collision.py Collisions.resolve`
+- [x] (must-fix, Codex) capsule push for crossing axes did not separate the hulls — `collision.py capsule_penetration`
+- [x] (must-fix, Codex) endpoint-only checks tunnel with a long max_step — `collision.py`
+- [x] (must-fix, B) geodesic.inverse called for every far boat does not terminate for near-antipodal points (node hang) — `collision.py BoatSource`
+- [x] (suggestion, B) emit failure left the boat half corrected; report after correction — `collision.py`
+- [x] (suggestion, B) tide read for every boat even without terrain — `collision.py`
+- [x] (suggestion, A) closing speed ignored the current — `collision.py`
+- [x] (suggestion, A) weak never-damaged test assertion — `test_collision.py`
+- [x] (suggestion, A+B) docs: one event per contact semantics, not latched, memory size of the grid — READMEs, message
+- [ ] (suggestion, A) multi-contact corner speed is a product of reductions, not a projection — `collision.py` (accepted, documented as order dependent)
