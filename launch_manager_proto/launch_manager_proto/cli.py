@@ -38,6 +38,7 @@ Command line: run the manager, print its status, send it commands, or just conve
 
 import argparse
 import json
+import re
 import sys
 import time
 from typing import Dict, List, Optional
@@ -195,6 +196,13 @@ def format_report(reports) -> str:
 
 def cmd_converge(args) -> int:
     """Run the convergence loop alone: the post-launch guard (fixes the lost-reply race)."""
+    for option, pattern in (('--match', args.match), ('--exclude', args.exclude)):
+        try:
+            re.compile(pattern or '')
+        except re.error as error:
+            print('launch_manager_proto converge: %s is not a regular expression (%s)'
+                  % (option, error), file=sys.stderr)
+            return 2
     rclpy.init()
     node = Node('launch_manager_proto_guard')
     backend = RclpyBackend(node, query_timeout=2.0)

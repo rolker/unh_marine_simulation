@@ -636,7 +636,6 @@ def launch_setup(context, *args, **kwargs):
         for package in ('mission_manager', 'ben_project11', 'nav2_bringup'):
             require_package(package, 'it is part of the navigation stack; launch with '
                                      'enable_nav:=false to run the boats without it')
-        nav_params = demo_nav.write_params(os.path.join(demo_support.state_dir(), 'nav'))
 
     joysticks = {}
     if enable_joysticks:
@@ -650,6 +649,10 @@ def launch_setup(context, *args, **kwargs):
             config.get('autorepeat_rate', settings['autorepeat_rate']),
             'joystick autorepeat_rate')
         check_joystick_settings(settings['deadzone'], settings['autorepeat_rate'])
+
+    if enable_nav:
+        # after every check that can refuse the start, so a refused start leaves no file
+        nav_params = demo_nav.write_params(os.path.join(demo_support.state_dir(), 'nav'))
 
     actions = [
         SetParametersFromFile(PathJoinSubstitution([

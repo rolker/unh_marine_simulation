@@ -259,6 +259,18 @@ def mission_command(plan: list) -> str:
     return 'replace_task mission_plan ' + json.dumps(plan)
 
 
+def line_reached(travelled: float, line_length: float, distance, status: str) -> bool:
+    """
+    Return whether a boat has driven a survey line to its end.
+
+    It must have covered most of the line and be near the end, and the navigator must not
+    have recorded the line failed: ``SetTaskFailed`` also marks a task ``done``, so the done
+    flag alone proves nothing.
+    """
+    return (travelled > 0.8 * line_length and distance is not None and distance < 20.0
+            and 'fail' not in (status or '').lower())
+
+
 def tasks_acknowledge(task_ids, label: str) -> bool:
     """Return whether the reported task ids include the whole mission ``label`` sent."""
     return {label + '_set', label + '_set/' + label + '_line'} <= set(task_ids)
@@ -415,7 +427,9 @@ class SelfTest:
         deadline = time.monotonic() + timeout
         states = {}
         while True:
-            states = {name: self.lifecycle_state(name) for name in wanted}
+            # each node gets what is left of the time, so the timeout is the timeout
+            states = {name: self.lifecycle_state(
+                name, min(5.0, max(0.2, deadline - time.monotonic()))) for name in wanted}
             bad = {n: st for n, st in states.items() if st != 'active'}
             if not bad or time.monotonic() > deadline:
                 break
@@ -515,33 +529,51 @@ class SelfTest:
         first = offset_position(start[boat], heading, lead)
         last = offset_position(start[boat], heading, lead + line_length)
         command = mission_command(line_mission(label, first, last, speed_knots))
-        seen = {'ids': [], 'done': set()}
+        seen = {'ids': [], 'done': set(), 'status': ''}
+        line_id = label + '_set/' + label + '_line'
 
         def on_tasks(msg):
             seen['ids'] = [t.id for t in msg.tasks]
             seen['done'] = {t.id for t in msg.tasks if t.done}
+            seen['status'] = ' '.join(t.status for t in msg.tasks if t.id == line_id)
 
         self.node.create_subscription(
             TaskFeedback, '/%s/marine/status/mission_tasks' % boat, on_tasks, 10)
         mode = self.node.create_publisher(String, '/%s/piloting_mode' % boat, 10)
         mission = self.node.create_publisher(
             String, '/%s/marine/mission_manager/command' % boat, 10)
+        try:
+            self._drive_mission(boat, label, line_id, command, start, last, seen, mode,
+                                mission, seconds, line_length)
+        finally:
+            # whatever happened (a failed check, an interrupt), hand the boat back and stop
+            # the navigator, so a demo that is already running is left as it was found
+            mode.publish(String(data='manual'))
+            mission.publish(String(data='clear_tasks'))
+            self.spin(1.0)
+        self.check_nav_active('after the mission', timeout=30.0)
+
+    def _drive_mission(self, boat, label, line_id, command, start, last, seen, mode, mission,
+                       seconds, line_length):
+        """Send the mission, wait for it to be taken, then watch the boat drive the line."""
+        from std_msgs.msg import String
         deadline = time.monotonic() + 30.0
         while (mode.get_subscription_count() == 0 or mission.get_subscription_count() == 0) \
                 and time.monotonic() < deadline:
             self.spin(0.2)
-        mode.publish(String(data='autonomous'))
         accepted = False
         sent = 0
         next_send = 0.0
-        # a loaded start can take minutes: the launch's guard and a respawned mission_manager
-        # may each cost a restart before the first command is taken
+        # A loaded start can take minutes before nav2 takes a goal, and every command clears
+        # and re-sends the task list, so it is repeated rarely. The mode goes with it: helm_manager
+        # may not have been ready for the first.
         deadline = time.monotonic() + 240.0
         while not accepted and time.monotonic() < deadline:
             if time.monotonic() >= next_send:
+                mode.publish(String(data='autonomous'))
                 mission.publish(String(data=command))
                 sent += 1
-                next_send = time.monotonic() + 15.0
+                next_send = time.monotonic() + 60.0
             self.spin(0.5)
             accepted = tasks_acknowledge(seen['ids'], label)
         self.record('%s accepts the mission (its tasks appear on mission_tasks)' % boat,
@@ -553,26 +585,20 @@ class SelfTest:
             self.spin(1.0)
             fix = self.fix.get(boat)
             distance = metres(fix, last) if fix else None
-            travelled = metres(start[boat], self.fix[boat])
-            reached = travelled > 0.8 * line_length and (
-                (label + '_set/' + label + '_line') in seen['done']
-                or (distance is not None and distance < 20.0))
+            travelled = metres(start[boat], fix) if fix else 0.0
+            reached = line_reached(travelled, line_length, distance, seen['status'])
             if reached:
                 break
         self.record('%s follows the mission to the end of the line' % boat, reached,
-                    'travelled %.0f m, %s m from the end after %s s, done %s'
+                    'travelled %.0f m, %s m from the end after %s s, done %s, line status %r'
                     % (travelled, 'unknown' if distance is None else '%.0f' % distance,
                        '%.0f' % (seconds - max(0.0, end - time.monotonic())),
-                       sorted(seen['done'])))
+                       sorted(seen['done']), seen['status']))
         after = dict(self.fix)
         others = {b: metres(start[b], after[b]) for b in self.boats if b != boat}
         self.record('the other boats, left in manual, do not move',
                     all(d < 1.0 for d in others.values()),
                     ', '.join('%s %.1f m' % (b, d) for b, d in others.items()) or 'none')
-        mode.publish(String(data='manual'))
-        mission.publish(String(data='clear_tasks'))
-        self.spin(1.0)
-        self.check_nav_active('after the mission', timeout=30.0)
 
     def check_coverage(self, timeout):
         deadline = time.monotonic() + timeout
@@ -710,12 +736,16 @@ def main(argv=None):
                              'it): also check nav2 is active and one boat drives a mission')
     parser.add_argument('--nav-seconds', type=float, default=240.0,
                         help='how long the mission boat has to reach the end of its line')
-    parser.add_argument('--startup-timeout', type=float, default=90.0)
+    parser.add_argument('--startup-timeout', type=float, default=None,
+                        help='seconds to wait for every node (default 90, 240 with --nav: four '
+                             'boats with nav saturate a 16 core computer for a minute or two)')
     parser.add_argument('--drive-seconds', type=float, default=6.0)
     parser.add_argument('--tf-seconds', type=float, default=5.0)
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
+    if args.startup_timeout is None:
+        args.startup_timeout = 240.0 if args.nav else 90.0
     roster = args.roster or graph.default_roster_path()
     boats = ([b.strip() for b in args.boats.split(',') if b.strip()] if args.boats
              else graph.boats_from_roster(roster))

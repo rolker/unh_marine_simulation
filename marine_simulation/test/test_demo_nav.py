@@ -128,6 +128,17 @@ def test_write_params_is_content_addressed_and_reused(tmp_path):
     assert [p.name for p in (tmp_path / 'out').iterdir()] == [first.rsplit('/', 1)[1]]
 
 
+def test_write_params_rewrites_a_damaged_file_and_leaves_no_temporary(tmp_path):
+    source = tmp_path / 'ben.yaml'
+    source.write_text(yaml.safe_dump(SOURCE))
+    path = demo_nav.write_params(str(tmp_path / 'out'), str(source))
+    good = open(path).read()
+    open(path, 'w').write(good[:20])            # a truncated file under the right name
+    assert demo_nav.write_params(str(tmp_path / 'out'), str(source)) == path
+    assert open(path).read() == good
+    assert [p.name for p in (tmp_path / 'out').iterdir()] == [path.rsplit('/', 1)[1]]
+
+
 def test_the_exclude_regex_matches_nav2_nodes_of_the_named_boats_only():
     regex = re.compile(demo_nav.nav_exclude_regex(['a', 'b_c']))
     for node in ('/a/controller_server', '/b_c/bt_task_navigator',

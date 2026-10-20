@@ -146,11 +146,25 @@ def write_params(directory: str, source_file: str = None) -> str:
     digest = hashlib.sha256(text.encode()).hexdigest()[:12]
     os.makedirs(directory, exist_ok=True)
     path = os.path.join(directory, 'nav2_params-%s.yaml' % digest)
-    if not os.path.isfile(path):
-        tmp = '%s.%d.tmp' % (path, os.getpid())
+    try:
+        with open(path) as f:
+            if f.read() == text:
+                return path
+    except OSError:
+        pass            # absent, or unreadable: written below
+    tmp = '%s.%d.tmp' % (path, os.getpid())
+    try:
         with open(tmp, 'w') as f:
             f.write(text)
+            f.flush()
+            os.fsync(f.fileno())
         os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
     return path
 
 

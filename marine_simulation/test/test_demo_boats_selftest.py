@@ -163,6 +163,14 @@ def test_the_acknowledgement_needs_the_set_and_its_line():
     assert not selftest.tasks_acknowledge([], 't')
 
 
+def test_a_failed_line_is_not_a_completed_line_even_when_it_is_marked_done():
+    assert selftest.line_reached(150.0, 160.0, 12.0, '')
+    assert not selftest.line_reached(129.0, 160.0, 71.0, '')           # far from the end
+    assert not selftest.line_reached(150.0, 160.0, 12.0, 'failed: survey_line_failed')
+    assert not selftest.line_reached(150.0, 160.0, None, '')           # no fix
+    assert not selftest.line_reached(20.0, 160.0, 10.0, '')            # barely moved
+
+
 def test_offset_position_goes_the_given_way():
     lat, lon = selftest.offset_position((43.0, -70.7), 90.0, 111.0)
     assert abs(lat - 43.0) < 1e-9 and lon > -70.7

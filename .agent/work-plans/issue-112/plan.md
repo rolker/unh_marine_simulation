@@ -63,7 +63,7 @@ Three stages, three PRs, each leaves the demo working with `enable_nav` default 
 | `marine_simulation/marine_simulation/watchdog_core.py` (new) | state machine |
 | `marine_simulation/scripts/demo_watchdog.py` (new) | rclpy node |
 | `marine_simulation/scripts/demo_manager.py`, `config/demo_manager.yaml` | `--nav`, expected counts, exclusion |
-| `marine_simulation/scripts/demo_boats_selftest.py`, `scripts/check_multi_boat_graph.py`, `test/test_demo_boats_selftest.py` (line 142 asserts `enable_nav:=true` is an overridden argument) | nav and watchdog scenarios, node sets, `watchdog:=false` for the old scenarios |
+| `marine_simulation/scripts/demo_boats_selftest.py`, `test/test_demo_boats_selftest.py` (`scripts/check_multi_boat_graph.py` needed no change: its graph check passes with nav on) (line 142 asserts `enable_nav:=true` is an overridden argument) | nav and watchdog scenarios, node sets, `watchdog:=false` for the old scenarios |
 | `marine_simulation/config/demo_params.yaml` | watchdog parameters |
 | `launch_manager_proto/launch_manager_proto/{config,manager,cli}.py`, `README.md`, tests | `exclude` |
 | `marine_simulation/package.xml`, `CMakeLists.txt` | dependencies, install, pytest registrations |

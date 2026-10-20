@@ -78,6 +78,14 @@ def test_the_node_report_lists_one_line_per_node():
     assert len(lines) == 2 and 'attempts 5, refused' in lines[0]
 
 
+def test_converge_refuses_a_bad_regular_expression_before_touching_ros(capsys):
+    args = cli.build_parser().parse_args(['converge', '--match', '^/a/', '--exclude', '('])
+    assert cli.cmd_converge(args) == 2
+    assert '--exclude is not a regular expression' in capsys.readouterr().err
+    args = cli.build_parser().parse_args(['converge', '--match', '('])
+    assert cli.cmd_converge(args) == 2
+
+
 def test_parser_knows_every_documented_command():
     parser = cli.build_parser()
     assert parser.parse_args(['manager', '--config', 'x', '--set', 'a=b']).which == 'manager'
