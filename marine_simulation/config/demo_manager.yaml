@@ -93,10 +93,12 @@ groups:
     restart: never
 
   rqt:
-    description: rqt on the perspective "demo" (the Survey Coverage plugin, added once by hand)
+    description: rqt on the demo perspective (Survey Coverage and one Ping Profile per boat)
     launch: {package: marine_simulation, file: demo_rqt_launch.py}
     arguments:
-      rqt_perspective: {type: string, default: demo}
+      # true (--rqt-fresh): import the shipped perspective again, replacing the stored one;
+      # without it the shipped file is imported on a first start only
+      rqt_fresh: {type: bool, default: '${rqt_fresh}'}
     # Needs nothing to exist: the coverage plugin latches and tolerates a scorer that comes
     # later. Not placed (rqt restores its own geometry) and never restarted: closing it is an
     # operator decision, like CAMP, and it stops with CAMP.

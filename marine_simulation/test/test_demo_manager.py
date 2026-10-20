@@ -50,6 +50,7 @@ import yaml
 PACKAGE = pathlib.Path(__file__).resolve().parents[1]
 SCRIPT = PACKAGE / 'scripts' / 'demo_manager.py'
 CONFIG = PACKAGE / 'config' / 'demo_manager.yaml'
+SHIPPED_PERSPECTIVE = PACKAGE / 'config' / 'demo.perspective'
 ROSTER = PACKAGE / 'config' / 'demo_roster.yaml'
 POLYGON = PACKAGE / 'config' / 'demo_target_polygon_camp.json'
 _spec = importlib.util.spec_from_file_location('demo_manager', SCRIPT)
@@ -840,14 +841,14 @@ def test_manager_camp_start_passes_fresh_to_the_actions(monkeypatch, tmp_path):
     assert [k['fresh'] for k in seen] == [True, False]
 
 
-# --- rqt on the perspective "demo" ---------------------------------------------------------
+# --- rqt on the demo perspective -----------------------------------------------------------
 
 def test_the_rqt_group_needs_nothing_stops_with_camp_and_is_never_restarted(spec):
     group = spec.groups['rqt']
     assert (group.package, group.file) == ('marine_simulation', 'demo_rqt_launch.py')
     assert group.requires == [] and group.follows == ['camp']
     assert group.restart == 'never'
-    assert group.arguments['rqt_perspective'].default == 'demo'
+    assert group.arguments['rqt_fresh'].default == 'false'
     # nothing waits for rqt or stops with it
     assert not any('rqt' in other.requires or 'rqt' in other.follows
                    for name, other in spec.groups.items() if name != 'rqt')
@@ -857,28 +858,85 @@ def test_the_rqt_group_needs_nothing_stops_with_camp_and_is_never_restarted(spec
                if name != 'demo')
 
 
-def test_the_rqt_launch_starts_rqt_on_the_perspective_with_no_lock_and_no_placement(monkeypatch):
-    from launch.actions import ExecuteProcess
+def test_the_rqt_fresh_option_reaches_the_rqt_group_and_defaults_off():
+    off = demo_manager.substitutions(['a'], '', True, '/s', '/r', '/j', '/l', '/t')
+    on = demo_manager.substitutions(['a'], '', True, '/s', '/r', '/j', '/l', '/t', False, True)
+    assert (off['rqt_fresh'], on['rqt_fresh']) == ('false', 'true')
+    assert on['camp_fresh'] == 'false'          # the two options are independent
+    loaded = config.load_config(str(CONFIG), on)
+    assert loaded.groups['rqt'].arguments['rqt_fresh'].default == 'true'
+    assert loaded.groups['camp'].arguments['camp_fresh'].default == 'false'
+
+
+def test_the_parser_knows_rqt_fresh():
+    parser = demo_manager.build_parser()
+    assert parser.parse_args([]).rqt_fresh is False
+    assert parser.parse_args(['--rqt-fresh']).rqt_fresh is True
+
+
+def _text(log_info):
+    return ''.join(part.text for part in log_info.msg)
+
+
+def _rqt_launch(monkeypatch, tmp_path, ini_text=None, **arguments):
+    """Perform the rqt launch's setup on a private ``XDG_CONFIG_HOME``; return its actions."""
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path))
+    if ini_text is not None:
+        (tmp_path / 'ros.org').mkdir()
+        (tmp_path / 'ros.org' / 'rqt_gui.ini').write_text(ini_text)
     monkeypatch.setattr('shutil.which', lambda name: '/opt/ros/jazzy/bin/rqt')
-    (process,) = _perform_launch_setup(_launch_module('demo_rqt_launch.py'),
-                                       rqt_perspective='demo')
-    assert isinstance(process, ExecuteProcess)
+    values = {'rqt_perspective_file': str(SHIPPED_PERSPECTIVE), 'rqt_fresh': 'false'}
+    values.update(arguments)
+    return _perform_launch_setup(_launch_module('demo_rqt_launch.py'), **values)
+
+
+STORED = '[General]\nperspectives=@Variant(\\0\\0\\0\\t)\n\n[perspective]\n' \
+         '%40demo.perspective\\pluginmanager\\running-plugins=x\n'
+
+
+def test_the_first_start_imports_the_shipped_perspective_file(monkeypatch, tmp_path):
+    from launch.actions import ExecuteProcess, LogInfo
+    message, process = _rqt_launch(monkeypatch, tmp_path)
+    assert isinstance(message, LogInfo) and isinstance(process, ExecuteProcess)
+    assert 'importing' in _text(message) and 'first start' in _text(message)
     assert process.cmd[0][0].text == '/opt/ros/jazzy/bin/rqt'
     # rqt runs on the operator's settings: nothing here may point XDG_CONFIG_HOME elsewhere
     assert process.additional_env is None
     words = [part[0].text for part in process.cmd]
-    assert words[1:] == ['--force-discover', '--perspective', 'demo']
+    assert words[1:] == ['--force-discover', '--perspective-file', str(SHIPPED_PERSPECTIVE)]
     assert '--lock-perspective' not in words
+
+
+def test_a_later_start_uses_the_stored_perspective_by_the_name_rqt_gave_it(
+        monkeypatch, tmp_path):
+    message, process = _rqt_launch(monkeypatch, tmp_path, STORED)
+    assert 'stored perspective' in _text(message)
+    words = [part[0].text for part in process.cmd]
+    assert words[1:] == ['--force-discover', '--perspective', '@demo.perspective']
+
+
+def test_the_fresh_option_imports_again_once_per_process(monkeypatch, tmp_path):
+    (tmp_path / 'ros.org').mkdir()
+    (tmp_path / 'ros.org' / 'rqt_gui.ini').write_text(STORED)
+    first, process = _rqt_launch(monkeypatch, tmp_path, rqt_fresh='true')
+    assert 'asked for' in _text(first)
+    assert '--perspective-file' in [part[0].text for part in process.cmd]
+    # a restart of the group in the same manager process keeps what rqt saved since
+    second, process = _rqt_launch(monkeypatch, tmp_path, rqt_fresh='true')
+    assert 'stored perspective' in _text(second)
+    assert '--perspective' in [part[0].text for part in process.cmd]
 
 
 def test_a_missing_rqt_is_a_message_not_a_failed_demo(monkeypatch):
     from launch.actions import LogInfo
     monkeypatch.setattr('shutil.which', lambda name: None)
     (message,) = _perform_launch_setup(_launch_module('demo_rqt_launch.py'),
-                                       rqt_perspective='demo')
+                                       rqt_perspective_file=str(SHIPPED_PERSPECTIVE),
+                                       rqt_fresh='false')
     assert isinstance(message, LogInfo)
 
 
-def test_an_empty_perspective_name_is_refused():
-    with pytest.raises(ValueError, match='rqt_perspective'):
-        _perform_launch_setup(_launch_module('demo_rqt_launch.py'), rqt_perspective=' ')
+def test_an_empty_perspective_file_is_refused():
+    with pytest.raises(ValueError, match='rqt_perspective_file'):
+        _perform_launch_setup(_launch_module('demo_rqt_launch.py'),
+                              rqt_perspective_file=' ', rqt_fresh='false')

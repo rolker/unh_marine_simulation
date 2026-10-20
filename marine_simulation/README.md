@@ -40,8 +40,8 @@ TO START THE DEMO
      for the prompt, UP ARROW, ENTER. Still wrong: call.
 
   6. A second window, rqt ("rqt"), may be open: it shows the coverage score
-     (the perspective "demo"). The first time on a computer it is empty: Plugins >
-     Robot Tools > Survey Coverage, arrange it, close it; it is remembered.
+     and one multibeam profile per boat. It comes up filled in the first time
+     on a computer; if you rearrange it, close it and it is remembered.
 
 TO STOP EVERYTHING: close the map window (the big one). Everything else
 shuts down by itself; wait until the terminal prompt comes back. (If that does
@@ -97,6 +97,7 @@ profiles are in "Demo launch manager" below.
 | `--layout FILE` | `config/demo_layout.yaml` (`run_demo.sh`: `layout.yaml` in the config directory) | Window layout of this computer. |
 | `--no-layout` | off | Do not move the windows. |
 | `--camp-fresh` | off | Discard the window and map view CAMP saved when it last closed, for this start (see "First start on a computer"). |
+| `--rqt-fresh` | off | Import the shipped rqt perspective again (Survey Coverage and one Ping Profile per boat), replacing the one rqt stored, for this start (see "rqt and the coverage plugin"). |
 | `--target FILE` | `config/demo_target_polygon_camp.json` (`run_demo.sh`: `target.json` when present) | Saved CAMP `.json` with the target survey area: CAMP opens it and the publisher sends it to the scorer. |
 | `--profile NAME` | `demo` | `demo`, `headless` (no CAMP, no placement) or `boats`. |
 | `--config FILE` | `config/demo_manager.yaml` | Another manager configuration. |
@@ -214,15 +215,31 @@ Known limits of this approach:
 
 ### rqt and the coverage plugin
 
-The manager's `rqt` group runs `rqt --force-discover --perspective demo` (`demo_rqt_launch.py`): rqt switches to
-the perspective named `demo` and creates it when it does not exist. rqt keeps perspectives in the
-operator's own settings (`ros.org/rqt_gui.ini`, written when rqt exits), so it runs on those
-normal settings, not on the demo's wiped-per-start home. `--lock-perspective` is not used (the
-menu is needed to add a plugin, and the close button is how the operator closes the window), and
-the window is not placed: rqt restores its own geometry per perspective. First start on a new
-computer: in rqt choose **Plugins > Robot Tools > Survey Coverage** (`rqt_coverage/CoveragePlugin`,
-package `rqt_coverage` in `rqt_operator_tools`), arrange it, close rqt; it comes back the same on
-every later start. The plugin's default topic `coverage_assessment` resolves to the scorer's
+The manager's `rqt` group (`demo_rqt_launch.py`) starts rqt on the shipped perspective
+`config/demo.perspective`: **Survey Coverage** (`rqt_coverage/CoveragePlugin`, topic
+`coverage_assessment`) and one **Ping Profile** (`rqt_ping_profile/PingProfilePlugin`) per roster
+boat, titled with the boat's name, on the full topic `/<boat>/sensors/mbes/detections`, fixed
+depth range 0 to 30 m (the range the live coverage layer in CAMP uses, so the two displays
+agree; the plugin draws the platform's colour itself). The file is generated from the roster by
+`python3 -m marine_simulation.demo_perspective config/demo_roster.yaml config/demo.perspective`,
+and `test_demo_perspective.py` fails when it no longer matches the roster. It holds no window
+geometry or dock state (those belong to the monitor): rqt lays the docks out itself, and the
+operator's arrangement is kept from then on.
+
+How rqt names it (read from `qt_gui` in Jazzy and checked live): `--perspective-file` imports the
+file as a **hidden** perspective named `@` plus the file name, `@demo.perspective`; an existing
+one of that name is replaced; it is not listed in the Perspectives menu and is not made rqt's
+current perspective, but it is saved in `ros.org/rqt_gui.ini` when rqt exits like any other. So
+the group starts rqt with `--perspective-file` on a **first start** (the operator's
+`ros.org/rqt_gui.ini` holds no `@demo.perspective` yet; a plain `demo` perspective left by an older
+version is ignored) or with `--rqt-fresh` (the first start of the group in that session only, like
+`--camp-fresh`), and `--perspective @demo.perspective` after, so rqt keeps its geometry and
+changes. One log line says which way it was started. rqt runs on the operator's normal settings
+(`ros.org/rqt_gui.ini`), not on the demo's wiped-per-start home. `--lock-perspective` is not used
+(the menu is needed to rearrange the plugins, and the close button is how the operator closes
+the window), and the window is not placed. To get the shipped arrangement back after rearranging,
+start once with `--rqt-fresh`. The coverage plugin's default topic
+`coverage_assessment` resolves to the scorer's
 `/coverage_assessment` (type `marine_interfaces/msg/CoverageAssessment`, transient local), which
 the headless run of this branch showed publishing with no namespace, so nothing needs to be set in
 its config dialog; the plugin tolerates a scorer that comes up late. rqt has no `requires` and
@@ -648,7 +665,7 @@ ros2 run launch_manager_proto launch_manager_proto status       # what is it doi
 | `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, via `marine_simulation.demo_support.camp_actions`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
 | `target_area` | `demo_target_area_launch.py` (`publish_survey_area.py`, latched, on the target file) | READY when `/survey_area_publisher` is in the graph; `follows: [camp]` |
 | `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_support.scorer_parameters` (map frame = the first boat's) | `requires: [boats, target_area]`, `follows: [camp]`, lifecycle node `/coverage_assessment` to `active` |
-| `rqt` | `demo_rqt_launch.py` (`rqt --perspective demo`; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
+| `rqt` | `demo_rqt_launch.py` (`rqt --perspective-file config/demo.perspective` on a first start or `--rqt-fresh`, `--perspective @demo.perspective` after; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
 | `layout` | `demo_layout_launch.py` (`place_windows.py`, once) | `requires: [camp]`, `follows: [camp]`, `restart: never` (run once, see "Window layout") |
 
 Profiles: `demo` (all five), `headless` (boats, target area and scorer), `boats` (boats

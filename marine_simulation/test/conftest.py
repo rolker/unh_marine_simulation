@@ -40,12 +40,14 @@ import pytest  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _each_test_is_a_first_start():
-    """Forget that --camp-fresh was honoured, so tests do not see each other's starts."""
+    """Forget that --camp-fresh and --rqt-fresh were honoured, so tests do not see each other."""
     try:
-        from marine_simulation import demo_support
+        from marine_simulation import demo_perspective, demo_support
     except ImportError:
         yield
         return
     demo_support._FRESH_APPLIED.clear()
+    demo_perspective._FRESH_APPLIED.clear()
     yield
     demo_support._FRESH_APPLIED.clear()
+    demo_perspective._FRESH_APPLIED.clear()

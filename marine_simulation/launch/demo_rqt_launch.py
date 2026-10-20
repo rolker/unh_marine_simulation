@@ -29,13 +29,16 @@
 """
 Start rqt on the demo's perspective, for the launch manager's ``rqt`` group.
 
-``rqt --force-discover --perspective demo`` switches to the perspective named ``demo`` and
-creates it when it does not exist yet. Perspectives are kept by rqt in the operator's own settings
-(``ros.org/rqt_gui.ini``) and written when rqt exits, so rqt runs on the operator's normal
-settings, never on the wiped-per-start home CAMP gets: the Survey Coverage plugin added once by
-hand comes back on every later start. ``--lock-perspective`` is not used (the menu is needed to
-add the plugin, and the close button is how the operator closes the window). The window is not
-placed: rqt restores its own geometry per perspective.
+The perspective (``config/demo.perspective``) holds Survey Coverage and one Ping Profile per boat.
+On a first start, when the operator's rqt settings (``ros.org/rqt_gui.ini``) do not hold it yet,
+or with ``rqt_fresh`` (``demo_manager.py --rqt-fresh``), rqt is started with
+``--perspective-file``, which imports it as the hidden perspective ``@demo.perspective``;
+after that rqt is started on that perspective by name, so it keeps the geometry and settings it
+saved when it exited (see ``marine_simulation.demo_perspective`` for how rqt names it). One line
+in the log says which way rqt was started. rqt runs on the operator's normal settings, never
+on the wiped-per-start home CAMP gets. ``--lock-perspective`` is not used (the menu is needed to
+rearrange the plugins, and the close button is how the operator closes the window). The window
+is not placed: rqt restores its own geometry per perspective.
 
 The group is optional display: a missing ``rqt`` is a message, never a failed demo.
 """
@@ -48,30 +51,43 @@ from launch.actions import ExecuteProcess
 from launch.actions import LogInfo
 from launch.actions import OpaqueFunction
 from launch.substitutions import LaunchConfiguration
+from launch.substitutions import PathJoinSubstitution
 from launch.substitutions import TextSubstitution
+from launch_ros.substitutions import FindPackageShare
+from marine_simulation import demo_perspective
+from marine_simulation import roster
 
 
 def launch_setup(context, *args, **kwargs):
-    """Return the rqt process, or a message when rqt is not installed."""
-    perspective = LaunchConfiguration('rqt_perspective').perform(context).strip()
-    if not perspective:
-        raise ValueError('rqt_perspective needs a name, not an empty string')
+    """Return the rqt process and the line saying how it starts, or a message without rqt."""
+    perspective_file = LaunchConfiguration('rqt_perspective_file').perform(context).strip()
+    if not perspective_file:
+        raise ValueError('rqt_perspective_file needs a path, not an empty string')
+    fresh = roster.parse_bool(LaunchConfiguration('rqt_fresh').perform(context), 'rqt_fresh')
     rqt = shutil.which('rqt')
     if rqt is None:
         return [LogInfo(msg='rqt is not installed (sudo apt install ros-<distro>-rqt), '
                             'so the coverage window is not started; the demo goes on without it.')]
+    arguments, how = demo_perspective.rqt_arguments(perspective_file, fresh)
     # rqt caches its discovered plugin list in its settings, so a plugin package built after the
     # first rqt start never shows in the Plugins menu until a forced rediscovery (seen 2026-10-19
     # with rqt_ping_profile after rolker/rqt_operator_tools#114 was built). It costs a second or
     # two at start.
-    return [ExecuteProcess(cmd=[rqt, '--force-discover', '--perspective', perspective],
-                           output='screen',
+    return [LogInfo(msg=how),
+            ExecuteProcess(cmd=[rqt, '--force-discover'] + arguments, output='screen',
                            emulate_tty=True, name='rqt')]
 
 
 def generate_launch_description():
+    share = FindPackageShare('marine_simulation')
     return LaunchDescription([
-        DeclareLaunchArgument('rqt_perspective', default_value=TextSubstitution(text='demo'),
-                              description='rqt perspective to start (created when new).'),
+        DeclareLaunchArgument(
+            'rqt_perspective_file',
+            default_value=PathJoinSubstitution([share, 'config', 'demo.perspective']),
+            description='rqt perspective file: Survey Coverage and one Ping Profile per boat.'),
+        DeclareLaunchArgument(
+            'rqt_fresh', default_value=TextSubstitution(text='false'),
+            description='true: import the perspective file again, replacing the stored one '
+                        '(a first start).'),
         OpaqueFunction(function=launch_setup),
     ])
