@@ -114,5 +114,7 @@ Independence uncertain: this review ran in the same context that authored the pl
 - demo_boats_selftest.py --start-launch --boats bluefin,clownfish with terrain collision on (demo truth grid): 12 of 12 checks passed
 - headless run of the real demo grid, one boat at six headings from the bluefin start: stops at the shore or slides along it, ends in 0.65 m to 2.4 m of water at tide 0
 
+- test_set_pose_heading_is_a_compass_heading was noise-flaky before this branch (yaw noise random-walks the heading: median 12.6 deg, 12 % of runs beyond the 26.6 deg bound after 5 s, measured over 1000 runs); now runs with dynamics noise 0 and a tighter bound, 30 of 30 passes
+
 ### Open questions
 - [ ] No open questions.

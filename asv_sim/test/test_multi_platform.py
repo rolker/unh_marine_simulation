@@ -216,10 +216,14 @@ def test_set_pose_moves_only_that_platform(rig):
         assert _metres(before[name], rig.fresh_fix(name)) < 1.0, name
 
 
-def test_set_pose_heading_is_a_compass_heading(rig):
+def test_set_pose_heading_is_a_compass_heading(quiet_rig):
     # Heading 0 is north. A yaw sign error (heading 180) or a missing 90 degree
-    # offset (heading 90, due east) both fail one of the two bounds; the
-    # simulator's own noise stays far inside them.
+    # offset (heading 90, due east) both fail one of the two bounds. Dynamics
+    # noise is off: the yaw noise is a random walk of the heading (measured:
+    # median 12.6 degrees, 95th percentile 36 degrees after 5 s, 12 % of runs
+    # beyond the 26.6 degrees the east/north bound allows), so with it on this
+    # check failed in a few percent of runs for no reason of its own.
+    rig = quiet_rig
     start = (43.0800, -70.7000)
     rig.set_pose('charlie', start[0], start[1], 0.0)
     rig.drive('charlie', 1.0, 5.0)
@@ -227,7 +231,7 @@ def test_set_pose_heading_is_a_compass_heading(rig):
     east = (end[1] - start[1]) * 111320.0 * math.cos(math.radians(start[0]))
     north = (end[0] - start[0]) * 111320.0
     assert north > 2.0
-    assert abs(east) < north / 2.0
+    assert abs(east) < north / 10.0
 
 
 def test_set_pose_stores_a_heading_in_zero_to_360(rig):
@@ -348,7 +352,8 @@ def test_demo_config_keys_are_declared_model_parameters(rig):
 
 # Dynamics noise would turn a head-on meeting into a glancing one that slides
 # past; the contact tests want it exact.
-NO_NOISE = {'models.demo.%s_noise' % k: 0.0
+NO_NOISE = {'models.%s.%s_noise' % (m, k): 0.0
+            for m in ('demo', 'demo_fast')
             for k in ('thrust', 'yaw_rate', 'drag')}
 
 
