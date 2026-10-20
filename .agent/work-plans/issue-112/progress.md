@@ -66,3 +66,10 @@ Checked against source: ben_project11 `nav2_bringup_launch.py`, `navigation_laun
 - [ ] (suggestion) The demo's own comments must change with the new writer: `demo_params.yaml` ("Nothing else can change the mode") and `README.md:757`; the pad's button 0/1/2 presses make `joy_to_helm` set its own local state and publish to the unconnected `marine/send_command` (`joy_to_helm.py` joystickCallback), harmless but a button is also "activity" in the watchdog rule, which is the intended hand-back — mention it in the README helper card — `plan.md:102`
 - [ ] (suggestion) Unverified here (no source for the binary driver): that `joy_linux` stops publishing when the pad disconnects and keeps autorepeating a neutral state otherwise. The plan relies on both (`pad_lost_timeout`, "autorepeat copies are never activity"); put one bench check with a real pad (unplug/replug, stick held) in the Stage 2 rehearsal list — `plan.md:21,43-44`
 - [ ] (suggestion) Items checked and found correct, no change needed: nav2 `use_composition` default is `True` in `nav2_bringup_launch.py` and the plan's `False` is right; helm_manager heartbeat is driven by `marine/status/helm`, which asv_sim's 20 Hz `have_commands` feeds through asv_helm (`platform.py` update, `asv_helm_node.cpp`), so the heartbeat and the hand-back reach joy_to_helm within about 50 ms; collision_monitor sits unused in the chain (velocity_smoother remaps its output straight to `piloting_mode/autonomous/cmd_vel`, `navigation_launch.py`), so its unprefixed `base_footprint` and missing `scan` source do not stop the boat; `ben_project11` is already an exec_depend. Not run: nothing was launched.
+
+## Plan Revised
+**Status**: complete
+**When**: 2026-10-20 11:47 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+Folded the four must-fix findings of the plan review (mission_manager namespace, TF gate before the first mission send, selftest and watchdog conflict, unstable mission_tasks feed) and the other findings (exclude vs lookahead, costmap resolution kept, NAVIGATOR_UNAVAILABLE and NO_AREA states, send rate limit, doc and test line references) into plan.md.
