@@ -79,3 +79,23 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [x] (suggestion, A) weak never-damaged test assertion — `test_collision.py`
 - [x] (suggestion, A+B) docs: one event per contact semantics, not latched, memory size of the grid — READMEs, message
 - [ ] (suggestion, A) multi-contact corner speed is a product of reductions, not a projection — `collision.py` (accepted, documented as order dependent)
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-20 12:44 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+**Verdict**: approved
+
+**Branch**: feature/issue-111 at `5e9cba3`
+**Mode**: pre-push
+**Depth**: Light (reduced second round on the fix commits; one Claude adversarial pass, Sonnet)
+**Must-fix**: 1 | **Suggestions**: 5
+**Round**: 2 | **Ship**: recommended — the one must-fix was mechanical and is fixed with a test that fails on the old code; no design question remains
+
+### Findings
+- [x] (must-fix) every contact rewrote the heading from the hop interpolation (de-normalised across 2*pi) and zeroed yaw_rate — `collision.py Collisions.resolve`
+- [x] (suggestion) speed projection used the heading before a revert — `collision.py`
+- [x] (suggestion) MAX_HOPS cap bit silently; now warns once — `collision.py`
+- [x] (suggestion) always-acceptable candidate and dead return made explicit — `collision.py`
+- [ ] (suggestion) terrain frame rebuilt per hop and per pass (cost only, measured 0.1 ms per call) — `collision.py`
+- [ ] (suggestion) hop azimuth is taken at the start of the step, approximate over very long drifts — `collision.py`
