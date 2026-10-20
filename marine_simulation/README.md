@@ -493,6 +493,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `joystick_config` | `config/demo_joysticks.yaml` | Joystick device links; copy and edit per host. |
 | `enable_joysticks` | `true` | Start a `joy_linux` driver per boat. `joy_to_helm` runs either way, so `sensor_msgs/Joy` on `<boat>/joy` drives the boat. |
 | `enable_nav` | `false` | Reserved. `true` is refused ("not wired yet"). |
+| `charted_objects` | `true` | The piers, pontoons, piles, buoys, beacons, rocks and wrecks of the ENC cells installed with `asv_sim` (`share/asv_sim/enc`) block the boats; `false` leaves them out. |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
 | `mbes_grid_file` | empty | Ground-truth bathymetry the simulated multibeams sample. Empty means `$MBES_DEMO_GRID`, else `~/data/sim/mbes_truth/portsmouth_demo_utm19n.tif` when it exists, else `mbes_sim/data/US5NH02M.tiff` (the launch prints which and why, on stderr). An explicit path must be a file. |
@@ -764,8 +765,9 @@ so the shallows move in and out within a round; at low water a boat can be
 aground and must back out. Contacts are announced on `/asv_sim/collisions`
 (`asv_sim_msgs/msg/Collision`). To let boats pass through each other, start
 `asv_sim` with `collision.boats:=false` (not a launch argument yet; set it in a
-copy of `demo.yaml`). Charted objects (piers, buoys, rocks) are not obstacles
-yet (issue #113). Details: `asv_sim/README.md`.
+copy of `demo.yaml`). Charted objects (piers, pontoons, piles,
+buoys, beacons, rocks, wrecks of the S-57 cells in `asv_sim/enc`) block the boats too
+(`charted_objects:=false` turns them off); a contact names the S-57 class in the event. Details: `asv_sim/README.md`.
 
 ### Known limits
 

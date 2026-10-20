@@ -534,6 +534,12 @@ def test_asv_sim_grounds_the_boats_on_the_sonar_grid_when_there_is_one(roster):
     assert 'collision.grid_file' not in demo.asv_sim_parameters(roster, 10.0, 0.0)
 
 
+def test_asv_sim_gets_the_charted_objects_when_a_cell_directory_is_given(roster):
+    params = demo.asv_sim_parameters(roster, 10.0, 0.0, '', '/share/asv_sim/enc')
+    assert params['collision.enc_dir'] == '/share/asv_sim/enc'
+    assert 'collision.enc_dir' not in demo.asv_sim_parameters(roster, 10.0, 0.0)
+
+
 def test_the_launch_hands_asv_sim_the_grid_the_sonars_use():
     text = LAUNCH.read_text()
     assert 'asv_sim_parameters(boats, tide_speed_factor, current_speed, mbes_grid_file)' in text
