@@ -41,13 +41,16 @@ existing perspective of that name is removed and replaced, and a hidden one is n
 menu and is not made the ``current-perspective``. It is saved in the operator's ``rqt_gui.ini``
 when rqt exits, like any other, so ``--perspective @demo.perspective`` finds it afterwards and
 rqt keeps its geometry per perspective. This module therefore starts rqt with the file on a first
-start (the name is not in the ``perspectives`` list of ``rqt_gui.ini`` yet) or when asked, and by
-that name after.
+start (the name is not stored in ``rqt_gui.ini`` yet) or when asked, and by that name after. The
+demo launch does not import ``config/demo.perspective`` itself but a copy generated for the boats
+that are run, named by a hash of its content (``generated_file``), so a different set of boats
+or a changed layout is a first start by itself.
 
 Nothing here imports ROS, Qt or ``launch``.
 """
 
 import csv
+import hashlib
 import json
 import os
 import sys
@@ -60,7 +63,8 @@ HIDDEN_PREFIX = '@'                 # qt_gui.perspective_manager.PerspectiveMana
 COVERAGE_PLUGIN_ID = 'rqt_coverage/rqt_coverage/CoveragePlugin'
 PING_PROFILE_PLUGIN_ID = 'rqt_ping_profile/rqt_ping_profile/PingProfilePlugin'
 COVERAGE_TOPIC = 'coverage_assessment'
-# Same range as the live coverage layer in CAMP (demo_camp_profile.conf), so the displays agree.
+# 0 to 30 m of water below the transducer. CAMP's live coverage layer shows the same 30 m of
+# water at Portsmouth, but in ellipsoid heights (demo_camp_profile.conf), so the numbers differ.
 DEPTH_MIN = 0.0
 DEPTH_MAX = 30.0
 RQT_SETTINGS_RELATIVE = os.path.join('ros.org', 'rqt_gui.ini')
@@ -121,6 +125,33 @@ def perspective_text(boat_names: Sequence[str]) -> str:
     """Return the file text for the boats (what ``rqt`` writes: indent 2, trailing newline)."""
     return json.dumps(build_perspective(boat_names), indent=2, separators=(',', ': '),
                       sort_keys=True) + '\n'
+
+
+def generated_file(boat_names: Sequence[str], directory: str) -> str:
+    """
+    Write the perspective for the boats into ``directory`` and return its path.
+
+    The file name carries a hash of the content (``demo-<8 hex>.perspective``), and rqt names an
+    import by the file name, so each set of boats (and each version of this module's layout) has
+    its own stored perspective: a roster change, ``--boats`` or ``--roster`` starts on a fresh
+    import by itself, and what the operator rearranged is kept per set. The file is written
+    to a temporary name and renamed, so a reader never sees half of it.
+    """
+    text = perspective_text(boat_names)
+    digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]
+    path = os.path.join(directory, 'demo-%s.perspective' % digest)
+    try:
+        with open(path, encoding='utf-8') as f:
+            if f.read() == text:
+                return path
+    except OSError:
+        pass
+    os.makedirs(directory, exist_ok=True)
+    temporary = '%s.%d.tmp' % (path, os.getpid())
+    with open(temporary, 'w', encoding='utf-8') as f:
+        f.write(text)
+    os.replace(temporary, path)
+    return path
 
 
 def imported_name(perspective_file: str) -> str:

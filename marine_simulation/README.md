@@ -230,30 +230,38 @@ Known limits of this approach:
 
 ### rqt and the coverage plugin
 
-The manager's `rqt` group (`demo_rqt_launch.py`) starts rqt on the shipped perspective
+The manager's `rqt` group (`demo_rqt_launch.py`) starts rqt on a perspective generated for the boats
+that are run (`--boats`, `--roster`); for the whole roster it is the shipped
 `config/demo.perspective`: **Survey Coverage** (`rqt_coverage/CoveragePlugin`, topic
 `coverage_assessment`) and one **Ping Profile** (`rqt_ping_profile/PingProfilePlugin`) per roster
 boat, titled with the boat's name, on the full topic `/<boat>/sensors/mbes/detections`, fixed
 depth range 0 to 30 m (the range the live coverage layer in CAMP uses, so the two displays
-agree; the plugin draws the platform's colour itself). The file is generated from the roster by
+cover the same 30 m of water at Portsmouth; the numbers differ, see above; the plugin draws
+the platform's colour itself). The file is generated from the roster by
 `python3 -m marine_simulation.demo_perspective config/demo_roster.yaml config/demo.perspective`,
 and `test_demo_perspective.py` fails when it no longer matches the roster. It holds no window
 geometry or dock state (those belong to the monitor): rqt lays the docks out itself, and the
 operator's arrangement is kept from then on.
 
 How rqt names it (read from `qt_gui` in Jazzy and checked live): `--perspective-file` imports the
-file as a **hidden** perspective named `@` plus the file name, `@demo.perspective`; an existing
-one of that name is replaced; it is not listed in the Perspectives menu and is not made rqt's
-current perspective, but it is saved in `ros.org/rqt_gui.ini` when rqt exits like any other. So
-the group starts rqt with `--perspective-file` on a **first start** (the operator's
-`ros.org/rqt_gui.ini` holds no `@demo.perspective` yet; a plain `demo` perspective left by an older
-version is ignored) or with `--rqt-fresh` (the first start of the group in that session only, like
-`--camp-fresh`), and `--perspective @demo.perspective` after, so rqt keeps its geometry and
-changes. One log line says which way it was started. rqt runs on the operator's normal settings
-(`ros.org/rqt_gui.ini`), not on the demo's wiped-per-start home. `--lock-perspective` is not used
-(the menu is needed to rearrange the plugins, and the close button is how the operator closes
-the window), and the window is not placed. To get the shipped arrangement back after rearranging,
-start once with `--rqt-fresh`. The coverage plugin's default topic
+file as a **hidden** perspective named `@` plus the file name; an existing one of that name is
+replaced; it is not listed in the Perspectives menu and is not made rqt's current perspective, but
+it is saved in `ros.org/rqt_gui.ini` when rqt exits like any other. The group writes the
+perspective for the boats it runs to `~/.local/state/marine_simulation_demo/rqt/demo-<hash>.perspective`
+(the hash is of the content), so the imported name is `@demo-<hash>.perspective`. It starts rqt with
+`--perspective-file` on a **first start** (the operator's `ros.org/rqt_gui.ini` holds no perspective of
+that name: the first run on a computer, a different set of boats, a changed layout; a plain `demo`
+perspective left by an older version is ignored) or with `--rqt-fresh` (the first start of the group
+in that session only, like `--camp-fresh`), and with `--perspective @demo-<hash>.perspective` after, so
+rqt keeps the geometry and changes per set of boats. One log line says which way it was started.
+If the settings file cannot be read or the perspective cannot be written, rqt starts without the
+demo perspective (a log line says why) and the demo goes on. A perspective rqt saved half-way (a
+kill during the write) comes back empty: start once with `--rqt-fresh`. rqt runs on the operator's
+normal settings (`ros.org/rqt_gui.ini`), not on the demo's wiped-per-start home.
+`--lock-perspective` is not used (the menu is needed to rearrange the plugins, and the close
+button is how the operator closes the window), and the window is not placed. To get the shipped
+arrangement back after rearranging, start once with `--rqt-fresh`.
+The coverage plugin's default topic
 `coverage_assessment` resolves to the scorer's
 `/coverage_assessment` (type `marine_interfaces/msg/CoverageAssessment`, transient local), which
 the headless run of this branch showed publishing with no namespace, so nothing needs to be set in
@@ -742,7 +750,7 @@ ros2 run launch_manager_proto launch_manager_proto status       # what is it doi
 | `camp` | `demo_camp_launch.py` (CAMP on the demo's private settings and an emptied live tile cache, via `marine_simulation.demo_support.camp_actions`; not CAMP's own `camp_launch.py`, which would show the operator's settings and an earlier session's coverage) | `requires: [boats]`, `restart: never`: starts only once the boats are READY |
 | `target_area` | `demo_target_area_launch.py` (`publish_survey_area.py`, latched, on the target file) | READY when `/survey_area_publisher` is in the graph; `follows: [camp]` |
 | `scorer` | `coverage_assessment_launch.py`, parameters generated from the roster by `demo_support.scorer_parameters` (map frame = the first boat's) | `requires: [boats, target_area]`, `follows: [camp]`, lifecycle node `/coverage_assessment` to `active` |
-| `rqt` | `demo_rqt_launch.py` (`rqt --perspective-file config/demo.perspective` on a first start or `--rqt-fresh`, `--perspective @demo.perspective` after; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
+| `rqt` | `demo_rqt_launch.py` (`rqt --perspective-file` on the perspective generated for the boats, on a first start or `--rqt-fresh`, `--perspective @demo-<hash>.perspective` after; see "rqt and the coverage plugin") | no `requires`, `follows: [camp]`, `restart: never`; a missing `rqt` is a log message, never a failed demo |
 | `layout` | `demo_layout_launch.py` (`place_windows.py`, once) | `requires: [camp]`, `follows: [camp]`, `restart: never` (run once, see "Window layout") |
 
 Profiles: `demo` (all five), `headless` (boats, target area and scorer), `boats` (boats

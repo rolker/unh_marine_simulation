@@ -207,3 +207,34 @@ def test_fresh_is_not_used_up_by_a_start_that_failed(tmp_path):
 def test_an_unreadable_settings_file_is_named_not_treated_as_a_first_start(tmp_path):
     with pytest.raises(ValueError, match='cannot read the rqt settings'):
         dp.rqt_arguments(str(SHIPPED), False, str(tmp_path))      # a directory
+
+
+# --- the file generated for the boats that are run --------------------------------------------
+
+def test_the_generated_file_is_named_by_its_content_and_rewritten_only_when_missing(tmp_path):
+    names = boat_names()
+    first = dp.generated_file(names, str(tmp_path / 'rqt'))
+    assert re.fullmatch(r'demo-[0-9a-f]{8}\.perspective', pathlib.Path(first).name)
+    assert pathlib.Path(first).read_text() == SHIPPED.read_text()
+    stamp = pathlib.Path(first).stat().st_mtime_ns
+    assert dp.generated_file(names, str(tmp_path / 'rqt')) == first
+    assert pathlib.Path(first).stat().st_mtime_ns == stamp
+    assert list((tmp_path / 'rqt').iterdir()) == [pathlib.Path(first)]    # no temporary left
+
+
+def test_another_set_of_boats_or_a_damaged_file_gets_the_right_content(tmp_path):
+    names = boat_names()
+    whole = dp.generated_file(names, str(tmp_path))
+    part = dp.generated_file(names[:2], str(tmp_path))
+    assert part != whole
+    pathlib.Path(whole).write_text('damaged')
+    assert dp.generated_file(names, str(tmp_path)) == whole
+    assert pathlib.Path(whole).read_text() == dp.perspective_text(names)
+
+
+def test_a_binary_name_list_with_no_perspective_keys_reads_as_a_first_start(tmp_path):
+    path = tmp_path / 'rqt_gui.ini'
+    path.write_text('[General]\nperspectives=@Variant(\\0\\0\\0\\t)\n')
+    assert not dp.has_perspective(str(path), '@demo.perspective')
+    path.write_text('[perspective]\r\n%40demo.perspective\\a=1\r\n')
+    assert dp.has_perspective(str(path), '@demo.perspective')

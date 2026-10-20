@@ -96,8 +96,11 @@ groups:
     description: rqt on the demo perspective (Survey Coverage and one Ping Profile per boat)
     launch: {package: marine_simulation, file: demo_rqt_launch.py}
     arguments:
+      # the Ping Profiles follow the boats that are run
+      boats: {type: string, default: '${boats}'}
+      roster_file: {type: string, default: '${roster_file}'}
       # true (--rqt-fresh): import the shipped perspective again, replacing the stored one;
-      # without it the shipped file is imported on a first start only
+      # without it the perspective is imported on a first start (and for a new set of boats)
       rqt_fresh: {type: bool, default: '${rqt_fresh}'}
     # Needs nothing to exist: the coverage plugin latches and tolerates a scorer that comes
     # later. Not placed (rqt restores its own geometry) and never restarted: closing it is an
