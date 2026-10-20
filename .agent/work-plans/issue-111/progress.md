@@ -99,3 +99,20 @@ Independence uncertain: this review ran in the same context that authored the pl
 - [x] (suggestion) always-acceptable candidate and dead return made explicit — `collision.py`
 - [ ] (suggestion) terrain frame rebuilt per hop and per pass (cost only, measured 0.1 ms per call) — `collision.py`
 - [ ] (suggestion) hop azimuth is taken at the start of the step, approximate over very long drifts — `collision.py`
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-20 12:44 -04:00
+**By**: Claude Code Agent (Claude Sonnet 5.5)
+
+**Branch**: feature/issue-111 at `79fa385`
+**Plan**: `.agent/work-plans/issue-111/plan.md`, kept in sync (Implementation Notes at its end)
+
+### Verification
+- asv_sim pytest: 128 passed, 1 skipped (the launch_test integration file is ignored by plain pytest); test_collision.py 54 of them
+- colcon test, all 11 simulation packages: 1205 tests; failures are only the baseline lint ones in untouched files (marine_simulation launch copyright/flake8/pep257, portsmouth_nh_gazebo flake8/pep257) plus asv_sim_msgs xmllint on package.xml element order, which fails identically on the file before this branch
+- demo_boats_selftest.py --start-launch --boats bluefin,clownfish with terrain collision on (demo truth grid): 12 of 12 checks passed
+- headless run of the real demo grid, one boat at six headings from the bluefin start: stops at the shore or slides along it, ends in 0.65 m to 2.4 m of water at tide 0
+
+### Open questions
+- [ ] No open questions.
