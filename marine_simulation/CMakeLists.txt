@@ -14,6 +14,7 @@ install(PROGRAMS
   scripts/check_multi_boat_graph.py
   scripts/demo_boats_selftest.py
   scripts/demo_manager.py
+  scripts/demo_watchdog.py
   scripts/install_demo_shortcut.sh
   scripts/place_windows.py
   scripts/run_demo.sh
@@ -28,6 +29,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_demo_boats_launch test/test_demo_boats_launch.py)
   ament_add_pytest_test(test_check_multi_boat_graph test/test_check_multi_boat_graph.py)
   ament_add_pytest_test(test_demo_nav test/test_demo_nav.py)
+  ament_add_pytest_test(test_survey_sections test/test_survey_sections.py)
+  ament_add_pytest_test(test_watchdog_core test/test_watchdog_core.py)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_demo_manager test/test_demo_manager.py)
   # host-only and slow (about two minutes): the default 60 s CTest timeout would kill it
