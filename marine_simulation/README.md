@@ -263,6 +263,68 @@ stops with CAMP; closing rqt by itself does not stop the demo. rqt is started wi
 built after the first rqt start (for example `rqt_ping_profile`) would not appear in the Plugins
 menu.
 
+### Setting up the demo computer
+
+A checklist for one computer, the Ubuntu 24.04 desktop with an RTX 5080 and the four GameSir G7 SE
+pads that runs the demo at the event, in the order to do it. "Checked" means checked on the dev
+host on 2026-10-14; the steps marked **on the machine** depend on the hardware and have to be
+checked there. "Setting up a computer (once)" above is the per-user part (the files in
+`~/.config/marine_simulation_demo`); this is the machine under it.
+
+1. **X11 session.** The window placement and CAMP's saved geometry need X11 (position
+   persistence broke on Wayland). Ubuntu's `61-gdm.rules` makes GDM prefer Xorg once an nvidia
+   driver of version 470 or later binds; check at the login screen, with the gear menu, that the
+   session is the Xorg one and not Wayland before logging in. Set the display layout **after** landing on X11:
+   GNOME keys saved monitor layouts on connector names, and those differ between the two
+   sessions (`HDMI-0`, `DP-2` on nvidia X11, `HDMI-1`, `DP-3` on Wayland), so a layout made on
+   Wayland is not found on X11. Copy `~/.config/monitors.xml` aside before changing it: mutter
+   keeps one backup generation only.
+2. **nvidia driver (on the machine).** The dev host runs the 615 open driver; the RTX 5080 may
+   need a newer one than that. Install the driver the machine needs and check `nvidia-smi` and
+   the Xorg session (step 1) before the kernel work below.
+3. **A kernel with the G7 SE fix, and the kernel parameter.** The pads enumerate as
+   3537:10a0 and, without the fix, fall back to HID mode: no rumble, and joystick numbers that
+   no longer match `config/demo_params.yaml`. The fix is the `r` letter of `usbcore.quirks`
+   (`USB_QUIRK_WINDOWS_CONFIG_REQ_SIZE`), in mainline 7.2 and in stable 6.18.45 and 7.1.9
+   onward; Ubuntu's 6.8 and HWE kernels do not have it. Checked with mainline 7.2.6 from
+   [kernel.ubuntu.com/mainline](https://kernel.ubuntu.com/mainline/): with the parameter below,
+   the pads bind `xpad`, rumble works and the joystick numbers match `demo_params.yaml`.
+   - `usbcore` is built into the kernel, so `modprobe.d` cannot set it. Put
+     `GRUB_CMDLINE_LINUX_DEFAULT="$GRUB_CMDLINE_LINUX_DEFAULT usbcore.quirks=3537:10a0:r"` in
+     `/etc/default/grub.d/gamesir-g7se.cfg`, run `sudo update-grub`, reboot, and check
+     `cat /proc/cmdline` shows it.
+   - The mainline debs do not install on 24.04 as they are. Their maintainer scripts call
+     `run-parts` with two directories and Noble's `run-parts` takes one: repack the image,
+     headers and modules debs under `fakeroot` (`dpkg-deb -R`, drop the
+     `/usr/share/kernel/*.d` argument from the scripts in `DEBIAN/`, `dpkg-deb -b`).
+   - The kernel is built with gcc-15 flags, so the nvidia DKMS module fails with the default
+     compiler. Build it with gcc-14: `sudo apt install gcc-14`; write
+     `override CC = gcc-14` into `/usr/src/linux-headers-<version>/.kernelvariables`;
+     `sudo dkms install nvidia/<driver version> -k <kernel version>`; then
+     `sudo dpkg --configure -a` (it reruns the initramfs and `update-grub` that the failed
+     build skipped). Until that finishes there is no boot entry for the new kernel.
+   - Cold-boot check: with all four pads plugged in before power-on, `ls /dev/input/js*`
+     shows `js0` to `js3` and `lsusb -t` shows `Driver=xpad` under each pad.
+4. **ROS 2 Jazzy and the workspace.** Install ROS 2 Jazzy, clone the workspace and run
+   `make build` from its root. `make build` does not install apt packages: install them with
+   `rosdep install --from-paths src --ignore-src -y` from the layer directory (it resolves this
+   package's `exec_depend`s: `ros-jazzy-joy-linux`, `wmctrl` and the rest).
+5. **GNOME auto-maximize.** `gsettings set org.gnome.mutter auto-maximize false` once for the
+   demo user (see "First start on a computer").
+6. **The per-machine files** in `~/.config/marine_simulation_demo/`: `env.bash` (sources the
+   workspace `setup.bash`) and `joysticks.yaml`. The by-path device names hold the PCI address
+   of the USB controller, so fill `joysticks.yaml` on this computer with all four pads in their
+   final ports (see Gamepads). Or use the plug-order file
+   `config/demo_joysticks_plug_order.yaml`, which binds `/dev/input/js0` to `js3` in plug
+   order and needs no labelled ports (after #107 merges). The desktop icon comes from
+   `install_demo_shortcut.sh` (also after #107 merges).
+7. **First starts.** CAMP first (see "First start on a computer"), then rqt: it imports the
+   shipped perspective by itself on a first start (see "rqt and the coverage plugin") and shows
+   Survey Coverage and the four Ping Profiles; rearrange them once and close rqt. Then the
+   **cold-boot check** with all four pads attached at power-on: power the computer off, plug
+   the pads in, power on, log in on X11, start the demo, and check the helper card against
+   what appears.
+
 ### First start on a computer
 
 CAMP has nothing saved on a new computer, so its first window is the default size with the

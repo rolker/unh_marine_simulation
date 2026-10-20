@@ -41,6 +41,8 @@
   <!-- window placement for the demo display (apt; X11 sessions only) -->
   <exec_depend>wmctrl</exec_depend>
   <exec_depend>rqt_gui</exec_depend>
+  <exec_depend>rqt_coverage</exec_depend>
+  <exec_depend>rqt_ping_profile</exec_depend>
   <!-- imported by launch/demo_boats_launch.py and the demo scripts -->
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
