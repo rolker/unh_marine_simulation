@@ -53,6 +53,17 @@ Three stages, three PRs, each leaves the demo working with `enable_nav` default 
 ### Stage 3: attract mode and polish (PR 3)
 13. `run_demo.sh --no-joysticks` needs no new mechanism (no pad -> `pad_missing` -> all boats autonomous on their sections); add a self-test scenario for it, flip the demo profile to nav on after the rehearsal (`--no-nav` stays as the escape), README helper card ("if nobody drives it for 30 s the boat surveys on its own; touch the stick to take over"), `.agents/README.md` updates, a cold-boot rehearsal checklist entry, and the process-load numbers from Stage 1.
 
+
+**Handoff 2026-10-21.** Stage 1 (PR #115) and Stage 2 (PR #117) are merged on `jazzy`. What is left of Stage 3 is mostly a switch: flip `--nav` to default on (keep `--no-nav` as the escape), put the process-load numbers in the README, add a cold-boot checklist line and update `.agents/README.md`. The default is not flipped until a nav-on rehearsal on the demo computer (pickerel) passes, on the branch state the event will run. Pass means, over at least 4 four-boat runs with nav on and all four pads:
+
+- every boat's nav2 lifecycle nodes reach `active` in every run;
+- every watchdog receives the survey area within about 10 s of starting (no "no target area after 30 s" in the logs);
+- an untouched boat is driving its section lines within a couple of minutes, at a pace a visitor can see;
+- touching the stick hands the boat back at once and the section restarts;
+- nothing is left running after the map window is closed.
+
+Issue #116 (Fast DDS discovery server and nav2 composition) addresses what the dev laptop showed: discovery at about 100 processes took 40 to 60 s, nav2 bring-up failed about 1 run in 2 on the first boat, and controllers ran at 2.6 to 4 Hz with four boats. Rehearse with #116 on the branch if it has landed; if not, rehearse without it and record the same numbers so the two can be compared. If four boats with nav stay unreliable on pickerel, the fallbacks in order of preference are: (1) stagger the boats' nav2 starts (manager group ordering); (2) nav on for fewer boats, the others manual-only; (3) a longer `line_spacing` so a section finishes while people watch; (4) keep `--nav` off by default and start it by hand for the attract periods. Pick the smallest that passes the gate and say in the PR which one and why. Open decisions for Roland: which fallback, if any, and whether the lifecycle manager should be restarted from the watchdog on `navigator_unavailable` (a hung manager cannot answer the reset service, so staggering is the safer first move). Still unfiled: a port parameter for the Groot ZeroMQ publisher in `unh_marine_navigation`, which would retire the `DEMO_ZMQ_PORT_OFFSET` `LD_PRELOAD` shim. Pickerel's repos have gitcloud origins, so Stage 3 commits go straight to `jazzy` there and come back to GitHub through `/import-field-changes`.
+
 ## Files to Change
 
 | File | Change |
