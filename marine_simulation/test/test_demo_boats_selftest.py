@@ -293,6 +293,7 @@ def test_scorer_centre_is_the_mean_start_of_the_chosen_boats(tmp_path):
 
 
 class FakePublisher:
+
     def __init__(self):
         self.sent = []
 

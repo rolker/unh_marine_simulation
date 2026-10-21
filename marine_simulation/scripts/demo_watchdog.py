@@ -198,7 +198,7 @@ class DemoWatchdog(Node):
             return False
         self._area_asked = now
         self.get_logger().warning(
-            'no target area after %g s: is the manager\'s target_area group running? '
+            "no target area after %g s: is the manager's target_area group running? "
             'subscribing to /survey_area again' % AREA_RETRY_SECONDS)
         self.destroy_subscription(self.area_sub)
         self.area_sub = self.create_subscription(

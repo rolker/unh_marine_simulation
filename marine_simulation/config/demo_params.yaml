@@ -85,7 +85,8 @@
 # 120 degree sonar's swath at 16 m, less the overlap, would be 90 m), edge_margin shorter at both
 # ends of a line, driven at survey_speed_knots (below the boat's 2.75 m/s top speed);
 # line_heading_deg NaN means along the long side of the area. A finished section repeats after
-# repeat_delay seconds (on_complete: hold stays). section_index/section_count, boat and
+# repeat_delay seconds (on_complete: hold stays), or failed_repeat_delay seconds when every
+# line of it failed. section_index/section_count, boat and
 # map_frame come from the launch (the boats that run, in roster order).
 /**/demo_watchdog:
   ros__parameters:
@@ -99,3 +100,4 @@
     survey_speed_knots: 4.0
     on_complete: repeat
     repeat_delay: 10.0
+    failed_repeat_delay: 120.0

@@ -28,7 +28,7 @@
 # POSSIBILITY OF SUCH DAMAGE.
 
 
-"""In-process tests of the watchdog node (scripts/demo_watchdog.py): the area topic and its retry."""
+"""In-process tests of the watchdog node (scripts/demo_watchdog.py): the area and its retry."""
 
 import importlib.util
 import os

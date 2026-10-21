@@ -637,8 +637,8 @@ self-test also checks that every nav2 lifecycle node of every boat is `active`, 
 set to `autonomous` and sent a one-line `SurveyPattern` as CAMP sends it, reports the mission's tasks
 on `marine/status/mission_tasks` and drives the line, that the other boats stay in `manual` and
 do not move, and that the nodes are still active afterwards (`--nav-seconds` is the time allowed
-for the line). With `--watchdog pad` or `--watchdog attract` (both imply `--nav`; use `--demo`, the manager's
-target-area publisher gives the watchdog its area) the boats run the watchdog and the older
+for the line). With `--watchdog pad` or `--watchdog attract` (both imply `--nav` and need `--demo --start-launch`, which
+the self-test checks at once: the manager's target-area publisher gives the watchdog its area) the boats run the watchdog and the older
 scenarios are skipped, because the watchdog drives boats nobody is driving. `pad` simulates an
 untouched pad on the first boat (short idle timeout, no missing-pad rule): it must go
 autonomous, have its section mission taken and drive it; one active Joy message must hand it
@@ -733,7 +733,8 @@ launch manager. A slower computer than this one may still need fewer boats (`--b
 ### The joystick watchdog
 
 With `enable_nav`, each boat also runs `demo_watchdog.py` (switch it off with
-`enable_watchdog:=false`; it does nothing without nav). It decides who drives the boat:
+`enable_watchdog:=false` on the boats launch, `--no-watchdog` on `demo_manager.py`; it does
+nothing without nav). It decides who drives the boat:
 
 - While somebody touches the boat's pad, the boat stays in `manual`.
 - When nobody has for `idle_timeout` (30 s), or no pad has sent anything `missing_pad_grace`
@@ -746,11 +747,13 @@ With `enable_nav`, each boat also runs `demo_watchdog.py` (switch it off with
 - `run_demo.sh --nav --no-joysticks` is the unattended attract mode: no pad, so every boat
   surveys its own section from the start.
 
-*Activity* of a Joy message is a button that differs from the pad's rest state or from the
-previous message, an axis farther than `activity_threshold` (0.05) from its rest value, or an
+*Activity* of a Joy message is a button that is pressed or that changed since the previous message
+(a button counts whatever the learned rest state is, so one held while the pad appears takes the
+boat), an axis farther than `activity_threshold` (0.05) from its rest value, or an
 axis that moved more than that since the previous message. Rest is the first message after the
 pad appeared (so trigger rest values need no knowledge, and a pad that is merely plugged in does
-not take a boat), and `joy_linux` repeats an untouched pad at 10 Hz, so message times say
+not take a boat); a pad that comes back within a minute keeps the rest state it had, so a stick
+held through a dropout is input, and `joy_linux` repeats an untouched pad at 10 Hz, so message times say
 nothing; only the content does. The pad's mode buttons stay inert (there is no `command_bridge`);
 `joy_to_helm` still turns the sticks into helm commands while the boat is `manual`.
 
@@ -769,9 +772,15 @@ taken for the current one.
 
 What the watchdog does about the things that go wrong:
 
-- No target area yet (`NO_AREA` in its state): the boat goes autonomous and hovers; the section
-  is sent when an area arrives (the `boats` profile of the manager has none, the `demo` and
-  `headless` profiles have the target-area publisher).
+- No target area yet (`NO_AREA` in its state, `has_area` false): the boat stays `manual` (it is
+  not announced `autonomous` until there is a section to run) and the section is sent when an
+  area arrives (the `boats` profile of the manager has none, the `demo` and `headless` profiles
+  have the target-area publisher). The area is a latched sample that reaches the node when its
+  publisher is discovered, which with a hundred processes on one computer takes tens of seconds
+  (up to a minute for a late joiner, measured); after 30 s without one the node logs that it is
+  waiting and subscribes again. An area that cannot be split (`area_error` in the state) is not
+  retried until a new area arrives. A copy of an area with an older stamp than the one held does
+  not replace it.
 - `mission_manager` dies on a plan sent before TF `earth -> <boat>/map` exists, so the first send
   waits for that frame (settled for 3 s). A goal sent while nav2 is still starting is rejected
   by it for good, so an unacknowledged send is repeated every 15 s (the acknowledgement is the
@@ -779,7 +788,13 @@ What the watchdog does about the things that go wrong:
   `navigator_unavailable`, and it keeps trying.
 - A running mission that goes silent for 60 s is sent again; a helm that comes back in `manual`
   (it respawned) is told again after 2 s; a helm that reports `standby` is left alone until the
-  pad is touched.
+  pad is touched (idle or a missing pad do not override it: nothing is announced or sent).
+- A takeover always sends `clear_tasks` when a plan may still be held, even when the state says
+  nothing is loaded (the area changed, or a resend was pending).
+- A section whose every line failed (a navigator that cannot plan) waits `failed_repeat_delay`
+  (120 s) before it repeats, instead of every `repeat_delay`. `navigator_unavailable` flips are
+  logged, and the wait for the navigator is counted from the latest send after the last
+  acknowledgement.
 - A line that cannot be driven (a boat that is aground or held by a charted object or another
   boat, see "Boats block each other and the shallows") is not driven forever: nav2's progress
   checker (0.5 m in 10 s) aborts the follower, retries three times and the navigator records the

@@ -793,8 +793,9 @@ class SelfTest:
         second = self.wd(boat, 'generation')
         ids = self.own_tasks(boat, second)
         self.record('%s: idle again sends the whole section anew from the first line' % boat,
-                    again is not None and self.wd(boat, 'reason') == 'idle' and ('%s_s%s/%s_s%s_l000' % (boat, second, boat, second))
-                    in ids and self.wd(boat, 'lines_done') == 0,
+                    again is not None and self.wd(boat, 'reason') == 'idle'
+                    and ('%s_s%s/%s_s%s_l000' % (boat, second, boat, second)) in ids
+                    and self.wd(boat, 'lines_done') == 0,
                     'generation %s, lines done %s of %s' % (
                         second, self.wd(boat, 'lines_done'), self.wd(boat, 'lines_total')))
         after = dict(self.fix)
@@ -951,8 +952,8 @@ OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'enable_nav:=', 'enable_watchdog:=', 'i
                    'missing_pad_grace:=', 'boats:=', 'roster_file:=')
 # With --demo the manager is started instead, and these options are the self-test's own.
 OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks',
-                        '--nav', '--no-nav', '--watchdog', '--no-watchdog', 'enable_watchdog:=', 'idle_timeout:=',
-                        'missing_pad_grace:=')
+                        '--nav', '--no-nav', '--watchdog', '--no-watchdog',
+                        'enable_watchdog:=', 'idle_timeout:=', 'missing_pad_grace:=')
 
 
 def overridden_launch_args(extra, demo=False) -> list:
