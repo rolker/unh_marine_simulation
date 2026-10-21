@@ -239,6 +239,10 @@ def plan_section(area: Sequence[Point], index: int, count: int, spacing: float,
         raise SectionError('%d sections; the limit is %d' % (count, MAX_BOATS))
     if count < 1 or not 0 <= index < count:
         raise SectionError('section %d of %d does not exist' % (index, count))
+    if not all(math.isfinite(v) for v in (spacing, edge_margin, min_length)):
+        raise SectionError('spacing, margin and minimum length must be finite numbers')
+    if heading_deg is not None and not math.isfinite(heading_deg):
+        raise SectionError('the heading must be a finite number')
     if not spacing > 0.0 or edge_margin < 0.0 or min_length < 0.0:
         raise SectionError('spacing must be positive, the margin and the minimum length not '
                            'negative')
@@ -328,8 +332,8 @@ def mission_plan(section: Section, prefix: str, speed_knots: float) -> list:
     tasks ``<prefix>`` and ``<prefix>/<prefix>_l000`` and so on; ``prefix`` must therefore be
     unique per send, so that feedback of an earlier send is never taken for this one.
     """
-    if not speed_knots > 0.0:
-        raise SectionError('speed must be positive')
+    if not (math.isfinite(speed_knots) and speed_knots > 0.0):
+        raise SectionError('speed must be a positive, finite number')
 
     def waypoint(name, point):
         return {'type': 'Waypoint', 'label': name, 'latitude': point[0], 'longitude': point[1]}

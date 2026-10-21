@@ -184,6 +184,22 @@ def test_an_area_too_small_for_the_spacing_and_line_length_is_refused():
         ss.plan_section(square(side=40.0), 0, 1, 80.0, edge_margin=15.0, min_length=30.0)
 
 
+@pytest.mark.parametrize('name', ['spacing', 'edge_margin', 'min_length', 'heading_deg'])
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), float('-inf')])
+def test_non_finite_numbers_are_refused(name, bad):
+    values = {'spacing': 80.0, 'edge_margin': 15.0, 'min_length': 30.0, 'heading_deg': 0.0}
+    values[name] = bad
+    with pytest.raises(ss.SectionError, match='finite'):
+        ss.plan_section(square(), 0, 1, **values)
+
+
+@pytest.mark.parametrize('bad', [float('nan'), float('inf'), 0.0, -1.0])
+def test_a_non_finite_or_non_positive_speed_is_refused(bad):
+    section = ss.plan_section(square(), 0, 1, 80.0)
+    with pytest.raises(ss.SectionError, match='speed'):
+        ss.mission_plan(section, 'x_s1', bad)
+
+
 def test_a_bad_spacing_is_refused():
     for spacing in (0.0, -5.0, float('nan')):
         with pytest.raises(ss.SectionError):
