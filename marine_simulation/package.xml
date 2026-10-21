@@ -31,6 +31,11 @@
   <exec_depend>helm_manager</exec_depend>
   <exec_depend>mission_manager</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
+  <exec_depend>nav2_common</exec_depend>
+  <exec_depend>manda_coverage</exec_depend>
+  <exec_depend>rclcpp_components</exec_depend>
+  <!-- fastdds, the discovery server tool (issue 116) -->
+  <exec_depend>fastrtps</exec_depend>
   <exec_depend>marine_nav_interfaces</exec_depend>
   <exec_depend>launch_manager_proto</exec_depend>
   <exec_depend>coverage_assessment</exec_depend>

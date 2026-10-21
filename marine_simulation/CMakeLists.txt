@@ -28,6 +28,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_demo_boats_launch test/test_demo_boats_launch.py)
   ament_add_pytest_test(test_check_multi_boat_graph test/test_check_multi_boat_graph.py)
   ament_add_pytest_test(test_demo_nav test/test_demo_nav.py)
+  ament_add_pytest_test(test_demo_nav2_composed_launch test/test_demo_nav2_composed_launch.py)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_demo_manager test/test_demo_manager.py)
   # host-only and slow (about two minutes): the default 60 s CTest timeout would kill it
