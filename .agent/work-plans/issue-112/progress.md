@@ -184,3 +184,30 @@ Done (own commits where the files differ): rest-pad publishing resumed (with 3);
 
 ### Deferred
 - The ZeroMQ port shim upstream issue (a parameter for the Groot port in unh_marine_navigation) stays unfiled. Stage 3 is a later PR. A real pad bench check and the collision behaviour of a held boat are still not observed live.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-21 09:34 -04:00
+**By**: Claude Code Agent (Claude Sonnet)
+**Verdict**: changes-requested
+
+**Branch**: feature/issue-112 at `49864e8`
+**Mode**: pre-push
+**Depth**: Deep (reason: ~2950 changed lines, 24 files, new LD_PRELOAD C shim and launch changes)
+**Must-fix**: 2 | **Suggestions**: 9
+**Round**: 2 | **Ship**: recommended — all six round-1 must-fixes hold (each has a test, suite 1077 tests with the same 8 baseline lint failures); 2 mechanical must-fixes remain, down from 6
+
+### Findings
+- [ ] (must-fix) a respawned watchdog (`respawn=True`) restarts `generation` at 0, so it reuses task ids `<boat>_s1_*` that mission_manager may still report (stale feedback taken as acknowledgement or completion), and a pad touch in BOOT after the respawn sends no manual and no clear_tasks (`_may_be_loaded` is False); seed the generation or label from a start-time nonce and clear tasks once at start-up or on the first takeover — `marine_simulation/marine_simulation/watchdog_core.py:148` (also `scripts/demo_watchdog.py:160`, `launch/demo_boats_launch.py:537`) (cross-confirmed: codex x2, Claude Lens B, Lens A)
+- [ ] (must-fix) `test/test_demo_watchdog.py` is not registered with `ament_add_pytest_test`, so colcon/ctest never runs the node-level area tests — `marine_simulation/CMakeLists.txt:39` (gemini, codex; verified)
+- [ ] (suggestion) an area change that leaves the new area unsplittable (NO_AREA) sends no clear_tasks while the old mission may still be loaded — `watchdog_core.py:247` (gemini, Lens A)
+- [ ] (suggestion) the clear_tasks of a takeover is sent once on a volatile publisher; repeat it once or twice or until tasks report empty — `watchdog_core.py:_take_over` (Lens B)
+- [ ] (suggestion) make_mission only converts ValueError/SectionError; any other exception (NaN vertices) kills the spin and a respawn loop follows; treat as NO_AREA — `scripts/demo_watchdog.py:147` (Lens B)
+- [ ] (suggestion) the section's edge margin only shortens segment ends along the line, so perpendicular clearance is less than edge_margin at oblique boundaries; plan said inset — `survey_sections.py:201` (codex)
+- [ ] (suggestion) survey_sections validation does not reject NaN/inf spacing, edge_margin, min_length, speed — `survey_sections.py:242` (gemini)
+- [ ] (suggestion) `_last_activity or now` treats epoch 0.0 as unset; use `is None` — `watchdog_core.py:276` (Lens A)
+- [ ] (suggestion) `autonomous` can be announced in the tick where the send then finds the area unsplittable; plan before announcing — `watchdog_core.py:280` (codex)
+- [ ] (suggestion) C shim: only zmq_bind is shifted (comment it), set errno=ENOSYS when dlsym fails — `src/demo_zmq_ports.c:79` (Lens A, Lens B)
+- [ ] (suggestion) unused `baseline_buttons` parameter in is_active — `watchdog_core.py:103` (gemini)
+
+Specialists: static (pre-commit clean per commits; suite run, baseline failures only), governance (README and .agents/README.md updated; ADR-0008/0009 ok), plan drift (pad_lost_timeout vs autorepeat validation and --nav default flip are plan items not in the diff; Stage 3), Claude adversarial Lens A and Lens B, cross-model gemini and codex both ran (exit 0). Local Ollama not used.
