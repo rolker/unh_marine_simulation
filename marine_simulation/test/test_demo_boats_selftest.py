@@ -189,7 +189,9 @@ def test_the_manager_watchdog_options_are_the_self_tests_own():
     ('ben_s1', None, True), ('ben_s1/ben_s1_l000', 1, True), ('ben_s10', None, True),
     ('ben_s10', 1, False), ('ben_s10/ben_s10_l003', 1, False), ('ben_s10/ben_s10_l003', 10, True),
     ('ben_s1', 2, False), ('bens_s1', None, False), ('xben_s1', None, False),
-    ('ben_s', None, False), ('done_hover', None, False)])
+    ('ben_s', None, False), ('done_hover', None, False),
+    ('ben_eb382a5_s1', 1, True), ('ben_eb382a5_s1/ben_eb382a5_s1_l000', 1, True),
+    ('ben_eb382a5_s10', 1, False), ('ben_eb382a5_s2', 1, False), ('ben_xyz_s1', None, False)])
 def test_own_task_matches_the_generation_whole(task_id, generation, expected):
     assert selftest.own_task('ben', task_id, generation) is expected
 

@@ -325,10 +325,11 @@ def own_task(boat: str, task_id: str, generation=None) -> bool:
     """
     Return whether ``task_id`` belongs to the watchdog survey of ``boat`` (of one generation).
 
-    The ids are ``<boat>_s<n>`` and ``<boat>_s<n>/<boat>_s<n>_l<line>``; a prefix match would
-    take ``ben_s10`` for generation 1 of ``ben``, so the number is matched whole.
+    The ids are ``<boat>_<nonce>_s<n>`` and ``<boat>_<nonce>_s<n>/<boat>_<nonce>_s<n>_l<line>``
+    (the nonce, hexadecimal, is the watchdog process's start time and may be absent); a prefix
+    match would take ``ben_s10`` for generation 1 of ``ben``, so the number is matched whole.
     """
-    match = re.match(r'^%s_s(\d+)(?:/|$)' % re.escape(boat), task_id)
+    match = re.match(r'^%s_(?:[0-9a-f]+_)?s(\d+)(?:/|$)' % re.escape(boat), task_id)
     return bool(match) and (generation is None or int(match.group(1)) == int(generation))
 
 
@@ -786,15 +787,14 @@ class SelfTest:
             generation = self.wd(boat, 'generation', 0)
             return (self.wd(boat, 'state') == 'AUTONOMOUS'
                     and self.wd(boat, 'mission') == 'RUNNING' and generation > first
-                    and ('%s_s%s/%s_s%s_l000' % (boat, generation, boat, generation))
-                    in self.own_tasks(boat, generation))
+                    and any(i.endswith('_l000') for i in self.own_tasks(boat, generation)))
 
         again = self.wait_until(restarted, WATCHDOG_IDLE + mission_seconds)
         second = self.wd(boat, 'generation')
         ids = self.own_tasks(boat, second)
         self.record('%s: idle again sends the whole section anew from the first line' % boat,
                     again is not None and self.wd(boat, 'reason') == 'idle'
-                    and ('%s_s%s/%s_s%s_l000' % (boat, second, boat, second)) in ids
+                    and any(i.endswith('_l000') for i in ids)
                     and self.wd(boat, 'lines_done') == 0,
                     'generation %s, lines done %s of %s' % (
                         second, self.wd(boat, 'lines_done'), self.wd(boat, 'lines_total')))
