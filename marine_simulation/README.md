@@ -760,15 +760,17 @@ nothing; only the content does. The pad's mode buttons stay inert (there is no `
 The section: the target area (the latched `/survey_area`, the first area by id) is cut across the
 survey lines into as many bands of equal area as there are boats that run, the *i*-th boat in
 roster order getting the *i*-th band. Inside its band a boat runs parallel lines `line_spacing`
-apart (80 m), along the long side of the area unless `line_heading_deg` says otherwise, shortened
-by `edge_margin` (15 m) at both ends, alternating direction, and sends them as a CAMP
+apart (80 m), along the long side of the area unless `line_heading_deg` says otherwise, pulled in
+from the boundary by `edge_margin` (15 m) at both ends (measured square to the edge, so the
+clearance is the margin at an oblique boundary too), alternating direction, and sends them as a CAMP
 `SurveyPattern` (one `TrackLine` per segment; a concave outline gives several segments on one
 line) at `survey_speed_knots` (4): the plan `mission_manager` reads from
 `marine/mission_manager/command`, so a real boat would run the same thing. The shipped target
 (1.77 km2) for four boats is 3 to 6 lines and 5 to 6 km per boat, about three quarters of an
 hour at 4 knots; a finished section repeats after `repeat_delay` (10 s; `on_complete: hold`
-stays). Every send has its own label (`<boat>_s<n>`), so feedback of an earlier send is never
-taken for the current one.
+stays). Every send has its own label (`<boat>_<nonce>_s<n>`, the nonce being the start time of
+that watchdog process), so feedback of an earlier send, or of the process before a respawn, is
+never taken for the current one.
 
 What the watchdog does about the things that go wrong:
 
@@ -790,7 +792,14 @@ What the watchdog does about the things that go wrong:
   (it respawned) is told again after 2 s; a helm that reports `standby` is left alone until the
   pad is touched (idle or a missing pad do not override it: nothing is announced or sent).
 - A takeover always sends `clear_tasks` when a plan may still be held, even when the state says
-  nothing is loaded (the area changed, or a resend was pending).
+  nothing is loaded (the area changed, or a resend was pending), and sends it twice more at
+  `command_gap` intervals (the topic is volatile and a lost one would leave the old survey
+  running). An area change that leaves the new area unsplittable clears the loaded mission too.
+- The launch respawns a watchdog that dies (`respawn=True`). The new process cannot know what its
+  predecessor left in `mission_manager`, so it sends `clear_tasks` one second after it starts, or
+  at the first touch of a pad if that comes sooner, and its task labels carry a nonce, so
+  `mission_manager`'s old feedback never counts. Any error while planning a section (a malformed
+  polygon included) is treated as an area that cannot be split, not as a crash.
 - A section whose every line failed (a navigator that cannot plan) waits `failed_repeat_delay`
   (120 s) before it repeats, instead of every `repeat_delay`. `navigator_unavailable` flips are
   logged, and the wait for the navigator is counted from the latest send after the last
