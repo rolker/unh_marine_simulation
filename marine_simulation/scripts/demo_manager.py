@@ -118,7 +118,7 @@ def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: b
                   scorer_params: str, roster_file: str, joystick_config: str,
                   layout_config: str, target_file: str,
                   camp_fresh: bool = False, rqt_fresh: bool = False,
-                  enable_nav: bool = False) -> Dict[str, str]:
+                  enable_nav: bool = False, enable_watchdog: bool = True) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
         'boats': boats_argument,
@@ -128,6 +128,7 @@ def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: b
         # nav2's own lifecycle manager owns these; the manager leaves them alone
         'boats_exclude': demo_nav.nav_exclude_regex(names),
         'enable_nav': 'true' if enable_nav else 'false',
+        'enable_watchdog': 'true' if enable_watchdog else 'false',
         'enable_joysticks': 'true' if enable_joysticks else 'false',
         'scorer_params': scorer_params,
         'roster_file': roster_file,
@@ -228,6 +229,9 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--nav', action=argparse.BooleanOptionalAction, default=False,
                         help='run the navigation stack on every boat (mission_manager and the '
                              'real ben_project11 nav2 bring-up); off unless given')
+    parser.add_argument('--watchdog', action=argparse.BooleanOptionalAction, default=True,
+                        help='with --nav, run the joystick watchdog on every boat (an idle or '
+                             'pad-less boat surveys its section); on unless --no-watchdog')
     parser.add_argument('--joysticks', type=non_empty, metavar='FILE',
                         help="this computer's gamepad bindings (default: the installed example)")
     layout = parser.add_mutually_exclusive_group()
@@ -293,7 +297,7 @@ def main(argv: List[str] = None) -> int:
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
                               roster_file, joysticks, layout, target, args.camp_fresh,
-                              args.rqt_fresh, args.nav))
+                              args.rqt_fresh, args.nav, args.watchdog))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2
