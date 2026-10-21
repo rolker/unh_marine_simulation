@@ -324,7 +324,7 @@ class WatchdogCore:
             and self.pad_present(now) else None,
             'helm_mode': self._heartbeat_mode,
             'navigator_unavailable': self.navigator_unavailable(now),
-            'area_error': self.area_error,
+            'has_area': self.has_area, 'area_error': self.area_error,
         }
 
     def navigator_unavailable(self, now: float) -> bool:
