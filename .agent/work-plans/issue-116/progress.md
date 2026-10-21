@@ -20,3 +20,16 @@ issue: 116
 - [ ] Watch: ROS_DISCOVERY_SERVER with plain clients: `ros2 node list`, the manager's own graph and the self-test only see everything as a super client; the daemon must be restarted with the variables set. The manager node and the self-test get ROS_SUPER_CLIENT for their own participant only, never the children.
 - [ ] Watch: a stale discovery server on the port would fail the group; the manager checks the port is free and refuses with the reason.
 - [ ] Consequences: README (discovery server, super client, numbers), `.agents/README.md`, package.xml exec_depend, tests for the new launch arguments and group.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-10-21 09:43 -04:00
+**By**: Claude Sonnet 5.5
+
+**Plan**: `.agent/work-plans/issue-116/plan.md` at `483792f`
+**Branch**: feature/issue-116
+**Phases**: single (review-plan skipped on the operator's call)
+
+### Open questions
+- [ ] Fix ben_project11's composed branch upstream instead of keeping a demo-owned copy?
+- [ ] ZeroMQ shim is on the unmerged #112 branch, not jazzy; this branch does not depend on it
