@@ -198,16 +198,42 @@ Done (own commits where the files differ): rest-pad publishing resumed (with 3);
 **Round**: 2 | **Ship**: recommended — all six round-1 must-fixes hold (each has a test, suite 1077 tests with the same 8 baseline lint failures); 2 mechanical must-fixes remain, down from 6
 
 ### Findings
-- [ ] (must-fix) a respawned watchdog (`respawn=True`) restarts `generation` at 0, so it reuses task ids `<boat>_s1_*` that mission_manager may still report (stale feedback taken as acknowledgement or completion), and a pad touch in BOOT after the respawn sends no manual and no clear_tasks (`_may_be_loaded` is False); seed the generation or label from a start-time nonce and clear tasks once at start-up or on the first takeover — `marine_simulation/marine_simulation/watchdog_core.py:148` (also `scripts/demo_watchdog.py:160`, `launch/demo_boats_launch.py:537`) (cross-confirmed: codex x2, Claude Lens B, Lens A)
-- [ ] (must-fix) `test/test_demo_watchdog.py` is not registered with `ament_add_pytest_test`, so colcon/ctest never runs the node-level area tests — `marine_simulation/CMakeLists.txt:39` (gemini, codex; verified)
-- [ ] (suggestion) an area change that leaves the new area unsplittable (NO_AREA) sends no clear_tasks while the old mission may still be loaded — `watchdog_core.py:247` (gemini, Lens A)
-- [ ] (suggestion) the clear_tasks of a takeover is sent once on a volatile publisher; repeat it once or twice or until tasks report empty — `watchdog_core.py:_take_over` (Lens B)
-- [ ] (suggestion) make_mission only converts ValueError/SectionError; any other exception (NaN vertices) kills the spin and a respawn loop follows; treat as NO_AREA — `scripts/demo_watchdog.py:147` (Lens B)
-- [ ] (suggestion) the section's edge margin only shortens segment ends along the line, so perpendicular clearance is less than edge_margin at oblique boundaries; plan said inset — `survey_sections.py:201` (codex)
-- [ ] (suggestion) survey_sections validation does not reject NaN/inf spacing, edge_margin, min_length, speed — `survey_sections.py:242` (gemini)
-- [ ] (suggestion) `_last_activity or now` treats epoch 0.0 as unset; use `is None` — `watchdog_core.py:276` (Lens A)
-- [ ] (suggestion) `autonomous` can be announced in the tick where the send then finds the area unsplittable; plan before announcing — `watchdog_core.py:280` (codex)
-- [ ] (suggestion) C shim: only zmq_bind is shifted (comment it), set errno=ENOSYS when dlsym fails — `src/demo_zmq_ports.c:79` (Lens A, Lens B)
-- [ ] (suggestion) unused `baseline_buttons` parameter in is_active — `watchdog_core.py:103` (gemini)
+- [x] (must-fix) a respawned watchdog (`respawn=True`) restarts `generation` at 0, so it reuses task ids `<boat>_s1_*` that mission_manager may still report (stale feedback taken as acknowledgement or completion), and a pad touch in BOOT after the respawn sends no manual and no clear_tasks (`_may_be_loaded` is False); seed the generation or label from a start-time nonce and clear tasks once at start-up or on the first takeover — `marine_simulation/marine_simulation/watchdog_core.py:148` (also `scripts/demo_watchdog.py:160`, `launch/demo_boats_launch.py:537`) (cross-confirmed: codex x2, Claude Lens B, Lens A)
+- [x] (must-fix) `test/test_demo_watchdog.py` is not registered with `ament_add_pytest_test`, so colcon/ctest never runs the node-level area tests — `marine_simulation/CMakeLists.txt:39` (gemini, codex; verified)
+- [x] (suggestion) an area change that leaves the new area unsplittable (NO_AREA) sends no clear_tasks while the old mission may still be loaded — `watchdog_core.py:247` (gemini, Lens A)
+- [x] (suggestion) the clear_tasks of a takeover is sent once on a volatile publisher; repeat it once or twice or until tasks report empty — `watchdog_core.py:_take_over` (Lens B)
+- [x] (suggestion) make_mission only converts ValueError/SectionError; any other exception (NaN vertices) kills the spin and a respawn loop follows; treat as NO_AREA — `scripts/demo_watchdog.py:147` (Lens B)
+- [x] (suggestion) the section's edge margin only shortens segment ends along the line, so perpendicular clearance is less than edge_margin at oblique boundaries; plan said inset — `survey_sections.py:201` (codex)
+- [x] (suggestion) survey_sections validation does not reject NaN/inf spacing, edge_margin, min_length, speed — `survey_sections.py:242` (gemini)
+- [x] (suggestion) `_last_activity or now` treats epoch 0.0 as unset; use `is None` — `watchdog_core.py:276` (Lens A)
+- [x] (suggestion) `autonomous` can be announced in the tick where the send then finds the area unsplittable; plan before announcing — `watchdog_core.py:280` (codex)
+- [x] (suggestion) C shim: only zmq_bind is shifted (comment it), set errno=ENOSYS when dlsym fails — `src/demo_zmq_ports.c:79` (Lens A, Lens B)
+- [x] (suggestion) unused `baseline_buttons` parameter in is_active — `watchdog_core.py:103` (gemini)
 
 Specialists: static (pre-commit clean per commits; suite run, baseline failures only), governance (README and .agents/README.md updated; ADR-0008/0009 ok), plan drift (pad_lost_timeout vs autorepeat validation and --nav default flip are plan items not in the diff; Stage 3), Claude adversarial Lens A and Lens B, cross-model gemini and codex both ran (exit 0). Local Ollama not used.
+
+
+## Implementation
+**Status**: complete
+**When**: 2026-10-21 10:05 -04:00
+**By**: Claude Code Agent (Claude Sonnet)
+
+**Branch**: feature/issue-112 at `67b76a8`
+**Addressed**: Local Review (Pre-Push) round 2, 2026-10-21 09:34
+**Commits**: 4228b7f 84c8383 6efa5e4 edfac39 e4947ae f1c4b73 ebd818f 67b76a8
+
+### Actions
+- [x] (must-fix) respawned watchdog reused task ids and sent no clear in BOOT — task labels are `<boat>_<nonce>_s<n>` (nonce = process start time), the core sends `clear_tasks` 1 s after start or at the first touch (also in BOOT); tests: a respawned core does not accept feedback with the previous instance's ids, first takeover from BOOT sends clear_tasks, start-up clear — `watchdog_core.py`, `scripts/demo_watchdog.py` (e4947ae); the self-test's `own_task` was updated to match the nonce (67b76a8)
+- [x] (must-fix) test_demo_watchdog.py registered with `ament_add_pytest_test` — `CMakeLists.txt` (4228b7f); `test.sh` shows its tests in the results
+- [x] (suggestion) unsplittable area change sends clear_tasks — `_send` error path (e4947ae)
+- [x] (suggestion) takeover's clear_tasks resend — two repeats at `command_gap`, cancelled when the boat goes autonomous (e4947ae)
+- [x] (suggestion) make_mission turns any planning exception into ValueError (NO_AREA), tests with NaN/inf/degenerate rings (e4947ae)
+- [x] (suggestion) edge margin inset square to the boundary (`margin / sin(angle)`), test with an oblique side (6efa5e4)
+- [x] (suggestion) NaN/inf refused for spacing, margin, min length, heading and speed (84c8383)
+- [x] (suggestion) `_last_activity` / `_completed_at` use `is None` (e4947ae)
+- [x] (suggestion) no `autonomous` announcement in the tick that finds the area unsplittable — planning runs before the announcement (e4947ae) (partly: when the send is held back by the TF settle or the command gap, `autonomous` is still announced first; waiting for the plan would delay the mode change by seconds, a design choice left as it was and noted in plan.md)
+- [x] (suggestion) C shim: errno=ENOSYS when dlsym fails, test; comment says only zmq_bind is shifted because Groot2Publisher binds both its sockets and never connects (edfac39)
+- [x] (suggestion) unused `baseline_buttons` removed from `is_active` (e4947ae)
+
+### Verification
+Full suite (`./simulation_ws/test.sh marine_simulation`): 1117 tests, 8 failures (the same 8 baseline lint failures in untouched launch files), 2 skipped. A new C416 flake8 in my own test was fixed (ebd818f). Self-test through the manager on ROS_DOMAIN_ID 137/138, bluefin+clownfish, headless: `--watchdog pad` exit 0 (all PASS: idle to autonomous, section taken, touch to manual with mission cleared, idle again generation 2 from line 0), `--watchdog attract` exit 0 (both boats autonomous, own missions, driving). A first pad run failed because the self-test's own task matcher did not know the nonce; fixed and rerun. No asv_sim/nav2/mission_manager/demo_manager processes left. README, `.agents/README.md` and plan.md "Implementation Notes (Stage 2)" updated.
