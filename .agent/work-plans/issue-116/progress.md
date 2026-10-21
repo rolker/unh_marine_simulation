@@ -54,3 +54,28 @@ issue: 116
 ### Open questions
 - [ ] Why nav2 loses its transforms through the discovery server (plain clients vs the server; may be a jazzy Fast DDS issue)? Server stays opt-in.
 - [ ] Fix ben_project11's composed branch upstream?
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-10-21 10:58 -04:00
+**By**: Claude Sonnet 5.5
+**Verdict**: approved (must-fixes fixed in the follow-up commit)
+
+**Branch**: feature/issue-116 at `09eb581` (fixes after)
+**Mode**: pre-push
+**Depth**: Standard (reason: new launch/manager behaviour, 1254 added lines); static analysis via the ament lint run, two Claude passes (Lens A, B), cross-model gemini + codex
+**Must-fix**: 6 found, 6 fixed | **Suggestions**: 5 fixed, rest declined
+**Round**: 1 | **Ship**: recommended — all must-fixes fixed and tests green (1185 run, only the 8 baseline lint failures of untouched launch files)
+
+### Findings
+- [x] (must-fix) discovery group claimed a restart the manager does not implement; now restart: never and the comment says a dead server fails the group — `config/demo_manager.yaml`
+- [x] (must-fix) test asserted the default value of restart — `test/test_demo_manager.py`
+- [x] (must-fix) a ROS_SUPER_CLIENT exported in the caller's shell reached every group; now scrubbed — `scripts/demo_manager.py`
+- [x] (must-fix) graph checker kept a conflicting ROS_SUPER_CLIENT; now set unconditionally — `scripts/check_multi_boat_graph.py`
+- [x] (must-fix) target_area and rqt now require discovery — `config/demo_manager.yaml`
+- [x] (must-fix/suggestion, 3 reviewers) preflight for a missing fastdds tool — `demo_support.py`
+- [x] (suggestion) unused log_level parameter removed, COMPOSED block moved below NAV2_COSTMAPS, README crash note, test asserts a match for ben's lifecycle_nodes
+- [ ] (declined) composition on by default: the operator chose it for the demo; README notes the failure mode and the way back
+- [ ] (declined) scrub an operator-exported ROS_DISCOVERY_SERVER when --discovery-server is absent: kept as a deliberate way to use an external server
+- [ ] (declined) unscoped SetParameter use_sim_time in the composed launch mirrors ben's navigation_launch; behaviour seen live
+- [ ] (declined) orphan server risk: no server survived any manager stop in the live runs (pgrep clean); only my own harness' terminate left one
