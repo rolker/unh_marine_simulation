@@ -103,3 +103,31 @@ def test_a_boat_with_an_area_does_not_subscribe_again(node):
     first = node.area_sub
     assert node.check_area_subscription(node._area_asked + 1000.0) is False
     assert node.area_sub is first
+
+
+def test_the_task_ids_of_a_mission_carry_the_nodes_start_nonce(node):
+    node.on_area(area('a', BIGGER, 1))
+    _, set_id, lines = node.make_mission(1, node.nonce)
+    assert node.nonce and set_id == 'testboat_%s_s1' % node.nonce
+    assert all(line.startswith(set_id + '/') for line in lines)
+
+
+@pytest.mark.parametrize('ring', [
+    [(float('nan'), -70.7), (43.0, -70.6), (43.1, -70.6)],
+    [(43.0, -70.7), (43.0, float('inf')), (43.1, -70.6)],
+    [(43.0, -70.7), (43.0, -70.7), (43.0, -70.7)],
+])
+def test_a_malformed_polygon_is_no_area_not_a_crash(node, ring):
+    node.areas.update('a', ring, (1, 0))
+    with pytest.raises(ValueError):
+        node.make_mission(1, node.nonce)
+
+
+def test_an_unexpected_planning_error_becomes_a_value_error(node, monkeypatch):
+    node.on_area(area('a', BIGGER, 1))
+
+    def boom(*args, **kwargs):
+        raise ZeroDivisionError('boom')
+    monkeypatch.setattr(node.module.survey_sections, 'plan_section', boom)
+    with pytest.raises(ValueError, match='ZeroDivisionError'):
+        node.make_mission(1, node.nonce)

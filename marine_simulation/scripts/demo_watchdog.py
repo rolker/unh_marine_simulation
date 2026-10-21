@@ -115,9 +115,12 @@ class DemoWatchdog(Node):
         self.areas = survey_sections.AreaBook()
         self._area_type = SurveyArea
         self._area_asked = time.monotonic()
+        # a respawned node restarts its generations at 1: the nonce keeps the task ids of this
+        # instance apart from those mission_manager may still report for the one before it
+        self.nonce = '%x' % (time.time_ns() // 1000000 % 0xFFFFFFF)
         self.core = watchdog_core.WatchdogCore(
             params, time.monotonic(), self.make_mission,
-            lambda text: self.get_logger().info(text))
+            lambda text: self.get_logger().info(text), self.nonce)
 
         latched = QoSProfile(depth=100, durability=DurabilityPolicy.TRANSIENT_LOCAL,
                              reliability=ReliabilityPolicy.RELIABLE)
@@ -144,8 +147,23 @@ class DemoWatchdog(Node):
 
     # -- the mission ---------------------------------------------------------------------------
 
-    def make_mission(self, generation):
-        """Return ``(command, set task id, [line task ids])`` for this boat's section."""
+    def make_mission(self, generation, nonce=''):
+        """
+        Return ``(command, set task id, [line task ids])`` for this boat's section.
+
+        Anything that goes wrong in planning (a malformed polygon included) is a ``ValueError``,
+        which the core reads as "nothing to survey"; an exception of another kind would end the
+        spin and a respawn would repeat it.
+        """
+        try:
+            return self._make_mission(generation, nonce)
+        except ValueError:
+            raise
+        except Exception as error:
+            raise ValueError('the area cannot be planned: %s: %s'
+                             % (type(error).__name__, error)) from None
+
+    def _make_mission(self, generation, nonce):
         first = self.areas.first()
         if first is None:
             raise ValueError('no target area has arrived')
@@ -157,7 +175,8 @@ class DemoWatchdog(Node):
                 s['edge_margin'], s['min_line_length'], heading)
         except survey_sections.SectionError as error:
             raise ValueError(str(error)) from None
-        prefix = '%s_s%d' % (self.boat, generation)
+        prefix = '%s_%s_s%d' % (self.boat, nonce, generation) if nonce \
+            else '%s_s%d' % (self.boat, generation)
         plan = survey_sections.mission_plan(section, prefix, s['survey_speed_knots'])
         set_id, line_ids = survey_sections.task_ids(prefix, len(plan[0]['children']))
         return survey_sections.mission_command(plan), set_id, line_ids

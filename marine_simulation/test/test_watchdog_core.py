@@ -55,11 +55,12 @@ class Boat:
         self.core.on_area(self.now)
         self.core.on_tf(self.now, True)
 
-    def mission(self, generation):
-        ids = ['b_s%d/b_s%d_l%03d' % (generation, generation, n) for n in range(3)]
-        text = 'replace_task mission_plan generation%d' % generation
+    def mission(self, generation, nonce=''):
+        prefix = 'b_%ss%d' % (nonce, generation)
+        ids = ['%s/%s_l%03d' % (prefix, prefix, n) for n in range(3)]
+        text = 'replace_task mission_plan %s' % prefix
         self.sent.append(text)
-        return text, 'b_s%d' % generation, ids
+        return text, prefix, ids
 
     def do(self, actions):
         self.out += actions
@@ -94,13 +95,14 @@ class Boat:
 def test_an_idle_pad_hands_the_boat_to_autonomy_after_the_timeout():
     b = Boat(idle_timeout=30.0)
     b.run(29.0)
-    assert b.core.state == wc.MANUAL and b.take() == []
+    assert b.core.state == wc.MANUAL
+    assert b.take() == [('command', 'clear_tasks')] * 3     # only the start-up clear and repeats
     b.run(2.0)
     assert b.core.state == wc.AUTONOMOUS and b.core.reason == wc.REASON_IDLE
     out = b.take()
     assert out[0] == ('mode', 'autonomous')
     assert [k for k, _ in out].count('command') == 1
-    assert b.sent == ['replace_task mission_plan generation1']
+    assert b.sent == ['replace_task mission_plan b_s1']
 
 
 def test_the_first_active_message_hands_back_in_that_callback_manual_first():
@@ -124,8 +126,8 @@ def test_handing_over_again_sends_the_whole_section_from_the_first_line():
     b.take()
     b.run(7.0)
     assert b.core.state == wc.AUTONOMOUS
-    assert b.sent == ['replace_task mission_plan generation1',
-                      'replace_task mission_plan generation2']
+    assert b.sent == ['replace_task mission_plan b_s1',
+                      'replace_task mission_plan b_s2']
     b.tasks(2)
     assert b.core.snapshot(b.now)['lines_done'] == 0       # nothing is carried over
 
@@ -136,7 +138,7 @@ def test_a_boat_without_a_pad_surveys_after_the_grace():
     assert b.core.state == wc.BOOT
     b.run(2.0, joy=None)
     assert b.core.state == wc.AUTONOMOUS and b.core.reason == wc.REASON_PAD_MISSING
-    assert b.take()[0] == ('mode', 'autonomous')
+    assert [a for a in b.take() if a != ('command', 'clear_tasks')][0] == ('mode', 'autonomous')
 
 
 def test_a_pad_that_stops_sending_hands_the_boat_to_autonomy():
@@ -231,7 +233,7 @@ def test_no_area_is_a_state_and_the_boat_stays_manual_until_there_is_one():
 def test_a_plan_that_cannot_be_made_says_so_and_does_not_spin():
     b = Boat(missing_pad_grace=1.0)
 
-    def refuse(generation):
+    def refuse(generation, nonce=''):
         raise ValueError('too small')
 
     b.core.mission = refuse
@@ -243,7 +245,7 @@ def test_a_plan_that_cannot_be_made_says_so_and_does_not_spin():
 def test_an_unacknowledged_section_is_resent_with_a_new_generation_and_flagged():
     b = Boat(missing_pad_grace=1.0, resend_period=30.0, unavailable_after=70.0)
     b.run(95.0, joy=None)
-    assert len(b.sent) >= 3 and b.sent[1] == 'replace_task mission_plan generation2'
+    assert len(b.sent) >= 3 and b.sent[1] == 'replace_task mission_plan b_s2'
     assert b.core.snapshot(b.now)['navigator_unavailable'] is True
     b.tasks(len(b.sent))
     assert b.core.mission_state == wc.RUNNING
@@ -336,7 +338,7 @@ def test_an_area_that_cannot_be_split_is_asked_once_not_every_tick():
     b = Boat(missing_pad_grace=1.0)
     calls = []
 
-    def refuse(generation):
+    def refuse(generation, nonce=''):
         calls.append(generation)
         raise ValueError('too small')
 
@@ -460,3 +462,91 @@ def test_a_repeat_long_after_the_first_send_is_not_flagged_as_an_unavailable_nav
     assert b.core.mission_state == wc.LOADING
     assert b.core.snapshot(b.now)['navigator_unavailable'] is False
     assert not any('has not taken' in line for line in b.log)
+
+
+# -- a respawned watchdog (the launch runs it with respawn=True) ------------------------------
+
+
+def test_a_respawned_core_does_not_take_feedback_that_carries_the_previous_instances_ids():
+    old = Boat(idle_timeout=5.0)
+    old.core.nonce = 'aaa'
+    new = Boat(idle_timeout=5.0)
+    new.core.nonce = 'bbb'
+    old.run(8.0)
+    new.run(8.0)
+    assert old.core.generation == new.core.generation == 1      # both restarted at generation 1
+    assert old.sent != new.sent and 'aaa' in old.sent[0] and 'bbb' in new.sent[0]
+    prefix = 'b_aaas1'
+    stale = [(prefix, False, '')] + [
+        ('%s/%s_l%03d' % (prefix, prefix, n), True, '') for n in range(3)]
+    new.do(new.core.on_tasks(new.now, stale))
+    assert new.core.mission_state == wc.LOADING                 # not acknowledged, not complete
+    assert new.core.snapshot(new.now)['lines_done'] == 0
+
+
+def test_the_first_takeover_after_a_start_sends_clear_tasks_even_in_boot():
+    b = Boat()
+    b.now += 0.2
+    pressed = (list(REST[0]), [1] + [0] * 10)
+    actions = b.core.on_joy(b.now, *pressed)            # a touch before anything else happened
+    assert b.core.state == wc.MANUAL
+    assert ('command', 'clear_tasks') in actions
+    # and only once at start-up: later quiet ticks add only the scheduled repeats
+    b.take()
+    b.run(10.0)
+    assert [a for a in b.take()].count(('command', 'clear_tasks')) == wc.CLEAR_REPEATS
+
+
+def test_a_new_instance_clears_a_predecessors_mission_shortly_after_it_starts():
+    b = Boat()
+    b.run(0.5)
+    assert b.take() == []
+    b.run(1.0)
+    assert b.take()[:1] == [('command', 'clear_tasks')]
+
+
+def test_a_takeover_repeats_its_clear_tasks_but_not_over_a_new_mission():
+    b = Boat(idle_timeout=5.0)
+    b.run(8.0)
+    b.tasks(1)
+    b.now += 0.1
+    assert ('command', 'clear_tasks') in b.core.on_joy(b.now, *touched())
+    b.take()
+    b.run(6.0, joy=touched())
+    assert b.take().count(('command', 'clear_tasks')) == wc.CLEAR_REPEATS
+
+
+def test_an_area_change_that_cannot_be_split_clears_the_loaded_mission():
+    b = Boat(idle_timeout=5.0)
+    b.run(8.0)
+    b.tasks(1)
+    b.take()
+
+    def refuse(generation, nonce=''):
+        raise ValueError('too small')
+    b.core.mission = refuse
+    b.core.on_area(b.now)
+    b.run(3.0, joy=None)
+    out = b.take()
+    assert ('command', 'clear_tasks') in out
+    assert b.core.mission_state == wc.NO_AREA
+
+
+def test_autonomous_is_not_announced_when_the_section_cannot_be_planned():
+    def refuse(generation, nonce=''):
+        raise ValueError('too small')
+    b = Boat(idle_timeout=10.0)
+    b.core.mission = refuse
+    b.run(14.0)
+    assert b.core.mission_state == wc.NO_AREA
+    modes = [t for k, t in b.take() if k == 'mode']
+    assert 'autonomous' not in modes
+
+
+def test_a_zero_activity_time_is_a_time_not_unset():
+    b = Boat(idle_timeout=5.0, pad_lost_timeout=100.0)
+    b.core.on_joy(0.0, *REST)                   # the pad appears at time 0.0
+    b.core.tick(4.0)
+    assert b.core.state == wc.MANUAL
+    b.core.tick(5.5)
+    assert b.core.state == wc.AUTONOMOUS and b.core.reason == wc.REASON_IDLE

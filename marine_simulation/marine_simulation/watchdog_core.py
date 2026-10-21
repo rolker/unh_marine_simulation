@@ -61,6 +61,8 @@ COMPLETE = 'COMPLETE'
 NO_AREA = 'NO_AREA'            # nothing to survey: no area has arrived (or it cannot be split)
 
 BASELINE_KEEP_SECONDS = 60.0   # a pad back within this keeps the rest state it had
+STARTUP_CLEAR_DELAY = 1.0      # s after start before the clear_tasks that empties a predecessor's
+CLEAR_REPEATS = 2              # extra clear_tasks after the first (the topic is volatile)
 
 REASON_IDLE = 'idle'
 REASON_PAD_MISSING = 'pad_missing'
@@ -101,8 +103,8 @@ class Params:
 
 
 def is_active(axes: Sequence[float], buttons: Sequence[int], baseline_axes: Sequence[float],
-              baseline_buttons: Sequence[int], previous_axes: Sequence[float],
-              previous_buttons: Sequence[int], threshold: float) -> bool:
+              previous_axes: Sequence[float], previous_buttons: Sequence[int],
+              threshold: float) -> bool:
     """
     Return whether a Joy message shows somebody touching the pad.
 
@@ -125,19 +127,25 @@ class WatchdogCore:
     """
     The state machine of one boat.
 
-    ``mission`` is called as ``mission(generation)`` when a section is to be sent and returns
-    ``(command text, set task id, [line task ids])``, or raises ``ValueError`` when the area
-    cannot be surveyed (the state then says ``NO_AREA``). ``generation`` makes the task ids of
-    every send unique, so feedback of an earlier send is never taken for the current one.
+    ``mission`` is called as ``mission(generation, nonce)`` when a section is to be sent and
+    returns ``(command text, set task id, [line task ids])``, or raises ``ValueError`` when the
+    area cannot be surveyed (the state then says ``NO_AREA``). ``generation`` and ``nonce``
+    make the task ids of every send unique, so feedback of an earlier send is never taken for
+    the current one. ``nonce`` is the instance's (a process that is restarted starts again at
+    generation 1, and mission_manager may still report the ids of the instance before it), so
+    the caller must put it into the ids. A new instance also assumes its predecessor left a
+    mission loaded: it sends ``clear_tasks`` shortly after it starts, or at the first touch of
+    the pad, whichever comes first.
     """
 
     def __init__(self, params: Params, start: float,
-                 mission: Callable[[int], Tuple[str, str, List[str]]],
-                 log: Callable[[str], None] = lambda text: None):
+                 mission: Callable[[int, str], Tuple[str, str, List[str]]],
+                 log: Callable[[str], None] = lambda text: None, nonce: str = ''):
         params.validate()
         self.p = params
         self.mission = mission
         self.log = log
+        self.nonce = nonce
         self.start = start
         self.state = BOOT
         self.reason = ''
@@ -166,7 +174,12 @@ class WatchdogCore:
         self._yielded = False
         self._tf_since: Optional[float] = None
         self._announce = False
-        self._may_be_loaded = False   # a command went out that mission_manager may still hold
+        # a command went out that mission_manager may still hold; a restarted watchdog cannot
+        # know what its predecessor left there
+        self._may_be_loaded = True
+        self._startup_clear = True        # the clear_tasks of the start has not gone out yet
+        self._clears_left = 0             # repeats of a clear_tasks still to send
+        self._next_clear = 0.0
         self._unavailable_logged = False
         self.changes = 0            # bumped on every change a state message should carry
 
@@ -193,8 +206,8 @@ class WatchdogCore:
         if fresh:
             active = any(buttons)               # axes have no rest value to compare with yet
         else:
-            active = is_active(axes, buttons, self._baseline[0], self._baseline[1],
-                               self._previous[0], self._previous[1], self.p.activity_threshold)
+            active = is_active(axes, buttons, self._baseline[0], self._previous[0],
+                               self._previous[1], self.p.activity_threshold)
         self._previous = (axes, buttons)
         if not active:
             if self.state == BOOT:
@@ -204,9 +217,12 @@ class WatchdogCore:
         self._yielded = False
         if self.state == AUTONOMOUS:
             return self._take_over(now)
+        actions: List[Action] = []
         if self.state == BOOT:
             self._to(MANUAL, '', now)
-        return []
+            if self._startup_clear:
+                actions = self._clear(now)
+        return actions
 
     def on_heartbeat(self, now: float, mode: str) -> List[Action]:
         """Take the helm's reported piloting mode."""
@@ -273,19 +289,25 @@ class WatchdogCore:
             if not self.pad_present(now):
                 self._to(AUTONOMOUS, REASON_PAD_MISSING, now)
                 self.log('the pad stopped sending: the boat surveys by itself')
-            elif now - (self._last_activity or now) >= self.p.idle_timeout:
+            elif now - (now if self._last_activity is None else self._last_activity) \
+                    >= self.p.idle_timeout:
                 self._to(AUTONOMOUS, REASON_IDLE, now)
                 self.log('nobody touched the pad for %g s: the boat surveys by itself'
                          % self.p.idle_timeout)
+        actions += self._clear_tick(now)
+        sent: List[Action] = []
+        if self.state == AUTONOMOUS:
+            sent = self._autonomous_tick(now)
         if self._announce:
             # a decision of the clock is told to the helm at once, not after the reconcile wait
-            # (unless the helm is in standby: that is respected until the pad is touched)
+            # (unless the helm is in standby: that is respected until the pad is touched). The
+            # section is planned first, so an area that cannot be split is never announced as
+            # autonomous.
             self._announce = False
             if not self._yielded and self.desired_mode() is not None:
                 self._last_publish = now
                 actions.append(('mode', self.desired_mode()))
-        if self.state == AUTONOMOUS:
-            actions += self._autonomous_tick(now)
+        actions += sent
         actions += self._reconcile(now)
         unavailable = self.navigator_unavailable(now)
         if unavailable != self._unavailable_logged:
@@ -350,6 +372,7 @@ class WatchdogCore:
             self._mission_state(NOT_LOADED if self.has_area else NO_AREA)
             self._mismatch_since = None
             self._announce = not self._yielded
+            self._clears_left = 0       # no repeat may clear a section the boat is about to send
 
     def _mission_state(self, state: str) -> None:
         if state != self.mission_state:
@@ -362,9 +385,7 @@ class WatchdogCore:
         """Hand back after a touch while autonomous: manual first, then stop the survey."""
         actions: List[Action] = [('mode', 'manual')]
         if self._may_be_loaded or self.mission_state in (LOADING, RUNNING, COMPLETE):
-            actions.append(('command', 'clear_tasks'))
-            self._last_command = now
-            self._may_be_loaded = False
+            actions += self._clear(now)
         self._to(MANUAL, '', now)
         self._mission_state(NOT_LOADED)
         self._reset_mission()
@@ -372,6 +393,30 @@ class WatchdogCore:
         self._last_publish = now
         self.log('the pad was touched: the boat is back in manual and the survey is cleared')
         return actions
+
+    def _clear(self, now: float) -> List[Action]:
+        """Return a ``clear_tasks`` and schedule its repeats (the topic is volatile)."""
+        self._last_command = now
+        self._may_be_loaded = False
+        self._startup_clear = False
+        self._clears_left = CLEAR_REPEATS
+        self._next_clear = now + self.p.command_gap
+        return [('command', 'clear_tasks')]
+
+    def _clear_tick(self, now: float) -> List[Action]:
+        """Send the start-up clear, and the repeats of a clear, while the boat is not surveying."""
+        if self.state == AUTONOMOUS:
+            return []
+        if self._startup_clear and now - self.start >= min(
+                STARTUP_CLEAR_DELAY, self.p.missing_pad_grace / 2.0):
+            self.log('clearing what an earlier instance may have left in mission_manager')
+            return self._clear(now)
+        if self._clears_left > 0 and now >= self._next_clear:
+            self._clears_left -= 1
+            self._next_clear = now + self.p.command_gap
+            self._last_command = now
+            return [('command', 'clear_tasks')]
+        return []
 
     def _reset_mission(self) -> None:
         self._line_ids, self._set_id = [], ''
@@ -387,7 +432,8 @@ class WatchdogCore:
         if self.mission_state == COMPLETE:
             delay = self.p.failed_repeat_delay if self._failed and \
                 len(self._failed) >= len(self._line_ids) else self.p.repeat_delay
-            if self.p.on_complete == 'repeat' and now - (self._completed_at or now) >= delay:
+            completed = now if self._completed_at is None else self._completed_at
+            if self.p.on_complete == 'repeat' and now - completed >= delay:
                 self.log('repeating the section')
                 self._mission_state(NOT_LOADED)
             return actions
@@ -408,12 +454,14 @@ class WatchdogCore:
         if now - self._last_command < self.p.command_gap:
             return []
         try:
-            command, set_id, lines = self.mission(self.generation + 1)
+            command, set_id, lines = self.mission(self.generation + 1, self.nonce)
         except ValueError as error:
             self.area_error = str(error)
             self._mission_state(NO_AREA)
+            self._reset_mission()
             self.log('cannot plan the section: %s' % error)
-            return []
+            # an earlier section may still be loaded: the new area replaced it
+            return self._clear(now) if self._may_be_loaded else []
         self.generation += 1
         self._set_id, self._line_ids = set_id, list(lines)
         self._done, self._failed = set(), set()
