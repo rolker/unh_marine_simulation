@@ -494,7 +494,7 @@ def test_the_first_takeover_after_a_start_sends_clear_tasks_even_in_boot():
     # and only once at start-up: later quiet ticks add only the scheduled repeats
     b.take()
     b.run(10.0)
-    assert [a for a in b.take()].count(('command', 'clear_tasks')) == wc.CLEAR_REPEATS
+    assert b.take().count(('command', 'clear_tasks')) == wc.CLEAR_REPEATS
 
 
 def test_a_new_instance_clears_a_predecessors_mission_shortly_after_it_starts():
