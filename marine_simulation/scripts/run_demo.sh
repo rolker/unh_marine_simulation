@@ -24,6 +24,16 @@
 # before the script ends, so a terminal that closes with it (the desktop shortcut
 # install_demo_shortcut.sh makes) keeps the last message readable.
 #
+# Discovery: every demo process finds the others through one Fast DDS discovery server (a group
+# the manager starts first; ROS_DISCOVERY_SERVER is for this demo's processes only, port 11811 +
+# the ROS domain) instead of announcing itself to every other process on the computer, which is
+# slow at four boats with the navigation stack (issue 116). --no-discovery-server (or
+# DEMO_DISCOVERY_SERVER=0) goes back to plain peer-to-peer discovery. The ros2 command line of
+# another terminal then needs, to see the whole graph:
+#   export ROS_DOMAIN_ID=<the domain above> ROS_DISCOVERY_SERVER=127.0.0.1:<11811 + domain> \
+#          ROS_SUPER_CLIENT=TRUE; ros2 daemon stop
+# (run_demo.sh prints these lines with the numbers filled in).
+#
 # Copy-and-edit examples of the yaml files are installed in share/marine_simulation/config
 # (demo_joysticks.yaml for labelled ports, demo_joysticks_plug_order.yaml for any pads
 # in plug order, demo_layout.yaml).
@@ -113,6 +123,8 @@ expand_tilde() { # expand_tilde <path>: a leading ~ is this user's home
 # on what an option means; this only decides which files must exist.
 passed=()
 no_joysticks=1 no_layout=1 want_help=1
+discovery_server=0
+[ "${DEMO_DISCOVERY_SERVER:-1}" = 0 ] && discovery_server=1
 profile=
 given_joysticks= given_layout= given_target=
 while [ $# -gt 0 ]; do
@@ -137,6 +149,8 @@ while [ $# -gt 0 ]; do
     esac
     case "$arg" in
         --hold) continue ;; # this script's own, read above
+        --no-discovery-server) discovery_server=1 ;;
+        --discovery-server) discovery_server=0 ;;
         --no-joysticks) no_joysticks=0 ;;
         --no-layout) no_layout=0 ;;
         -h | --help) want_help=0 ;;
@@ -198,6 +212,15 @@ if [ "$want_help" -ne 0 ]; then
     else
         echo "Starting the demo on ROS domain $ROS_DOMAIN_ID (profile $profile). To stop everything, press Ctrl-C."
     fi
+    if [ "$discovery_server" -eq 0 ]; then
+        echo "Discovery goes through a Fast DDS discovery server on 127.0.0.1:$((11811 + ROS_DOMAIN_ID)). To use the ros2 command line on this demo from another terminal: export ROS_DOMAIN_ID=$ROS_DOMAIN_ID ROS_DISCOVERY_SERVER=127.0.0.1:$((11811 + ROS_DOMAIN_ID)) ROS_SUPER_CLIENT=TRUE; ros2 daemon stop"
+    fi
+fi
+
+# the switch is the manager's own option; the manager sets ROS_DISCOVERY_SERVER for the demo's
+# processes only, so nothing here is exported to the caller's shell
+if [ "$discovery_server" -eq 0 ] && [ "$want_help" -ne 0 ]; then
+    args+=(--discovery-server)
 fi
 
 manager=$(manager_tool) || finish 1

@@ -94,6 +94,7 @@ import time
 
 import check_multi_boat_graph as graph
 from marine_simulation import demo_nav
+from marine_simulation import demo_support
 import yaml
 
 # Node names (relative to the boat's namespace) every boat must have.
@@ -167,7 +168,8 @@ def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> li
     return problems
 
 
-def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> list:
+def launch_command(boats, roster, joysticks, extra, demo=False, nav=False,
+                   discovery_server=False) -> list:
     """Return the command line for ``--start-launch`` (the boats launch, or the manager)."""
     if demo:
         # No display here: CAMP and the window placement are the owner's rehearsal.
@@ -176,6 +178,8 @@ def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> li
             cmd.append('--no-joysticks')
         if nav:
             cmd.append('--nav')
+        if discovery_server:
+            cmd.append('--discovery-server')
         if boats:
             cmd += ['--boats', ','.join(boats)]
         if roster:
@@ -674,7 +678,8 @@ class SelfTest:
 
 def start_launch(cmd):
     """Start what the self-test runs against (a launch or the manager) in its own process group."""
-    return subprocess.Popen(cmd, start_new_session=True)
+    # the self-test's own participant is a super client; what it starts is not
+    return subprocess.Popen(cmd, start_new_session=True, env=graph.without_super_client())
 
 
 def stop_launch(proc):
@@ -735,6 +740,11 @@ def main(argv=None):
     parser.add_argument('--nav', action='store_true',
                         help='the boats run the navigation stack (the launch is started with '
                              'it): also check nav2 is active and one boat drives a mission')
+    parser.add_argument('--discovery-server', action='store_true',
+                        help='the demo runs through a Fast DDS discovery server (issue 116): '
+                             'start the manager with --discovery-server (with --demo) and see '
+                             'the graph as a super client; ROS_DISCOVERY_SERVER already set '
+                             'in the environment turns the super client on too')
     parser.add_argument('--nav-seconds', type=float, default=240.0,
                         help='how long the mission boat has to reach the end of its line')
     parser.add_argument('--startup-timeout', type=float, default=None,
@@ -763,6 +773,18 @@ def main(argv=None):
                      '--boats, --roster or --joysticks of the self-test instead'
                      % ', '.join(clashes))
 
+    if args.discovery_server:
+        if args.start_launch and not args.demo:
+            parser.error('--discovery-server needs --demo with --start-launch: only the '
+                         'manager starts the server')
+        try:
+            os.environ[demo_support.DISCOVERY_SERVER_VARIABLE] = (
+                demo_support.discovery_server_address(demo_support.domain_id(os.environ)))
+        except ValueError as error:
+            parser.error(str(error))
+    # before the participant exists; the launch is started without it (start_launch)
+    graph.enable_super_client()
+
     import rclpy
     from rclpy.signals import SignalHandlerOptions
     # rclpy's own handlers shut the context down under us, and the stop-the-launch
@@ -780,7 +802,7 @@ def main(argv=None):
             if args.start_launch:
                 proc = start_launch(launch_command(
                     boats if args.boats else None, args.roster, args.joysticks,
-                    args.launch_args, args.demo, args.nav))
+                    args.launch_args, args.demo, args.nav, args.discovery_server))
                 test.launch = proc
             try:
                 test.wait_for_nodes(args.startup_timeout)

@@ -89,3 +89,30 @@ def test_root_namespace_publishers_are_ignored_by_design():
     pubs = {'/asv_sim/environment/tide_level': [('asv_sim', '/')],
             '/diagnostics': [('joy_node', '/')]}
     assert graph.cross_boat_publishers(pubs, BOATS) == []
+
+
+# -- Fast DDS discovery server (issue 116) -------------------------------------------------
+
+def test_through_a_server_the_checker_becomes_a_super_client():
+    environ = {'ROS_DISCOVERY_SERVER': '127.0.0.1:11853'}
+    assert graph.enable_super_client(environ) is True
+    assert environ['ROS_SUPER_CLIENT'] == 'TRUE'
+
+
+def test_without_a_server_nothing_is_set():
+    environ = {}
+    assert graph.enable_super_client(environ) is False
+    assert environ == {}
+
+
+def test_a_super_client_setting_the_operator_made_is_kept():
+    environ = {'ROS_DISCOVERY_SERVER': '127.0.0.1:11853', 'ROS_SUPER_CLIENT': 'FALSE'}
+    graph.enable_super_client(environ)
+    assert environ['ROS_SUPER_CLIENT'] == 'FALSE'
+
+
+def test_what_the_checker_starts_is_never_a_super_client():
+    environ = {'ROS_DISCOVERY_SERVER': 'x:1', 'ROS_SUPER_CLIENT': 'TRUE', 'PATH': '/bin'}
+    assert graph.without_super_client(environ) == {'ROS_DISCOVERY_SERVER': 'x:1',
+                                                   'PATH': '/bin'}
+    assert environ['ROS_SUPER_CLIENT'] == 'TRUE'        # a copy: the caller's own is untouched

@@ -69,7 +69,9 @@ def _run(machine, *args, path=True, domain=None, **extra_env):
     env = {'PATH': '/usr/bin:/bin', 'HOME': str(machine), 'RECORD': str(machine / 'record'),
            'DEMO_CONFIG_DIR': str(machine / 'config'),
            'DEMO_PLACE_WINDOWS': str(machine / 'place_windows.py'),
-           'DEMO_MANAGER': str(machine / 'demo_manager.py')}
+           'DEMO_MANAGER': str(machine / 'demo_manager.py'),
+           # the other tests read the exact arguments; the server has its own tests below
+           'DEMO_DISCOVERY_SERVER': '0'}
     if path:
         env['PATH'] = str(machine / 'bin') + ':' + env['PATH']
     if domain:
@@ -430,3 +432,41 @@ def _env(machine, **extra):
            'DEMO_MANAGER': str(machine / 'demo_manager.py')}
     env.update(extra)
     return env
+
+
+# -- the Fast DDS discovery server (issue 116) -------------------------------------------------
+
+def test_the_discovery_server_is_on_by_default_and_the_cli_recipe_is_printed(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine, DEMO_DISCOVERY_SERVER='')    # unset: the script's default
+    assert result.returncode == 0, result.stderr
+    assert '--discovery-server' in _record(machine)
+    # port 11811 + the demo domain (42), with the super client the ros2 command line needs
+    assert 'ROS_DISCOVERY_SERVER=127.0.0.1:11853' in result.stdout
+    assert 'ROS_SUPER_CLIENT=TRUE' in result.stdout and 'ROS_DOMAIN_ID=42' in result.stdout
+
+
+def test_the_port_follows_the_demo_domain(machine):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    result = _run(machine, DEMO_ROS_DOMAIN_ID='55', DEMO_DISCOVERY_SERVER='')
+    assert 'ROS_DISCOVERY_SERVER=127.0.0.1:11866' in result.stdout
+
+
+@pytest.mark.parametrize('how', ['option', 'environment'])
+def test_the_server_can_be_turned_off(machine, how):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    if how == 'option':
+        result = _run(machine, '--no-discovery-server', DEMO_DISCOVERY_SERVER='')
+    else:
+        result = _run(machine, DEMO_DISCOVERY_SERVER='0')
+    assert result.returncode == 0, result.stderr
+    args = _record(machine)
+    assert '--discovery-server' not in args
+    assert 'ROS_DISCOVERY_SERVER' not in result.stdout
+
+
+def test_nothing_about_the_server_is_exported_to_the_callers_shell(machine):
+    """run_demo.sh leaves the discovery variables to the manager, so none can leak out of it."""
+    text = SCRIPT.read_text()
+    assert 'export ROS_DISCOVERY_SERVER' not in text.replace('#   export', '')
+    assert 'ROS_SUPER_CLIENT=TRUE' in text

@@ -205,6 +205,28 @@ def run_checks(sampler: GraphSampler, boats: Sequence[str], tf_seconds: float) -
     return problems
 
 
+def enable_super_client(environ=None) -> bool:
+    """
+    Make this process's own participant a Fast DDS super client when a discovery server is used.
+
+    A plain client of a discovery server only learns of the participants it shares topics
+    with, so the graph checks (and ``ros2 node list``) would miss most of the demo. Call
+    before ``rclpy.init`` and for the checking process only, never for the processes it
+    starts (see ``without_super_client``). Returns whether the variable was set.
+    """
+    environ = os.environ if environ is None else environ
+    if not environ.get('ROS_DISCOVERY_SERVER'):
+        return False
+    environ.setdefault('ROS_SUPER_CLIENT', 'TRUE')
+    return True
+
+
+def without_super_client(environ=None) -> Dict[str, str]:
+    """Return a copy of ``environ`` for a process this one starts: never a super client."""
+    environ = os.environ if environ is None else environ
+    return {k: v for k, v in environ.items() if k != 'ROS_SUPER_CLIENT'}
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.split('\n')[0])
     parser.add_argument('--roster', help='demo roster file (default: the installed one)')
@@ -213,6 +235,7 @@ def main(argv=None):
                         help='how long to sample /tf (default 5)')
     args = parser.parse_args(argv)
 
+    enable_super_client()
     import rclpy
     boats = (args.boats.split(',') if args.boats
              else boats_from_roster(args.roster or default_roster_path()))

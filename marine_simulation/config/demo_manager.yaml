@@ -20,6 +20,22 @@ manager:
     settle: 1.0
 
 groups:
+  discovery:
+    description: the Fast DDS discovery server (issue 116; only with --discovery-server)
+    # Discovery through one server process instead of all-to-all between about a hundred
+    # participants. Present in every profile; demo_manager.py takes it out again (and out of
+    # the requires of boats) when --discovery-server is not given, so plain peer-to-peer
+    # discovery stays the default.
+    launch: {package: marine_simulation, file: demo_discovery_server_launch.py}
+    arguments:
+      port: {type: string, default: '${discovery_port}'}
+    follows: [camp]
+    # READY once the process is running: a server that cannot bind exits at once (FAILED,
+    # and the boats then wait, BLOCKED, naming this group). A server that dies later takes
+    # every participant's discovery with it, so it is brought back; the clients announce
+    # themselves again.
+    restart: on-failure
+
   boats:
     description: the boats, their sonars and CUBE chains (demo_boats_launch.py)
     launch: {package: marine_simulation, file: demo_boats_launch.py}
@@ -31,6 +47,7 @@ groups:
       joystick_config: {type: string, default: '${joystick_config}'}
       # The manager is the one convergence loop; the launch's own guard stays off.
       lifecycle_guard: {type: bool, default: false}
+    requires: [discovery]
     follows: [camp]
     lifecycle:
       match: '^/(${boats_regex})/'
@@ -114,8 +131,8 @@ groups:
 
 profiles:
   # everything the event needs
-  demo: [boats, camp, scorer, target_area, layout, rqt]
+  demo: [discovery, boats, camp, scorer, target_area, layout, rqt]
   # the boats and the scorer without a display (live checks, a head-less laptop)
-  headless: [boats, scorer, target_area]
+  headless: [discovery, boats, scorer, target_area]
   # only the boats (what demo_boats_selftest.py drives)
-  boats: [boats]
+  boats: [discovery, boats]

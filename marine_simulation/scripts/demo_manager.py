@@ -114,13 +114,46 @@ def boats_launch_arguments(spec, items: Sequence[str], declared: Sequence[str] =
         items, declared, list(spec.groups['boats'].arguments))
 
 
+def apply_discovery_server(spec, enabled: bool) -> None:
+    """
+    Keep the ``discovery`` group only when the Fast DDS discovery server is wanted.
+
+    The configuration lists the group in every profile and makes ``boats`` require it; off
+    (the default), both are taken out again, so nothing starts and nothing waits for it.
+    """
+    if enabled:
+        return
+    for name, members in spec.profiles.items():
+        spec.profiles[name] = [g for g in members if g != 'discovery']
+    spec.groups.pop('discovery', None)
+    for group in spec.groups.values():
+        group.requires = [g for g in group.requires if g != 'discovery']
+        group.follows = [g for g in group.follows if g != 'discovery']
+
+
+def discovery_environment(enabled: bool, environ) -> Dict[str, str]:
+    """
+    Return the ROS environment of this demo's discovery: ``{}`` for plain peer-to-peer.
+
+    With ``enabled`` it is ``ROS_DISCOVERY_SERVER`` for this ROS domain's server (every group
+    inherits it). The manager's own participant is a super client whenever the demo goes
+    through a server (``ROS_SUPER_CLIENT``), since it must see every boat's nodes; that
+    variable is applied to the manager's node only (``run_manager(node_environment=...)``).
+    """
+    if not enabled:
+        return {}
+    return {demo_support.DISCOVERY_SERVER_VARIABLE: demo_support.discovery_server_address(
+        demo_support.domain_id(environ))}
+
+
 def substitutions(names: Sequence[str], boats_argument: str, enable_joysticks: bool,
                   scorer_params: str, roster_file: str, joystick_config: str,
                   layout_config: str, target_file: str,
                   camp_fresh: bool = False, rqt_fresh: bool = False,
-                  enable_nav: bool = False) -> Dict[str, str]:
+                  enable_nav: bool = False, discovery_port: int = 0) -> Dict[str, str]:
     """Return the values for the ``${placeholders}`` of ``demo_manager.yaml``."""
     return {
+        'discovery_port': str(discovery_port),
         'boats': boats_argument,
         'boats_regex': boats_regex(names),
         'boats_expect': str(demo_nav.lifecycle_nodes_per_boat(
@@ -228,6 +261,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--nav', action=argparse.BooleanOptionalAction, default=False,
                         help='run the navigation stack on every boat (mission_manager and the '
                              'real ben_project11 nav2 bring-up); off unless given')
+    parser.add_argument('--discovery-server', action=argparse.BooleanOptionalAction,
+                        default=False,
+                        help='discover through one Fast DDS discovery server (the first group '
+                             'of the profile, ROS_DISCOVERY_SERVER set for every group, port '
+                             '11811 + the ROS domain) instead of peer to peer between every '
+                             'process; off unless given. The ros2 command line then needs '
+                             'ROS_SUPER_CLIENT=TRUE to see the whole graph')
     parser.add_argument('--joysticks', type=non_empty, metavar='FILE',
                         help="this computer's gamepad bindings (default: the installed example)")
     layout = parser.add_mutually_exclusive_group()
@@ -273,6 +313,13 @@ def main(argv: List[str] = None) -> int:
     target = os.path.abspath(os.path.expanduser(
         args.target or os.path.join(share, 'config', 'demo_target_polygon_camp.json')))
     try:
+        discovery_env = discovery_environment(args.discovery_server, os.environ)
+        discovery_port = demo_support.discovery_server_port(
+            demo_support.domain_id(os.environ)) if args.discovery_server else 0
+    except ValueError as error:
+        print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
+        return 2
+    try:
         demo_support.acquire_demo_lock(demo_support.state_dir())
     except (ValueError, OSError) as error:
         print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
@@ -293,10 +340,11 @@ def main(argv: List[str] = None) -> int:
                 args.config or os.path.join(share, 'config', 'demo_manager.yaml'),
                 substitutions(names, args.boats, not args.no_joysticks, scorer_path,
                               roster_file, joysticks, layout, target, args.camp_fresh,
-                              args.rqt_fresh, args.nav))
+                              args.rqt_fresh, args.nav, discovery_port))
         except ConfigError as error:
             print('configuration error:\n%s' % error, file=sys.stderr)
             return 2
+        apply_discovery_server(spec, args.discovery_server)
         try:
             extra = boats_launch_arguments(spec, args.launch_args)
         except ValueError as error:
@@ -316,10 +364,16 @@ def main(argv: List[str] = None) -> int:
         try:
             preflight(spec.profiles[spec.default_profile], not args.no_joysticks, joysticks,
                       layout, target)
+            if 'discovery' in spec.profiles[spec.default_profile]:
+                demo_support.check_discovery_port_free(discovery_port)
         except ValueError as error:
             print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
             return 2
-        return run_manager(spec)
+        # every group inherits the server; only the manager's own node is a super client
+        os.environ.update(discovery_env)
+        node_environment = ({demo_support.SUPER_CLIENT_VARIABLE: 'TRUE'}
+                            if os.environ.get(demo_support.DISCOVERY_SERVER_VARIABLE) else None)
+        return run_manager(spec, node_environment)
     finally:
         shutil.rmtree(state_dir, ignore_errors=True)
 
