@@ -70,8 +70,7 @@ def _run(machine, *args, path=True, domain=None, **extra_env):
            'DEMO_CONFIG_DIR': str(machine / 'config'),
            'DEMO_PLACE_WINDOWS': str(machine / 'place_windows.py'),
            'DEMO_MANAGER': str(machine / 'demo_manager.py'),
-           # the other tests read the exact arguments; the server has its own tests below
-           'DEMO_DISCOVERY_SERVER': '0'}
+           'DEMO_DISCOVERY_SERVER': ''}
     if path:
         env['PATH'] = str(machine / 'bin') + ':' + env['PATH']
     if domain:
@@ -436,9 +435,21 @@ def _env(machine, **extra):
 
 # -- the Fast DDS discovery server (issue 116) -------------------------------------------------
 
-def test_the_discovery_server_is_on_by_default_and_the_cli_recipe_is_printed(machine):
+def test_the_discovery_server_is_off_by_default(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
-    result = _run(machine, DEMO_DISCOVERY_SERVER='')    # unset: the script's default
+    result = _run(machine)
+    assert result.returncode == 0, result.stderr
+    assert '--discovery-server' not in _record(machine)
+    assert 'ROS_DISCOVERY_SERVER' not in result.stdout
+
+
+@pytest.mark.parametrize('how', ['option', 'environment'])
+def test_the_server_can_be_turned_on_and_the_cli_recipe_is_printed(machine, how):
+    _files(machine, 'joysticks.yaml', 'layout.yaml')
+    if how == 'option':
+        result = _run(machine, '--discovery-server')
+    else:
+        result = _run(machine, DEMO_DISCOVERY_SERVER='1')
     assert result.returncode == 0, result.stderr
     assert '--discovery-server' in _record(machine)
     # port 11811 + the demo domain (42), with the super client the ros2 command line needs
@@ -448,20 +459,14 @@ def test_the_discovery_server_is_on_by_default_and_the_cli_recipe_is_printed(mac
 
 def test_the_port_follows_the_demo_domain(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
-    result = _run(machine, DEMO_ROS_DOMAIN_ID='55', DEMO_DISCOVERY_SERVER='')
+    result = _run(machine, '--discovery-server', DEMO_ROS_DOMAIN_ID='55')
     assert 'ROS_DISCOVERY_SERVER=127.0.0.1:11866' in result.stdout
 
 
-@pytest.mark.parametrize('how', ['option', 'environment'])
-def test_the_server_can_be_turned_off(machine, how):
+def test_no_discovery_server_wins_over_the_environment_default(machine):
     _files(machine, 'joysticks.yaml', 'layout.yaml')
-    if how == 'option':
-        result = _run(machine, '--no-discovery-server', DEMO_DISCOVERY_SERVER='')
-    else:
-        result = _run(machine, DEMO_DISCOVERY_SERVER='0')
+    result = _run(machine, '--discovery-server', '--no-discovery-server')
     assert result.returncode == 0, result.stderr
-    args = _record(machine)
-    assert '--discovery-server' not in args
     assert 'ROS_DISCOVERY_SERVER' not in result.stdout
 
 
