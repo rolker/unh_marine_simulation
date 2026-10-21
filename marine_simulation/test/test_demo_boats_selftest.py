@@ -294,6 +294,32 @@ def test_scorer_centre_is_the_mean_start_of_the_chosen_boats(tmp_path):
     assert selftest.scorer_centre(str(roster), ['a', 'b']) == (44.0, -71.0)
 
 
+# -- Fast DDS discovery server (issue 116) -------------------------------------------------
+
+def test_the_manager_is_started_with_the_discovery_server_only_when_asked():
+    on = selftest.launch_command(None, None, False, [], demo=True, discovery_server=True)
+    assert '--discovery-server' in on
+    assert '--discovery-server' not in selftest.launch_command(None, None, False, [], demo=True)
+
+
+def test_the_launch_the_selftest_starts_is_not_a_super_client(monkeypatch):
+    seen = {}
+    monkeypatch.setenv('ROS_SUPER_CLIENT', 'TRUE')
+    monkeypatch.setenv('ROS_DISCOVERY_SERVER', '127.0.0.1:11853')
+    monkeypatch.setattr(selftest.subprocess, 'Popen',
+                        lambda cmd, **kw: seen.update(kw) or object())
+    selftest.start_launch(['true'])
+    assert 'ROS_SUPER_CLIENT' not in seen['env']
+    assert seen['env']['ROS_DISCOVERY_SERVER'] == '127.0.0.1:11853'
+    assert os.environ['ROS_SUPER_CLIENT'] == 'TRUE'        # the self-test's own participant
+
+
+def test_the_server_switch_needs_the_manager_with_start_launch(capsys):
+    with pytest.raises(SystemExit):
+        selftest.main(['--discovery-server', '--start-launch'])
+    assert '--discovery-server needs --demo' in capsys.readouterr().err
+
+
 class FakePublisher:
 
     def __init__(self):

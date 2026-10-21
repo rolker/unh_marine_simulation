@@ -503,6 +503,7 @@ The venue is Portsmouth Harbour. The simulated multibeams sample the demo truth 
 | `joystick_config` | `config/demo_joysticks.yaml` | Joystick device links; copy and edit per host. |
 | `enable_joysticks` | `true` | Start a `joy_linux` driver per boat. `joy_to_helm` runs either way, so `sensor_msgs/Joy` on `<boat>/joy` drives the boat. |
 | `enable_nav` | `false` | Run the navigation stack on every boat: `mission_manager` and the real `ben_project11` nav2 bring-up. See [The navigation stack](#the-navigation-stack). |
+| `nav_composition` | `true` | With `enable_nav`: compose each boat's nav2 servers into one container (`demo_nav2_composed_launch.py`) instead of one process per server (`ben_project11`'s bring-up with `use_composition: False`, as on the boat). |
 | `charted_objects` | `true` | The piers, pontoons, piles, buoys, beacons, rocks and wrecks of the ENC cells installed with `asv_sim` (`share/asv_sim/enc`) block the boats; `false` leaves them out. |
 | `tide_speed_factor` | `10` | Tide speed multiplier (10 = about a 75 minute cycle, 0 = a frozen tide). |
 | `current_speed` | `0.0` | Water current in m/s. `asv_sim` itself defaults to 1.0 m/s toward 090, which drifts an undriven boat east at about 2 knots. |
@@ -671,8 +672,11 @@ real boats run, from the real launch files:
 - `mission_manager` (`mission_manager_launch.py`, `map_frame` = the boat's own `<boat>/map`),
   one more lifecycle node the manager and the guard own (ten per boat), inside the boat's
   namespace;
-- `ben_project11/launch/nav2_bringup_launch.py` with the boat's namespace (`use_namespace`,
-  no composition, no respawn): the ten nav2 servers `controller_server` (the
+- the boat's nav2 stack, in the boat's namespace and without respawn: by default composed into
+  one container per boat (`nav_composition:=true`, see
+  [Discovery server and nav2 composition](#discovery-server-and-nav2-composition-issue-116)),
+  with `nav_composition:=false` the real `ben_project11/launch/nav2_bringup_launch.py`
+  (`use_namespace`, `use_composition: False`). Either way the same ten nav2 servers `controller_server` (the
   `CrabbingPathFollower`), `smoother_server`, `planner_server`, `behavior_server` (the hover
   plugin), `manda_coverage`, `velocity_smoother`, `collision_monitor`, `bt_task_navigator`,
   `waypoint_follower`, `docking_server`, the costmap nodes `local_costmap/local_costmap` and
@@ -703,7 +707,7 @@ boat's own map frame, so the per-boat map origins need no change.
 nav2's lifecycle nodes are brought up by nav2's own lifecycle manager; the launch manager's `boats`
 group (`exclude` in `demo_manager.yaml`) and the guard (`--exclude`) leave them alone, so each node
 has one writer. nav2 takes its whole stack down when one of its nodes dies, and the boats' nodes
-are not respawned, so a nav2 failure shows as a dead boat navigator, not as a restart. Two things nothing
+are not respawned (composed, a crash of any server takes the container, lifecycle manager included, so the boat's whole nav2 is gone at once; `nav_composition:=false` is the way back), so a nav2 failure shows as a dead boat navigator, not as a restart. Two things nothing
 checks outside the self-test: the manager's `READY` for the boats counts `mission_manager` and
 not nav2 (which it does not own), so a boat whose nav2 bring-up failed still shows `READY`; and
 the launch's own guard (without the manager) exits once the nodes are up, so a `mission_manager`
@@ -824,6 +828,61 @@ boat could run a goal (`Address already in use`). Each boat's nav2 processes are
 with `libdemo_zmq_ports.so` preloaded (`src/demo_zmq_ports.c`) and `DEMO_ZMQ_PORT_OFFSET` set to ten
 times the boat's place among the boats that run, which moves their ZeroMQ binds; a navigator that
 takes the port as a parameter makes it unnecessary.
+
+### Discovery server and nav2 composition (issue 116)
+
+At four boats with nav the demo is about 100 processes, and in Jazzy each process is a Fast DDS
+participant that discovers every other one. Two changes try to cut that cost.
+
+**nav2 composition (on by default with nav).** `launch/demo_nav2_composed_launch.py` loads the nine
+nav2 servers and nav2's lifecycle manager into one `component_container_isolated` per boat
+(`/<boat>/nav2_container`); `manda_coverage` is not a registered component and stays its own
+process, so a boat's eleven nav2 processes become two. The node names, namespaces, parameters,
+remappings and the lifecycle manager's node list are the ones of the non-composed bring-up (a test
+compares `demo_nav.COMPOSED_NODES` with `ben_project11`'s `navigation_launch.py`). `ben_project11`'s
+own composed branch is not used: it composes a second, unconfigured `bt_navigator`, leaves out
+`manda_coverage` and remaps `collision_monitor` differently. The composed stack is included in the
+same per-boat group as the non-composed one, so `bond_timeout` and the `LD_PRELOAD` /
+`DEMO_ZMQ_PORT_OFFSET` ZeroMQ port shim apply to the container process (a test pins the group scope; no goal was driven live, so the shim in a container is not observed yet). The real boat's launch is
+untouched. `nav_composition:=false` (a `name:=value` argument of `demo_manager.py`) gives the old
+bring-up.
+
+**Fast DDS discovery server (opt in, off by default).** `demo_manager.py --discovery-server`
+(`run_demo.sh --discovery-server` or `DEMO_DISCOVERY_SERVER=1`) starts `fastdds discovery` as the
+manager's first group (`discovery`, UDP port 11811 plus the ROS domain id, this host only), exports
+`ROS_DISCOVERY_SERVER=127.0.0.1:<port>` to the demo's processes only and makes the manager's own node
+a super client (`ROS_SUPER_CLIENT=TRUE`, set while its node is created and removed before any group
+starts). A taken port stops the demo with the reason. The `ros2` command line, `ros2 node list`, the
+self-test (`--discovery-server`, or `ROS_DISCOVERY_SERVER` in its environment) and
+`check_multi_boat_graph.py` only see the whole graph as a super client; in a terminal:
+
+```bash
+export ROS_DOMAIN_ID=<demo domain> ROS_DISCOVERY_SERVER=127.0.0.1:<11811 + domain> ROS_SUPER_CLIENT=TRUE
+ros2 daemon stop        # a daemon started without these still shows the peer to peer graph
+```
+
+**Numbers: single runs on the dev laptop (16 cores), not benchmarks.** Each line is one four-boat
+run with nav through `demo_manager.py --profile headless --no-joysticks --nav` (private domain
+150, four boats, forty nav2 lifecycle nodes polled with `get_state`). The real measurement, with
+repeats, is still to be done on the demo computer (pickerel).
+
+| switches | all 40 nav2 nodes active | processes | CPU (30 s, total) | memory | late joiner sees the latched survey area |
+|---|---|---|---|---|---|
+| composition off, no server | 113 s | 101 | 4.9 cores | 12.0 GB | 37 s (all 134 nodes after 39 s) |
+| composition on, no server | 28 s | 65 | 3.4 cores | 8.3 GB | 2.6 s (all 138 nodes after 3.8 s) |
+| composition off, server | never (see below) | | | | |
+| composition on, server | never (see below) | | | | |
+
+With the discovery server and four boats with nav, no run came up: with composition on and off,
+and with the server on 127.0.0.1 or on all interfaces, nav2's costmaps never got the
+`<boat>/base_link` to `<boat>/map_tide` transform (the controller server could not activate), and
+in two runs lifecycle `change_state` requests got no reply (`/bluefin/helm_manager: configure failed
+5 times: no reply`, `platform_send.py` died on a repeated configure). Making every process a super
+client (`ROS_SUPER_CLIENT=TRUE` for the whole demo) did not help. Four boats without nav through the
+server were fine (the graph check reports no problem; two boats came up in 8 s). The cause was
+not found, so the server is an experiment that stays off; the controller rate per boat was not
+measured (no mission was driven in these runs). These were one run each; they show what happens,
+not by how much.
 
 ### The lifecycle guard
 

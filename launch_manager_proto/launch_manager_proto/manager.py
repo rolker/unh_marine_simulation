@@ -506,14 +506,30 @@ class ManagerNode(Node):
         self._status_pub.publish(message)
 
 
-def run_manager(spec: ManagerSpec) -> int:
-    """Run the manager until every group has stopped or it is interrupted; return an exit code."""
+def run_manager(spec: ManagerSpec, node_environment: Optional[Dict[str, str]] = None) -> int:
+    """
+    Run the manager until every group has stopped or it is interrupted; return an exit code.
+
+    ``node_environment`` is set only while the manager's own rclpy context and node are created
+    and is restored before any group starts, so it shapes the manager's participant (for
+    example ``ROS_SUPER_CLIENT=TRUE``, which reads the whole graph through a Fast DDS
+    discovery server) and never reaches the processes of the groups.
+    """
     service = launch.LaunchService(noninteractive=True)
     runner = LaunchRunner(service)
     service.include_launch_description(runner.base_description())
     # rclpy's own SIGINT handler would replace launch's, and ctrl-c would then stop nothing.
-    rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
-    node = ManagerNode(spec, runner, on_finished=lambda: shutdown_if_running(service))
+    saved = {name: os.environ.get(name) for name in (node_environment or {})}
+    os.environ.update(node_environment or {})
+    try:
+        rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
+        node = ManagerNode(spec, runner, on_finished=lambda: shutdown_if_running(service))
+    finally:
+        for name, value in saved.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
     executor = SingleThreadedExecutor()
     executor.add_node(node)
 

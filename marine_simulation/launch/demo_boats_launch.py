@@ -558,16 +558,20 @@ def boat_actions(
     return GroupAction(actions)
 
 
-def nav_actions(boat: Boat, params_file: str, index: int = 0, shim: str = '') -> GroupAction:
+def nav_actions(boat: Boat, params_file: str, index: int = 0, shim: str = '',
+                composition: bool = False) -> GroupAction:
     """
     Build the nav2 stack of one boat: Ben's real bring-up, in this boat's namespace.
 
     ``nav2_bringup_launch.py`` pushes the namespace itself (``use_namespace``), so this must
     sit outside the boat's own ``PushROSNamespace`` or the nodes would land in
-    ``/<boat>/<boat>``. Composition is off (as on the boat, which also runs with
-    ``use_composition: False``); a node that dies is not respawned, because nav2's lifecycle
-    manager takes the whole stack down on a lost bond and a respawned node would not be
-    brought back up. ``params_file`` is the demo's version of Ben's file
+    ``/<boat>/<boat>``. With ``composition`` (the demo's default, issue 116) the stack comes
+    from ``demo_nav2_composed_launch.py``: one container per boat instead of eleven nav2
+    processes (``ben_project11``'s own composed branch is not the same stack, see that launch
+    file), the same node names, parameters and namespace. Without it, the real bring-up with
+    ``use_composition: False``, as on the boat. A node that dies is not respawned, because
+    nav2's lifecycle manager takes the whole stack down on a lost bond and a respawned node
+    would not be brought back up. ``params_file`` is the demo's version of Ben's file
     (``marine_simulation.demo_nav``). nav2's lifecycle manager reads ``bond_timeout`` from the
     scope it is launched in, so the longer demo value is set here (the platform launch file
     gives it no parameter of its own). The navigator's Groot publisher binds fixed ZeroMQ
@@ -582,15 +586,20 @@ def nav_actions(boat: Boat, params_file: str, index: int = 0, shim: str = '') ->
                 shim, os.environ.get('LD_PRELOAD', ''))),
             SetEnvironmentVariable('DEMO_ZMQ_PORT_OFFSET', str(demo_nav.zmq_port_offset(index))),
         ]
-    return GroupAction(environment + [
-        ScopedSetParameter(name='bond_timeout', value=demo_nav.BOND_TIMEOUT_S),
-        _include('ben_project11', 'launch', 'nav2_bringup_launch.py', launch_arguments={
+    if composition:
+        stack = _include('marine_simulation', 'launch', 'demo_nav2_composed_launch.py',
+                         launch_arguments={'namespace': boat.name, 'params_file': params_file})
+    else:
+        stack = _include('ben_project11', 'launch', 'nav2_bringup_launch.py', launch_arguments={
             'namespace': boat.name,
             'use_namespace': 'true',
             'use_composition': 'False',
             'use_respawn': 'False',
             'params_file': params_file,
-        }),
+        })
+    return GroupAction(environment + [
+        ScopedSetParameter(name='bond_timeout', value=demo_nav.BOND_TIMEOUT_S),
+        stack,
     ])
 
 
@@ -661,6 +670,7 @@ def launch_setup(context, *args, **kwargs):
         return LaunchConfiguration(name).perform(context)
 
     enable_nav = parse_bool(arg('enable_nav'), 'enable_nav')
+    nav_composition = parse_bool(arg('nav_composition'), 'nav_composition')
     enable_watchdog = parse_bool(arg('enable_watchdog'), 'enable_watchdog')
     enable_joysticks = parse_bool(arg('enable_joysticks'), 'enable_joysticks')
     lifecycle_guard = parse_bool(arg('lifecycle_guard'), 'lifecycle_guard')
@@ -703,7 +713,8 @@ def launch_setup(context, *args, **kwargs):
 
     nav_params = None
     if enable_nav:
-        for package in ('mission_manager', 'ben_project11', 'nav2_bringup'):
+        for package in ('mission_manager', 'ben_project11', 'nav2_bringup', 'manda_coverage',
+                        'rclcpp_components'):
             require_package(package, 'it is part of the navigation stack; launch with '
                                      'enable_nav:=false to run the boats without it')
 
@@ -743,7 +754,8 @@ def launch_setup(context, *args, **kwargs):
     actions.extend(boat_actions(b, joysticks.get(b.name), settings, (i, len(boats)))
                    for i, b in enumerate(boats))
     if enable_nav:
-        actions.extend(nav_actions(b, nav_params, i, shim) for i, b in enumerate(boats))
+        actions.extend(nav_actions(b, nav_params, i, shim, nav_composition)
+                       for i, b in enumerate(boats))
     if lifecycle_guard:
         executable = os.path.join(get_package_prefix('launch_manager_proto'), 'lib',
                                   'launch_manager_proto', 'launch_manager_proto')
@@ -776,6 +788,10 @@ def generate_launch_description():
                 'Run the navigation stack per boat: mission_manager and the real ben_project11 '
                 'nav2 bring-up (marine_simulation.demo_nav says how its parameters differ). '
                 'Off by default.'),
+        declare('nav_composition', TextSubstitution(text='true'),
+                'With enable_nav: compose the nav2 servers of each boat into one container '
+                '(demo_nav2_composed_launch.py, issue 116) instead of one process per server '
+                '(the bring-up of ben_project11 with use_composition:=False, as on the boat).'),
         declare('enable_watchdog', TextSubstitution(text='true'),
                 'With enable_nav, run the watchdog of each boat: an idle or pad-less boat '
                 'surveys its own section of the target area. Ignored without enable_nav.'),

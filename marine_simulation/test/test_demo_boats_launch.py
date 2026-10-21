@@ -382,7 +382,8 @@ def test_without_nav_no_boat_gets_mission_manager_or_nav2(tmp_path, no_host_chec
 
 def test_with_nav_every_boat_gets_mission_manager_and_nav2_in_its_own_namespace(
         tmp_path, no_host_checks, nav_state, roster, included):
-    actions = demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    actions = demo.launch_setup(_setup_context(tmp_path, enable_nav='true',
+                                               nav_composition='false'))
     managers = [(p, a) for p, f, a in included if f == 'mission_manager_launch.py']
     navs = [(p, a) for p, f, a in included if f == 'nav2_bringup_launch.py']
     assert [a['map_frame'] for _, a in managers] == ['%s/map' % b.name for b in roster]
@@ -695,7 +696,8 @@ def _setup_context(tmp_path, **overrides):
     grid.write_bytes(b'x')
     values = {
         'boats': '', 'roster_file': str(ROSTER), 'joystick_config': str(JOYSTICKS),
-        'enable_joysticks': 'false', 'enable_nav': 'false', 'tide_speed_factor': '10',
+        'enable_joysticks': 'false', 'enable_nav': 'false', 'nav_composition': 'true',
+        'tide_speed_factor': '10',
         'current_speed': '0.0', 'mbes_grid_file': str(grid), 'cell_size': '1.0',
         'ping_interval': '0.2', 'beam_count': '120', 'lifecycle_guard': 'true',
         'enable_watchdog': 'true', 'idle_timeout': '', 'missing_pad_grace': '',
@@ -1044,3 +1046,63 @@ def test_launch_setup_prints_the_grid_warnings_to_stderr(tmp_path, no_host_check
                         lambda path, boats: ['WARNING boat dry starts on land'])
     demo.launch_setup(_setup_context(tmp_path))
     assert 'WARNING boat dry starts on land' in capsys.readouterr().err
+
+
+# --- nav2 composition (issue 116) ---------------------------------------------------------
+
+def test_composition_is_declared_on_by_default_for_the_demo():
+    description = demo.generate_launch_description()
+    declared = {e.name: e for e in description.entities if hasattr(e, 'default_value')}
+    assert ''.join(t.text for t in declared['nav_composition'].default_value) == 'true'
+
+
+@pytest.mark.parametrize('value', ['ture', '', '2'])
+def test_nav_composition_garbage_is_an_error_not_off(tmp_path, no_host_checks, value):
+    with pytest.raises(ValueError, match='nav_composition'):
+        demo.launch_setup(_setup_context(tmp_path, nav_composition=value))
+
+
+def test_by_default_every_boat_gets_the_composed_nav2_and_never_bens_bringup(
+        tmp_path, no_host_checks, nav_state, roster, included):
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    navs = [(p, f, a) for p, f, a in included
+            if f in ('nav2_bringup_launch.py', 'demo_nav2_composed_launch.py')]
+    assert [(p, f) for p, f, _ in navs] == [
+        ('marine_simulation', 'demo_nav2_composed_launch.py')] * len(roster)
+    assert [a['namespace'] for _, _, a in navs] == [b.name for b in roster]
+    assert all(a['params_file'].startswith(str(nav_state)) for _, _, a in navs)
+
+
+def test_composition_off_is_the_boats_own_noncomposed_bringup(
+        tmp_path, no_host_checks, nav_state, roster, included):
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true', nav_composition='false'))
+    navs = [(p, f, a) for p, f, a in included
+            if f in ('nav2_bringup_launch.py', 'demo_nav2_composed_launch.py')]
+    assert {(p, f) for p, f, _ in navs} == {('ben_project11', 'nav2_bringup_launch.py')}
+    assert {a['use_composition'] for _, _, a in navs} == {'False'}
+
+
+def test_composition_without_nav_changes_nothing(tmp_path, no_host_checks, included):
+    demo.launch_setup(_setup_context(tmp_path, nav_composition='true'))
+    assert not [f for _, f, _ in included if 'nav2' in f]
+
+
+def test_the_composed_nav2_keeps_the_boats_namespace_push_and_bond_timeout_scope(included):
+    """The composed stack is included inside the same group, so its scope is the group's."""
+    from launch_ros.actions import PushROSNamespace
+    group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml',
+                             composition=True)
+    entities = group.get_sub_entities()
+    assert not any(isinstance(e, PushROSNamespace) for e in entities)
+    assert any(isinstance(e, demo.ScopedSetParameter) for e in entities)
+    (package, name, arguments), = included
+    assert (package, name) == ('marine_simulation', 'demo_nav2_composed_launch.py')
+    assert arguments == {'namespace': 'a', 'params_file': '/p.yaml'}
+
+
+def test_the_composed_nav2_needs_manda_coverage_and_the_container_packages(
+        tmp_path, no_host_checks, nav_state, monkeypatch):
+    seen = []
+    monkeypatch.setattr(demo, 'require_package', lambda package, hint: seen.append(package))
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    assert {'manda_coverage', 'rclcpp_components'} <= set(seen)

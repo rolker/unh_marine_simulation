@@ -36,6 +36,7 @@ dependencies, the lifecycle regular expression, and that every launch file it na
 """
 
 import importlib.util
+import os
 import pathlib
 import re
 import shutil
@@ -79,10 +80,12 @@ def spec():
 def test_the_shipped_configuration_loads_with_the_roster(spec):
     assert spec.name == 'demo_manager' and spec.default_profile == 'demo'
     assert spec.exit_when_all_stopped
-    assert set(spec.groups) == {'boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt'}
-    assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt']
-    assert spec.profiles['headless'] == ['boats', 'scorer', 'target_area']
-    assert spec.profiles['boats'] == ['boats']
+    assert set(spec.groups) == {'discovery', 'boats', 'camp', 'scorer', 'target_area', 'layout',
+                                'rqt'}
+    assert spec.profiles['demo'] == ['discovery', 'boats', 'camp', 'scorer', 'target_area',
+                                     'layout', 'rqt']
+    assert spec.profiles['headless'] == ['discovery', 'boats', 'scorer', 'target_area']
+    assert spec.profiles['boats'] == ['discovery', 'boats']
 
 
 def test_closing_camp_stops_the_demo_is_expressed_as_follows(spec):
@@ -392,7 +395,7 @@ def test_the_scorer_waits_for_the_target_area_and_the_boats(spec):
 def test_the_target_area_publisher_is_a_group_that_stops_with_camp(spec):
     group = spec.groups['target_area']
     assert (group.package, group.file) == ('marine_simulation', 'demo_target_area_launch.py')
-    assert group.requires == [] and group.follows == ['camp']
+    assert group.requires == ['discovery'] and group.follows == ['camp']
     assert group.restart == 'on-failure'
     assert group.ready_nodes == ['/survey_area_publisher']
     assert group.arguments['target_area_file'].default == '/t.json'
@@ -561,13 +564,22 @@ def test_the_layout_check_reports_a_tool_that_cannot_run(tmp_path):
         demo_manager.check_layout_tool('/l.yaml', str(tmp_path / 'missing'))
 
 
+environments = []       # the node_environment of each run_manager call of the spy
+
+
 @pytest.fixture
 def run_manager_spy(monkeypatch, tmp_path, held_locks):
     """Run ``main`` on a private HOME with the manager itself replaced by a recorder."""
     from launch_manager_proto import manager
     seen = []
     monkeypatch.setenv('HOME', str(tmp_path))
-    monkeypatch.setattr(manager, 'run_manager', lambda spec: seen.append(spec) or 0)
+    environments.clear()
+    monkeypatch.setattr(manager, 'run_manager', lambda spec, node_environment=None: (
+        seen.append(spec), environments.append(node_environment), 0)[2])
+    # what main puts in os.environ for the groups must not outlive the test
+    for name in (demo_support.DISCOVERY_SERVER_VARIABLE, demo_support.SUPER_CLIENT_VARIABLE,
+                 'ROS_DOMAIN_ID'):
+        monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(demo_manager, 'check_layout_tool', lambda layout: None)
     monkeypatch.setattr(demo_support, 'running_camp_pids', lambda *a, **k: [])
     return seen
@@ -578,6 +590,7 @@ def test_the_default_demo_starts_every_part_with_the_installed_files(run_manager
     (spec,) = run_manager_spy
     assert spec.default_profile == 'demo'
     assert spec.profiles['demo'] == ['boats', 'camp', 'scorer', 'target_area', 'layout', 'rqt']
+    assert 'discovery' not in spec.groups       # peer to peer unless --discovery-server
     share = pathlib.Path(get_package_share_directory('marine_simulation'), 'config')
     polygon = str(share / 'demo_target_polygon_camp.json')
     assert spec.groups['camp'].arguments['target_area_file'].default == polygon
@@ -846,7 +859,7 @@ def test_manager_camp_start_passes_fresh_to_the_actions(monkeypatch, tmp_path):
 def test_the_rqt_group_needs_nothing_stops_with_camp_and_is_never_restarted(spec):
     group = spec.groups['rqt']
     assert (group.package, group.file) == ('marine_simulation', 'demo_rqt_launch.py')
-    assert group.requires == [] and group.follows == ['camp']
+    assert group.requires == ['discovery'] and group.follows == ['camp']
     assert group.restart == 'never'
     assert group.arguments['rqt_fresh'].default == 'false'
     assert group.arguments['boats'].default == '' and 'roster_file' in group.arguments
@@ -1035,6 +1048,139 @@ def test_a_missing_rqt_is_a_message_not_a_failed_demo(monkeypatch):
     assert isinstance(message, LogInfo)
 
 
+# -- the Fast DDS discovery server (issue 116) -------------------------------------------------
+
+def test_the_discovery_group_runs_the_server_launch_first_and_the_boats_wait_for_it(spec):
+    group = spec.groups['discovery']
+    assert (group.package, group.file) == ('marine_simulation', 'demo_discovery_server_launch.py')
+    assert group.restart == 'never' and group.follows == ['camp']
+    assert spec.groups['target_area'].requires == ['discovery']
+    assert spec.groups['rqt'].requires == ['discovery']
+    assert spec.groups['boats'].requires == ['discovery']
+    for name in ('demo', 'headless', 'boats'):
+        assert spec.profiles[name][0] == 'discovery'
+
+
+def test_the_discovery_port_is_the_domain_plus_the_base_port():
+    assert demo_support.discovery_server_port(0) == 11811
+    assert demo_support.discovery_server_port(142) == 11953
+    assert demo_support.discovery_server_address(7) == '127.0.0.1:11818'
+
+
+def test_two_domains_never_share_a_discovery_port():
+    ports = {demo_support.discovery_server_port(d) for d in range(demo_support.MAX_DOMAIN_ID + 1)}
+    assert len(ports) == demo_support.MAX_DOMAIN_ID + 1
+
+
+@pytest.mark.parametrize('value', ['x', '-1', '233', '1.5'])
+def test_a_bad_domain_id_is_refused(value):
+    with pytest.raises(ValueError, match='ROS_DOMAIN_ID'):
+        demo_support.domain_id({'ROS_DOMAIN_ID': value})
+
+
+def test_an_unset_domain_is_domain_zero():
+    assert demo_support.domain_id({}) == 0 and demo_support.domain_id({'ROS_DOMAIN_ID': ' '}) == 0
+
+
+def test_the_server_command_is_the_first_server_on_this_host_only():
+    assert demo_support.discovery_server_command(11953) == [
+        'fastdds', 'discovery', '-i', '0', '-l', '127.0.0.1', '-p', '11953']
+
+
+def test_a_taken_discovery_port_is_refused_with_the_reason():
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as taken:
+        taken.bind(('127.0.0.1', 0))
+        port = taken.getsockname()[1]
+        with pytest.raises(ValueError, match='port %d .* is taken' % port):
+            demo_support.check_discovery_port_free(port)
+    demo_support.check_discovery_port_free(port)        # free again
+
+
+def test_without_the_switch_the_group_is_taken_out_of_every_profile_and_requires(spec):
+    demo_manager.apply_discovery_server(spec, False)
+    assert 'discovery' not in spec.groups
+    assert all('discovery' not in members for members in spec.profiles.values())
+    assert spec.groups['boats'].requires == [] and spec.groups['boats'].follows == ['camp']
+
+
+def test_with_the_switch_the_configuration_is_unchanged(spec):
+    def state():
+        return sorted(spec.groups), dict(spec.profiles), list(spec.groups['boats'].requires)
+    before = state()
+    demo_manager.apply_discovery_server(spec, True)
+    assert state() == before
+
+
+def test_the_environment_of_the_demo_follows_the_domain():
+    assert demo_manager.discovery_environment(False, {'ROS_DOMAIN_ID': '150'}) == {}
+    assert demo_manager.discovery_environment(True, {'ROS_DOMAIN_ID': '150'}) == {
+        'ROS_DISCOVERY_SERVER': '127.0.0.1:11961'}
+
+
+def test_the_default_demo_is_peer_to_peer_and_sets_nothing(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks']) == 0
+    assert environments == [None]
+    assert 'ROS_DISCOVERY_SERVER' not in os.environ
+
+
+def test_the_switch_starts_the_server_group_and_hands_the_address_to_every_group(
+        run_manager_spy, monkeypatch):
+    monkeypatch.setenv('ROS_DOMAIN_ID', '150')
+    assert demo_manager.main(['--no-joysticks', '--discovery-server']) == 0
+    (spec,) = run_manager_spy
+    assert spec.profiles['demo'][0] == 'discovery'
+    assert spec.groups['discovery'].arguments['port'].default == '11961'
+    assert os.environ['ROS_DISCOVERY_SERVER'] == '127.0.0.1:11961'
+    # only the manager's own node is a super client, never the groups
+    assert environments == [{'ROS_SUPER_CLIENT': 'TRUE'}]
+    assert 'ROS_SUPER_CLIENT' not in os.environ
+
+
+def test_no_discovery_server_is_the_same_as_the_default(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', '--no-discovery-server']) == 0
+    assert environments == [None] and 'discovery' not in run_manager_spy[0].groups
+
+
+def test_a_server_the_operator_already_exports_makes_the_manager_a_super_client(
+        run_manager_spy, monkeypatch):
+    monkeypatch.setenv('ROS_DISCOVERY_SERVER', '10.0.0.5:11811')
+    assert demo_manager.main(['--no-joysticks']) == 0
+    assert environments == [{'ROS_SUPER_CLIENT': 'TRUE'}]
+
+
+def test_a_taken_discovery_port_stops_the_demo_before_anything_starts(
+        run_manager_spy, monkeypatch, capsys):
+    def taken(port):
+        raise ValueError('the discovery server port %d is taken' % port)
+    monkeypatch.setattr(demo_support, 'check_discovery_port_free', taken)
+    assert demo_manager.main(['--no-joysticks', '--discovery-server']) == 2
+    assert 'THE DEMO DID NOT START: the discovery server port 11811 is taken' in \
+        capsys.readouterr().err
+    assert run_manager_spy == []
+
+
+def test_a_bad_domain_stops_the_demo_with_a_plain_message(run_manager_spy, monkeypatch, capsys):
+    monkeypatch.setenv('ROS_DOMAIN_ID', 'abc')
+    assert demo_manager.main(['--no-joysticks', '--discovery-server']) == 2
+    assert 'THE DEMO DID NOT START: ROS_DOMAIN_ID' in capsys.readouterr().err
+    assert run_manager_spy == []
+
+
+def test_the_server_launch_runs_fastdds_discovery_on_the_given_port():
+    module = _launch_module('demo_discovery_server_launch.py')
+    (process,) = _perform_launch_setup(module, port='11953')
+    assert [part[0].text for part in process.cmd] == [
+        'fastdds', 'discovery', '-i', '0', '-l', '127.0.0.1', '-p', '11953']
+
+
+@pytest.mark.parametrize('port', ['', 'abc', '80', '70000'])
+def test_the_server_launch_refuses_a_port_that_is_not_one(port):
+    module = _launch_module('demo_discovery_server_launch.py')
+    with pytest.raises(RuntimeError, match='not a port number'):
+        _perform_launch_setup(module, port=port)
+
+
 def test_the_watchdog_is_on_by_default_and_the_option_has_a_no_form():
     parser = demo_manager.build_parser()
     assert parser.parse_args([]).watchdog is True
@@ -1058,3 +1204,17 @@ def test_main_runs_the_watchdog_by_default(run_manager_spy):
     assert demo_manager.main(['--no-joysticks', '--nav']) == 0
     (spec,) = run_manager_spy
     assert spec.groups['boats'].arguments['enable_watchdog'].default == 'true'
+
+
+def test_a_missing_fastdds_tool_is_refused_with_the_reason(monkeypatch):
+    monkeypatch.setattr(demo_support.shutil, 'which', lambda name: None)
+    with pytest.raises(ValueError, match='fastdds tool is not on the PATH'):
+        demo_support.check_discovery_tool()
+
+
+def test_a_super_client_exported_in_the_callers_shell_does_not_reach_the_groups(
+        run_manager_spy, monkeypatch):
+    monkeypatch.setenv('ROS_SUPER_CLIENT', 'TRUE')
+    assert demo_manager.main(['--no-joysticks', '--discovery-server']) == 0
+    assert environments == [{'ROS_SUPER_CLIENT': 'TRUE'}]
+    assert 'ROS_SUPER_CLIENT' not in os.environ

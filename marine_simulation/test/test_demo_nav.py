@@ -30,6 +30,7 @@
 """Unit tests for marine_simulation.demo_nav (the nav2 parameter delta and node names)."""
 
 import copy
+import pathlib
 import re
 
 from marine_simulation import demo_nav
@@ -193,6 +194,69 @@ def test_node_counts_and_names():
 
 def test_the_bond_timeout_is_longer_than_nav2s_default_of_four_seconds():
     assert demo_nav.BOND_TIMEOUT_S > 4.0
+
+
+# --- composed nav2 (issue 116) -------------------------------------------------------------
+
+def test_the_composed_nodes_are_the_nav2_servers_but_manda_coverage():
+    composed = [name for _, _, name, _ in demo_nav.COMPOSED_NODES]
+    assert sorted(composed + list(demo_nav.COMPOSED_SEPARATE)) == sorted(demo_nav.NAV2_SERVERS)
+    assert len(set(composed)) == len(composed)
+
+
+def test_the_container_is_named_inside_the_boats_namespace():
+    assert demo_nav.container_name('bluefin') == '/bluefin/nav2_container'
+
+
+def _ben_navigation_launch():
+    try:
+        from ament_index_python.packages import get_package_share_directory
+        return pathlib.Path(get_package_share_directory('ben_project11'), 'launch',
+                            'navigation_launch.py').read_text()
+    except Exception:       # noqa: B902  the platform package is not part of every checkout
+        return None
+
+
+def _noncomposed_nodes(source):
+    """Return ``{name: (executable, {remapping pairs})}`` of ben's non-composed LifecycleNodes."""
+    import ast
+    nodes = {}
+    for call in ast.walk(ast.parse(source)):
+        if not (isinstance(call, ast.Call) and getattr(call.func, 'id', '') == 'LifecycleNode'):
+            continue
+        keywords = {k.arg: k.value for k in call.keywords}
+        pairs = {(t.elts[0].value, t.elts[1].value)
+                 for t in ast.walk(keywords.get('remappings', ast.Constant(None)))
+                 if isinstance(t, ast.Tuple) and len(t.elts) == 2
+                 and all(isinstance(e, ast.Constant) for e in t.elts)}
+        nodes[keywords['name'].value] = pairs
+    return nodes
+
+
+def test_the_composed_nodes_and_remappings_match_bens_noncomposed_bringup():
+    """A platform change that adds, drops or remaps a server must not leave the demo behind."""
+    source = _ben_navigation_launch()
+    if source is None:
+        pytest.skip('ben_project11 is not installed')
+    ben = _noncomposed_nodes(source)
+    mine = {name: set(remaps) for _, _, name, remaps in demo_nav.COMPOSED_NODES}
+    mine.update({name: set(remaps) for name, remaps in demo_nav.COMPOSED_SEPARATE.items()})
+    assert mine == ben
+
+
+def test_the_lifecycle_managers_list_is_bens_list_in_bens_order():
+    source = _ben_navigation_launch()
+    if source is None:
+        pytest.skip('ben_project11 is not installed')
+    import ast
+    names = None
+    for node in ast.walk(ast.parse(source)):
+        if (isinstance(node, ast.Assign)
+                and getattr(node.targets[0], 'id', '') == 'lifecycle_nodes'):
+            names = [e.value for e in node.value.elts]
+            break
+    assert names is not None, 'ben_project11 no longer has a lifecycle_nodes list'
+    assert names == list(demo_nav.NAV2_SERVERS)
 
 
 def test_the_port_offsets_step_by_boat_and_the_first_boat_keeps_its_ports():

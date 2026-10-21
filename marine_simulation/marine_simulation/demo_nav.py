@@ -55,6 +55,32 @@ NAV2_SERVERS = (
 # configured by their parent server).
 NAV2_COSTMAPS = ('local_costmap/local_costmap', 'global_costmap/global_costmap')
 
+# The nav2 servers of one boat as composable nodes (issue 116): ``(package, plugin, name,
+# remappings)``, the same nodes with the same remappings as the non-composed branch of
+# ben_project11's ``navigation_launch.py`` (test_demo_nav compares the two, so a platform change
+# cannot leave the composed boat different). ``manda_coverage`` is not a registered component:
+# it stays its own process (COMPOSED_SEPARATE).
+CMD_VEL_NAV = ('cmd_vel', 'cmd_vel_nav')
+COMPOSED_NODES = (
+    ('nav2_controller', 'nav2_controller::ControllerServer', 'controller_server',
+     (CMD_VEL_NAV,)),
+    ('nav2_smoother', 'nav2_smoother::SmootherServer', 'smoother_server', ()),
+    ('nav2_planner', 'nav2_planner::PlannerServer', 'planner_server', ()),
+    ('nav2_behaviors', 'behavior_server::BehaviorServer', 'behavior_server', (CMD_VEL_NAV,)),
+    ('nav2_velocity_smoother', 'nav2_velocity_smoother::VelocitySmoother', 'velocity_smoother',
+     (CMD_VEL_NAV, ('cmd_vel_smoothed', 'piloting_mode/autonomous/cmd_vel'))),
+    ('nav2_collision_monitor', 'nav2_collision_monitor::CollisionMonitor', 'collision_monitor',
+     ()),
+    ('nav2_bt_navigator', 'nav2_bt_navigator::BtNavigator', 'bt_task_navigator', ()),
+    ('nav2_waypoint_follower', 'nav2_waypoint_follower::WaypointFollower', 'waypoint_follower',
+     ()),
+    ('opennav_docking', 'opennav_docking::DockingServer', 'docking_server', ()),
+)
+COMPOSED_SEPARATE = {'manda_coverage': (('soundings', 'sensors/mbes/soundings'),)}
+CONTAINER_NAME = 'nav2_container'
+LIFECYCLE_MANAGER_NAME = 'lifecycle_manager_navigation'
+LIFECYCLE_MANAGER_PLUGIN = 'nav2_lifecycle_manager::LifecycleManager'
+
 # Lifecycle nodes the demo launch manager owns per boat when navigation is on, on top of the
 # nine of a boat without it: ``mission_manager``.
 NAV_MANAGED_NODES_PER_BOAT = 1
@@ -196,6 +222,11 @@ def write_params(directory: str, source_file: str = None) -> str:
 def lifecycle_nodes_per_boat(base: int, enable_nav: bool) -> int:
     """Return how many lifecycle nodes the launch manager owns per boat."""
     return base + (NAV_MANAGED_NODES_PER_BOAT if enable_nav else 0)
+
+
+def container_name(boat: str) -> str:
+    """Return the fully qualified name of one boat's nav2 container (composed bring-up)."""
+    return '/%s/%s' % (boat, CONTAINER_NAME)
 
 
 def nav_node_names(boat: str) -> Dict[str, str]:

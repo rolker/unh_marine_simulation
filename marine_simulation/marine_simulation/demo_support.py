@@ -45,6 +45,7 @@ import math
 import os
 import re
 import shutil
+import socket
 import struct
 import subprocess
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -921,3 +922,64 @@ def require_file(path: str, what: str) -> None:
     """Raise unless ``path`` is a file."""
     if not os.path.isfile(path):
         raise ValueError('%s %r is not a file' % (what, path))
+
+
+# -- Fast DDS discovery server (issue 116) -------------------------------------------------
+
+# The server listens on 11811 (Fast DDS's own default) plus the ROS domain id, so two demos on
+# one host, each on its own domain, never ask for the same port.
+DISCOVERY_SERVER_BASE_PORT = 11811
+DISCOVERY_SERVER_HOST = '127.0.0.1'
+DISCOVERY_SERVER_VARIABLE = 'ROS_DISCOVERY_SERVER'
+SUPER_CLIENT_VARIABLE = 'ROS_SUPER_CLIENT'
+MAX_DOMAIN_ID = 232
+
+
+def domain_id(environ) -> int:
+    """Return the ROS domain id of ``environ`` (0 when unset); refuse a bad one."""
+    text = environ.get('ROS_DOMAIN_ID', '').strip()
+    if not text:
+        return 0
+    if not text.isdigit() or int(text) > MAX_DOMAIN_ID:
+        raise ValueError('ROS_DOMAIN_ID is %r; it must be a whole number from 0 to %d'
+                         % (text, MAX_DOMAIN_ID))
+    return int(text)
+
+
+def discovery_server_port(domain: int) -> int:
+    """Return the UDP port of the discovery server of this ROS domain."""
+    return DISCOVERY_SERVER_BASE_PORT + domain
+
+
+def discovery_server_address(domain: int) -> str:
+    """Return the ``ROS_DISCOVERY_SERVER`` value of this ROS domain."""
+    return '%s:%d' % (DISCOVERY_SERVER_HOST, discovery_server_port(domain))
+
+
+def discovery_server_command(port: int) -> List[str]:
+    """Return the command line of the server: first of the list (id 0), this host only."""
+    return ['fastdds', 'discovery', '-i', '0', '-l', DISCOVERY_SERVER_HOST, '-p', str(port)]
+
+
+def check_discovery_tool() -> None:
+    """Raise ``ValueError`` unless the ``fastdds`` tool (package ``fastrtps``) is on the PATH."""
+    if shutil.which('fastdds') is None:
+        raise ValueError('the fastdds tool is not on the PATH (ros-jazzy-fastrtps, with the '
+                         'workspace sourced); it runs the discovery server')
+
+
+def check_discovery_port_free(port: int) -> None:
+    """
+    Raise ``ValueError`` with the reason when something already holds the server's UDP port.
+
+    Usually a server left over from an earlier run or another demo on the same domain; the
+    server would exit at once, and the boats would then wait on a group that never comes up.
+    """
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        try:
+            sock.bind((DISCOVERY_SERVER_HOST, port))
+        except OSError as error:
+            raise ValueError(
+                'the discovery server port %d (11811 + the ROS domain) is taken (%s): another '
+                'demo or a server left over from an earlier run (pgrep -af "fastdds"); stop it '
+                'or use another ROS domain' % (port, error.strerror or error)) from None
