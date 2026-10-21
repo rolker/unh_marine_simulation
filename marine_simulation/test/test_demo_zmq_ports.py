@@ -92,3 +92,23 @@ def test_tcp_binds_move_by_the_offset_and_nothing_else_does(tools):
 def test_no_offset_or_a_bad_one_changes_nothing(tools, offset):
     assert bind_addresses(tools, offset) == [
         'tcp://*:1667', 'tcp://*:1668', 'ipc:///tmp/x:5', 'tcp://127.0.0.1:65530']
+
+
+def test_a_missing_zmq_bind_fails_with_enosys(tmp_path):
+    shim, probe = tmp_path / 'libshim.so', tmp_path / 'probe'
+    (tmp_path / 'probe.c').write_text(r"""
+#include <errno.h>
+#include <stdio.h>
+int zmq_bind(void *socket, const char *address);
+int main(void) {
+  errno = 0;
+  int result = zmq_bind(0, "tcp://*:1667");
+  printf("%d %d\n", result, errno == ENOSYS);
+  return 0;
+}
+""")
+    subprocess.run(['cc', '-shared', '-fPIC', '-o', str(shim), str(SOURCE), '-ldl'], check=True)
+    subprocess.run(['cc', '-o', str(probe), str(tmp_path / 'probe.c'), str(shim), '-ldl',
+                    '-Wl,-rpath,' + str(tmp_path)], check=True)
+    out = subprocess.run([str(probe)], capture_output=True, text=True, check=True)
+    assert out.stdout.split() == ['-1', '1']

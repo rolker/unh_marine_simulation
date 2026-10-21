@@ -36,9 +36,15 @@
 // a "tcp://<host>:<port>" bind then uses <port> + offset. Without the variable (or with a value
 // that is not a whole number) nothing changes. Retire it when the navigator makes the port a
 // parameter.
+//
+// Only zmq_bind is shifted. BehaviorTree.CPP's Groot2Publisher binds both of its sockets (the
+// request server and the publisher) and never connects; a Groot client connects from another
+// process, to the port the boat bound, so the connecting side needs no shift. Shift zmq_connect
+// the same way if a library of ours ever connects to its own port.
 
 #define _GNU_SOURCE
 #include <dlfcn.h>
+#include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -82,6 +88,7 @@ int zmq_bind(void * socket, const char * address)
   if (real_bind == NULL) {
     real_bind = (bind_function)dlsym(RTLD_NEXT, "zmq_bind");
     if (real_bind == NULL) {
+      errno = ENOSYS;  // a ZeroMQ call without ZeroMQ: say so rather than leave a stale errno
       return -1;
     }
   }
