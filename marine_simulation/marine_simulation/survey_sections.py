@@ -279,6 +279,41 @@ def plan_section(area: Sequence[Point], index: int, count: int, spacing: float,
     return Section(index, count, lines, (v_low, v_high), math.degrees(angle), band_area)
 
 
+class AreaBook:
+    """
+    The target areas heard so far, by id, each with the stamp of the message that carried it.
+
+    A message older than the one held for its id is ignored, as the scorer does: the same area
+    arrives again (a publisher restart, a second path) and a stale copy must never replace a
+    newer one. ``first()`` is the area a boat surveys: the one with the smallest id.
+    """
+
+    def __init__(self):
+        self.points: dict = {}
+        self.stamps: dict = {}
+
+    def update(self, area_id: str, points: Sequence[Point], stamp: Tuple[int, int]) -> bool:
+        """Take an area; return whether the book changed (the ring or a first sight of the id)."""
+        points = [tuple(p) for p in points]
+        known = self.stamps.get(area_id)
+        if known is not None and tuple(stamp) < known:
+            return False
+        changed = self.points.get(area_id) != points
+        self.points[area_id] = points
+        self.stamps[area_id] = tuple(stamp)
+        return changed
+
+    def first(self) -> Optional[Tuple[str, List[Point]]]:
+        """Return ``(id, ring)`` of the area with the smallest id, or ``None`` when empty."""
+        if not self.points:
+            return None
+        area_id = min(self.points)
+        return area_id, self.points[area_id]
+
+    def __bool__(self) -> bool:
+        return bool(self.points)
+
+
 def line_label(prefix: str, number: int) -> str:
     """Return the label of line ``number`` of the mission whose label is ``prefix``."""
     return '%s_l%03d' % (prefix, number)

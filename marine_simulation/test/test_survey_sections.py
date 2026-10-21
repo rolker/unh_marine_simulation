@@ -242,3 +242,24 @@ def test_the_section_carries_the_maths_angle_not_a_heading():
     section = ss.plan_section(square(), 0, 1, 100.0, heading_deg=90.0)     # due east
     assert section.angle_deg % 180.0 == pytest.approx(0.0, abs=0.5)
     assert not hasattr(section, 'heading')
+
+
+def test_the_area_book_ignores_an_older_stamp_and_takes_a_newer_one():
+    book = ss.AreaBook()
+    ring = [(43.0, -70.7), (43.0, -70.6), (43.1, -70.6)]
+    other = [(44.0, -70.7), (44.0, -70.6), (44.1, -70.6)]
+    assert book.update('a', ring, (100, 0)) is True
+    assert book.update('a', other, (99, 5)) is False         # stale copy: ignored
+    assert book.first() == ('a', ring)
+    assert book.update('a', ring, (100, 0)) is False         # the same again: no change
+    assert book.update('a', other, (100, 1)) is True         # newer: replaces
+    assert book.first() == ('a', other)
+
+
+def test_the_area_book_hands_out_the_smallest_id_and_is_falsy_when_empty():
+    book = ss.AreaBook()
+    assert not book and book.first() is None
+    ring = [(43.0, -70.7), (43.0, -70.6), (43.1, -70.6)]
+    book.update('b', ring, (1, 0))
+    book.update('a', ring[::-1], (1, 0))
+    assert book and book.first()[0] == 'a'

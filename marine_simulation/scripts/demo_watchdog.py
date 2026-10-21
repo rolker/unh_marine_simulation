@@ -70,6 +70,7 @@ from std_msgs.msg import String
 
 TICK_SECONDS = 0.1
 STATE_SECONDS = 1.0
+AREA_RETRY_SECONDS = 30.0
 
 SECTION_DEFAULTS = {
     'line_spacing': 80.0,
@@ -111,7 +112,9 @@ class DemoWatchdog(Node):
             for f in dataclasses.fields(defaults)})
         self.section_settings = {name: float(self.get_parameter(name).value)
                                  for name in SECTION_DEFAULTS}
-        self.areas = {}
+        self.areas = survey_sections.AreaBook()
+        self._area_type = SurveyArea
+        self._area_asked = time.monotonic()
         self.core = watchdog_core.WatchdogCore(
             params, time.monotonic(), self.make_mission,
             lambda text: self.get_logger().info(text))
@@ -127,7 +130,8 @@ class DemoWatchdog(Node):
         self.create_subscription(Joy, 'joy', self.on_joy, 10)
         self.create_subscription(Heartbeat, 'marine/heartbeat', self.on_heartbeat, 10)
         self.create_subscription(TaskFeedback, 'marine/status/mission_tasks', self.on_tasks, 10)
-        self.create_subscription(SurveyArea, '/survey_area', self.on_area, latched)
+        self._area_qos = latched
+        self.area_sub = self.create_subscription(SurveyArea, '/survey_area', self.on_area, latched)
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
         self.create_timer(TICK_SECONDS, self.tick)
@@ -142,14 +146,14 @@ class DemoWatchdog(Node):
 
     def make_mission(self, generation):
         """Return ``(command, set task id, [line task ids])`` for this boat's section."""
-        if not self.areas:
+        first = self.areas.first()
+        if first is None:
             raise ValueError('no target area has arrived')
-        area_id = sorted(self.areas)[0]
         s = self.section_settings
         heading = None if math.isnan(s['line_heading_deg']) else s['line_heading_deg']
         try:
             section = survey_sections.plan_section(
-                self.areas[area_id], self.section_index, self.section_count, s['line_spacing'],
+                first[1], self.section_index, self.section_count, s['line_spacing'],
                 s['edge_margin'], s['min_line_length'], heading)
         except survey_sections.SectionError as error:
             raise ValueError(str(error)) from None
@@ -174,12 +178,32 @@ class DemoWatchdog(Node):
 
     def on_area(self, msg):
         points = [(p.latitude, p.longitude) for p in msg.polygon.points]
-        before = self.areas.get(msg.id)
-        self.areas[msg.id] = points
-        if before != points:
+        changed = self.areas.update(msg.id, points, (msg.stamp.sec, msg.stamp.nanosec))
+        if changed:
             self.get_logger().info('target area %r: %d vertices' % (msg.id, len(points)))
-            if sorted(self.areas)[0] == msg.id:
+            first = self.areas.first()
+            if first is not None and first[0] == msg.id:
                 self.perform(self.core.on_area(time.monotonic()))
+
+    def check_area_subscription(self, now):
+        """
+        Subscribe again when no area has arrived for ``AREA_RETRY_SECONDS``.
+
+        A latched sample reaches a late subscriber when its publisher is discovered, and with a
+        hundred processes on one computer that takes tens of seconds (a boat can be up before
+        the publisher is known to it). A new subscription asks for the sample again, and the
+        log says what the boat is waiting for. Returns whether it subscribed again.
+        """
+        if self.areas or now - self._area_asked < AREA_RETRY_SECONDS:
+            return False
+        self._area_asked = now
+        self.get_logger().warning(
+            'no target area after %g s: is the manager\'s target_area group running? '
+            'subscribing to /survey_area again' % AREA_RETRY_SECONDS)
+        self.destroy_subscription(self.area_sub)
+        self.area_sub = self.create_subscription(
+            self._area_type, '/survey_area', self.on_area, self._area_qos)
+        return True
 
     # -- the clock and topics out --------------------------------------------------------------
 
@@ -191,6 +215,7 @@ class DemoWatchdog(Node):
         except Exception:                      # an unknown frame is simply "not yet"
             ready = False
         self.core.on_tf(now, ready)
+        self.check_area_subscription(now)
         self.perform(self.core.tick(now))
         if self.core.changes != self._published_changes:
             self.publish_state()
