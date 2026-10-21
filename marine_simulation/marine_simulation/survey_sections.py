@@ -137,6 +137,26 @@ def crossings(points: Sequence[Point], v: float) -> List[float]:
     return sorted(found)
 
 
+def crossing_clearances(points: Sequence[Point], v: float) -> List[Tuple[float, float]]:
+    """
+    Return ``(u, sin)`` for every crossing of the horizontal line at ``v``, sorted by ``u``.
+
+    ``sin`` is the sine of the angle between the line and the edge crossed (1.0: square on). A
+    point ``m`` metres from the edge, measured square to it, is ``m / sin`` along the line, so
+    that is how far a segment's end must be pulled in to keep ``m`` of clearance.
+    """
+    found = []
+    for i, (u1, v1) in enumerate(points):
+        u2, v2 = points[(i + 1) % len(points)]
+        if v1 == v2:
+            continue
+        low, high = (v1, v2) if v1 < v2 else (v2, v1)
+        if low <= v < high:
+            length = math.hypot(u2 - u1, v2 - v1)
+            found.append((u1 + (v - v1) * (u2 - u1) / (v2 - v1), abs(v2 - v1) / length))
+    return sorted(found)
+
+
 def covered_length(points: Sequence[Point], v: float) -> float:
     """Return the length of the line at ``v`` that is inside the polygon."""
     xs = crossings(points, v)
@@ -184,7 +204,8 @@ def band_lines(points: Sequence[Point], v_low: float, v_high: float, spacing: fl
     One entry per line position, in increasing ``v``; the inner list holds the segments of that
     line inside the polygon (more than one where the outline is concave). The first line is half
     a spacing from the band's lower edge, so the lines of two neighbouring bands are a full
-    spacing apart. Segments are shortened by ``edge_margin`` at both ends and dropped when
+    spacing apart. Segments are pulled in from the boundary by ``edge_margin`` at both ends,
+    measured square to the edge crossed (not along the line), and dropped when
     shorter than ``min_length``. Direction alternates from line to line (boustrophedon).
     """
     width = v_high - v_low
@@ -195,10 +216,13 @@ def band_lines(points: Sequence[Point], v_low: float, v_high: float, spacing: fl
     positions = [v_low + width * (k + 0.5) / count for k in range(count)]
     lines = []
     for index, v in enumerate(positions):
-        xs = crossings(points, v)
+        xs = crossing_clearances(points, v)
         segments = []
         for i in range(0, len(xs) - 1, 2):
-            u0, u1 = xs[i] + edge_margin, xs[i + 1] - edge_margin
+            # inset square to the edge, not along the line: at an oblique boundary the end moves
+            # in by margin / sin(angle), so the clearance is the margin whatever the angle
+            u0 = xs[i][0] + edge_margin / xs[i][1]
+            u1 = xs[i + 1][0] - edge_margin / xs[i + 1][1]
             if u1 - u0 >= min_length:
                 segments.append((v, u0, u1))
         if index % 2:

@@ -279,3 +279,27 @@ def test_the_area_book_hands_out_the_smallest_id_and_is_falsy_when_empty():
     book.update('b', ring, (1, 0))
     book.update('a', ring[::-1], (1, 0))
     assert book and book.first()[0] == 'a'
+
+
+def _distance_to_segment(p, a, b):
+    ax, ay = a
+    bx, by = b
+    dx, dy = bx - ax, by - ay
+    t = max(0.0, min(1.0, ((p[0] - ax) * dx + (p[1] - ay) * dy) / (dx * dx + dy * dy)))
+    return math.hypot(p[0] - (ax + t * dx), p[1] - (ay + t * dy))
+
+
+@pytest.mark.parametrize('margin', [10.0, 25.0])
+def test_the_edge_margin_is_clearance_square_to_an_oblique_boundary(margin):
+    plane = ss.LocalPlane(43.0, -70.7)
+    metres = [(0.0, 0.0), (800.0, 0.0), (500.0, 400.0), (0.0, 400.0)]    # a slanted east side
+    area = [plane.to_latlon(x, y) for x, y in metres]
+    section = ss.plan_section(area, 0, 1, 100.0, edge_margin=margin, min_length=10.0,
+                              heading_deg=90.0)
+    assert section.segments()
+    for start, end in section.segments():
+        for point in (start, end):
+            xy = plane.to_xy(*point)
+            nearest = min(_distance_to_segment(xy, metres[i], metres[(i + 1) % 4])
+                          for i in range(4))
+            assert nearest >= margin - 0.5
