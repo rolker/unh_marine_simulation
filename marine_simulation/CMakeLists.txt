@@ -8,12 +8,18 @@ find_package(ament_cmake_python REQUIRED)
 # starter and the launch files of its groups import (nothing is loaded by file path)
 ament_python_install_package(${PROJECT_NAME})
 
+# LD_PRELOAD shim: shifts the ZeroMQ ports of one boat's nav2 processes (see the source)
+add_library(demo_zmq_ports SHARED src/demo_zmq_ports.c)
+target_link_libraries(demo_zmq_ports ${CMAKE_DL_LIBS})
+install(TARGETS demo_zmq_ports LIBRARY DESTINATION lib/${PROJECT_NAME})
+
 install(DIRECTORY config DESTINATION share/${PROJECT_NAME})
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME})
 install(PROGRAMS
   scripts/check_multi_boat_graph.py
   scripts/demo_boats_selftest.py
   scripts/demo_manager.py
+  scripts/demo_watchdog.py
   scripts/install_demo_shortcut.sh
   scripts/place_windows.py
   scripts/run_demo.sh
@@ -28,6 +34,10 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_demo_boats_launch test/test_demo_boats_launch.py)
   ament_add_pytest_test(test_check_multi_boat_graph test/test_check_multi_boat_graph.py)
   ament_add_pytest_test(test_demo_nav test/test_demo_nav.py)
+  ament_add_pytest_test(test_survey_sections test/test_survey_sections.py)
+  ament_add_pytest_test(test_demo_zmq_ports test/test_demo_zmq_ports.py)
+  ament_add_pytest_test(test_watchdog_core test/test_watchdog_core.py)
+  ament_add_pytest_test(test_demo_watchdog test/test_demo_watchdog.py)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_demo_manager test/test_demo_manager.py)
   # host-only and slow (about two minutes): the default 60 s CTest timeout would kill it

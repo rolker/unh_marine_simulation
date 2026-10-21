@@ -75,3 +75,29 @@
   ros__parameters:
     draft_dir: ""
     prior_store_dir: ""
+
+# demo_watchdog: who drives a boat. The pad's while somebody touches it; when nobody has for
+# idle_timeout seconds, or there is no pad (missing_pad_grace seconds after start), the boat
+# surveys its section of the target area by itself, and the first touch of the pad hands it back.
+# Activity is a button or an axis farther than activity_threshold from the pad's rest, or an axis
+# that moved more than that since the last message (joy_linux repeats an untouched pad at
+# 10 Hz, so message times say nothing). The lines are line_spacing metres apart (about the
+# 120 degree sonar's swath at 16 m, less the overlap, would be 90 m), edge_margin shorter at both
+# ends of a line, driven at survey_speed_knots (below the boat's 2.75 m/s top speed);
+# line_heading_deg NaN means along the long side of the area. A finished section repeats after
+# repeat_delay seconds (on_complete: hold stays), or failed_repeat_delay seconds when every
+# line of it failed. section_index/section_count, boat and
+# map_frame come from the launch (the boats that run, in roster order).
+/**/demo_watchdog:
+  ros__parameters:
+    idle_timeout: 30.0
+    missing_pad_grace: 10.0
+    pad_lost_timeout: 3.0
+    activity_threshold: 0.05
+    line_spacing: 80.0
+    edge_margin: 15.0
+    min_line_length: 30.0
+    survey_speed_knots: 4.0
+    on_complete: repeat
+    repeat_delay: 10.0
+    failed_repeat_delay: 120.0

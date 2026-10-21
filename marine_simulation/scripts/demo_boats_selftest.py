@@ -72,6 +72,15 @@ A launch needs the geoid and VDatum grids under ``~/data/world/datum``: without
 them ``chart_datum`` never publishes and this test fails on the missing frames after
 the startup timeout (the launch itself refuses to start without them).
 
+With ``--watchdog pad`` or ``--watchdog attract`` (both imply ``--nav``) the boats also run the
+joystick watchdog and the older scenarios are skipped, because the watchdog drives boats nobody
+is driving. ``pad`` simulates an untouched pad on the first boat (after a short idle timeout it
+must go autonomous and have its section mission taken and driven; one active Joy message must
+hand it back to manual and clear the mission; idle again must send the whole section anew), the
+other boats having no pad at all; ``attract`` has no pad on any boat (every boat must go
+autonomous, get a section mission of its own and drive it); both end with every nav2 node still
+active.
+
 With ``--demo`` the thing started is the launch manager, ``demo_manager.py --profile headless``
 (boats, target-area publisher and scorer; no CAMP and no window placement, so it runs on a
 machine with no display), and one more check runs: the
@@ -87,6 +96,7 @@ import argparse
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -134,6 +144,15 @@ def fake_joy(throttle: float, rudder: float, full_speed: bool = True):
     return msg
 
 
+def rest_joy():
+    """Return the Joy message of an untouched Xbox-layout pad (see ``PAD_REST_AXES``)."""
+    from sensor_msgs.msg import Joy
+    msg = Joy()
+    msg.axes = list(PAD_REST_AXES)
+    msg.buttons = [0] * BUTTONS
+    return msg
+
+
 class LaunchExited(Exception):
     """The launch this test started has stopped on its own."""
 
@@ -167,7 +186,34 @@ def platform_problems(seen: dict, expected: dict, tolerance: float = 1e-4) -> li
     return problems
 
 
-def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> list:
+# The watchdog scenarios' timings (seconds), passed as launch arguments.
+WATCHDOG_IDLE = 6.0
+WATCHDOG_GRACE_PAD = 600.0      # the pad scenarios never want the missing-pad rule to fire
+WATCHDOG_GRACE_ATTRACT = 8.0
+# A pad at rest, as joy_linux reports an untouched Xbox-layout pad (triggers rest at 1.0).
+PAD_REST_AXES = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
+
+
+def watchdog_arguments(nav: bool, watchdog, demo: bool = False) -> list:
+    """
+    Return the launch arguments that set up the watchdog for a run.
+
+    Without ``--watchdog`` the boats run with no watchdog at all, so the older scenarios (a boat
+    that nobody drives stays where it is) mean what they say. ``pad`` gives the boats a short
+    idle timeout and no missing-pad rule; ``attract`` a short missing-pad grace.
+    """
+    if watchdog == 'pad':
+        return ['idle_timeout:=%g' % WATCHDOG_IDLE, 'missing_pad_grace:=%g' % WATCHDOG_GRACE_PAD]
+    if watchdog == 'attract':
+        return ['missing_pad_grace:=%g' % WATCHDOG_GRACE_ATTRACT]
+    if not nav:
+        return []
+    # the manager owns enable_watchdog (--no-watchdog); the launch takes the argument itself
+    return ['--no-watchdog'] if demo else ['enable_watchdog:=false']
+
+
+def launch_command(boats, roster, joysticks, extra, demo=False, nav=False,
+                   watchdog=None) -> list:
     """Return the command line for ``--start-launch`` (the boats launch, or the manager)."""
     if demo:
         # No display here: CAMP and the window placement are the owner's rehearsal.
@@ -180,7 +226,10 @@ def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> li
             cmd += ['--boats', ','.join(boats)]
         if roster:
             cmd += ['--roster', roster]
-        return cmd + list(extra)
+        # the manager's options come before its free launch arguments
+        given = watchdog_arguments(nav, watchdog, True)
+        return (cmd + [a for a in given if a.startswith('--')]
+                + [a for a in given if not a.startswith('--')] + list(extra))
     cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
            'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
     if nav:
@@ -189,7 +238,7 @@ def launch_command(boats, roster, joysticks, extra, demo=False, nav=False) -> li
         cmd.append('boats:=%s' % ','.join(boats))
     if roster:
         cmd.append('roster_file:=%s' % roster)
-    return cmd + list(extra)
+    return cmd + watchdog_arguments(nav, watchdog) + list(extra)
 
 
 def roster_headings(path: str) -> dict:
@@ -272,6 +321,18 @@ def line_reached(travelled: float, line_length: float, distance, status: str) ->
             and 'fail' not in (status or '').lower())
 
 
+def own_task(boat: str, task_id: str, generation=None) -> bool:
+    """
+    Return whether ``task_id`` belongs to the watchdog survey of ``boat`` (of one generation).
+
+    The ids are ``<boat>_<nonce>_s<n>`` and ``<boat>_<nonce>_s<n>/<boat>_<nonce>_s<n>_l<line>``
+    (the nonce, hexadecimal, is the watchdog process's start time and may be absent); a prefix
+    match would take ``ben_s10`` for generation 1 of ``ben``, so the number is matched whole.
+    """
+    match = re.match(r'^%s_(?:[0-9a-f]+_)?s(\d+)(?:/|$)' % re.escape(boat), task_id)
+    return bool(match) and (generation is None or int(match.group(1)) == int(generation))
+
+
 def tasks_acknowledge(task_ids, label: str) -> bool:
     """Return whether the reported task ids include the whole mission ``label`` sent."""
     return {label + '_set', label + '_set/' + label + '_line'} <= set(task_ids)
@@ -285,7 +346,8 @@ def angle_difference(a: float, b: float) -> float:
 class SelfTest:
     """The live checks."""
 
-    def __init__(self, boats, joysticks, colors, launch=None, nav=False, starts=None):
+    def __init__(self, boats, joysticks, colors, launch=None, nav=False, starts=None,
+                 watchdog=None):
         import rclpy
         from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
         from marine_interfaces.msg import (
@@ -297,6 +359,12 @@ class SelfTest:
         self.boats = list(boats)
         self.joysticks = joysticks
         self.nav = nav
+        self.watchdog = watchdog
+        self.pad_boat = None            # the boat whose pad is simulated (at rest) by spin()
+        self._next_pad = 0.0
+        self.wd_state = {}
+        self.tasks_ids = {}
+        self.helm_mode = {}
         self.starts = starts or {}
         self.colors = colors
         self.launch = launch
@@ -308,6 +376,22 @@ class SelfTest:
         self.node.create_subscription(
             PlatformList, '/marine/platforms', self._on_platforms, 20)
         self.fix = {}
+        if self.watchdog:
+            from marine_interfaces.msg import Heartbeat
+            from marine_nav_interfaces.msg import TaskFeedback
+            from std_msgs.msg import String
+            state_qos = QoSProfile(depth=1, durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                                   reliability=ReliabilityPolicy.RELIABLE)
+            for b in boats:
+                self.node.create_subscription(
+                    String, '/%s/demo_watchdog/state' % b,
+                    lambda m, b=b: self.wd_state.__setitem__(b, json.loads(m.data)), state_qos)
+                self.node.create_subscription(
+                    TaskFeedback, '/%s/marine/status/mission_tasks' % b,
+                    lambda m, b=b: self.tasks_ids.__setitem__(b, [t.id for t in m.tasks]), 10)
+                self.node.create_subscription(
+                    Heartbeat, '/%s/marine/heartbeat' % b,
+                    lambda m, b=b: self._on_heartbeat(b, m), 10)
         self.joy_pub = {}
         self.reset_pub = {}
         self.catalog_entries = {b: None for b in boats}
@@ -329,6 +413,11 @@ class SelfTest:
                 SonarVisualizationTile, '/%s/sensors/mbes/cube_bathymetry/coverage_tiles' % b,
                 lambda m, b=b: self.tile_count.__setitem__(b, self.tile_count[b] + 1),
                 QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT))
+
+    def _on_heartbeat(self, boat, msg):
+        for item in msg.values:
+            if item.key == 'piloting_mode':
+                self.helm_mode[boat] = item.value
 
     def _on_fix(self, boat, fix):
         self.fix[boat] = fix
@@ -357,7 +446,14 @@ class SelfTest:
         deadline = time.monotonic() + seconds
         while time.monotonic() < deadline:
             self.check_launch()
+            self._pad_tick()
             self.rclpy.spin_once(self.node, timeout_sec=0.02)
+
+    def _pad_tick(self):
+        """Publish an untouched pad for ``pad_boat`` at 10 Hz, as the driver's autorepeat does."""
+        if self.pad_boat is not None and time.monotonic() >= self._next_pad:
+            self.joy_pub[self.pad_boat].publish(rest_joy())
+            self._next_pad = time.monotonic() + 0.1
 
     def drive(self, commands, seconds):
         """Publish ``{boat: (throttle, rudder)}`` as fake Joy at 10 Hz."""
@@ -401,7 +497,8 @@ class SelfTest:
 
     def boat_nodes(self):
         """Return the node names every boat must have (nav2's too with ``--nav``)."""
-        return BOAT_NODES + (NAV_NODES if self.nav else ())
+        return BOAT_NODES + (NAV_NODES if self.nav else ()) + (
+            ('demo_watchdog',) if self.watchdog else ())
 
     def lifecycle_state(self, name, timeout=5.0):
         """Return the lifecycle state label of node ``name``, or None when it did not answer."""
@@ -601,6 +698,147 @@ class SelfTest:
                     all(d < 1.0 for d in others.values()),
                     ', '.join('%s %.1f m' % (b, d) for b, d in others.items()) or 'none')
 
+    def wait_until(self, condition, timeout):
+        """Spin until ``condition()`` holds; return the seconds it took, or None on a timeout."""
+        start = time.monotonic()
+        while time.monotonic() - start < timeout:
+            self.spin(0.2)
+            if condition():
+                return time.monotonic() - start
+        return None
+
+    def touch_pad(self, boat):
+        """
+        Publish one active Joy message on ``boat`` and leave its pad at rest, still sending.
+
+        Returns the active message. ``pad_boat`` stays (or becomes) ``boat``, so the autorepeat
+        of the untouched pad carries on from the next tick.
+        """
+        active = rest_joy()
+        active.axes[THROTTLE_AXIS] = 0.8
+        self.pad_boat = boat
+        self._next_pad = time.monotonic() + 0.1
+        self.joy_pub[boat].publish(active)
+        return active
+
+    def wd(self, boat, key, default=None):
+        """Return one field of the boat's latest watchdog state."""
+        return self.wd_state.get(boat, {}).get(key, default)
+
+    def own_tasks(self, boat, generation=None):
+        """Return the reported task ids that belong to the boat's survey (of one generation)."""
+        return [i for i in self.tasks_ids.get(boat, []) if own_task(boat, i, generation)]
+
+    def check_watchdog_pad(self, mission_seconds=240.0, drive_seconds=150.0):
+        """
+        Check that an idle pad hands a boat to autonomy and a touch hands it back.
+
+        The next idle then restarts the section.
+
+        The first boat gets a simulated pad at rest (the other boats get none, and the launch
+        has no missing-pad rule). After the idle timeout it must go autonomous and its section
+        mission must be taken and driven; a single active Joy message must put it back in
+        manual in that message's turn and clear the mission; left alone again it must be sent
+        the whole section anew (the next generation), from the first line.
+        """
+        boat = self.boats[0]
+        others = self.boats[1:]
+        self.reset()
+        start = self.positions()
+        self.record('before any pad appears the watchdog waits',
+                    all(self.wd(b, 'state') == 'BOOT' for b in self.boats),
+                    ', '.join('%s %s' % (b, self.wd(b, 'state')) for b in self.boats))
+        self.pad_boat = boat
+        took = self.wait_until(lambda: self.wd(boat, 'state') == 'MANUAL', 30.0)
+        self.record('%s: a pad at rest appears and the boat is manual (MANUAL)' % boat,
+                    took is not None, 'state %s' % self.wd(boat, 'state'))
+        idle = self.wait_until(lambda: self.wd(boat, 'state') == 'AUTONOMOUS',
+                               WATCHDOG_IDLE + 20.0)
+        self.record('%s: idle for %g s hands the boat to autonomy (reason idle)'
+                    % (boat, WATCHDOG_IDLE),
+                    idle is not None and self.wd(boat, 'reason') == 'idle',
+                    'after %s s, state %s/%s' % ('-' if idle is None else '%.0f' % idle,
+                                                 self.wd(boat, 'state'), self.wd(boat, 'reason')))
+        took = self.wait_until(lambda: self.wd(boat, 'mission') == 'RUNNING', mission_seconds)
+        first = self.wd(boat, 'generation')
+        self.record('%s: its section mission is taken (tasks reported, generation %s)'
+                    % (boat, first),
+                    took is not None and bool(self.own_tasks(boat, first)),
+                    'mission %s, %d tasks of the section reported' % (
+                        self.wd(boat, 'mission'), len(self.own_tasks(boat, first))))
+        self.wait_until(lambda: metres(start[boat], self.fix[boat]) > 30.0, drive_seconds)
+        moved = metres(start[boat], self.fix[boat])
+        self.record('%s drives its section' % boat, moved > 30.0, '%.0f m from its start' % moved)
+
+        # one active message, then the pad is at rest again (and keeps sending: a pad that goes
+        # silent for pad_lost_timeout is a missing pad, which would pass for idle below)
+        active = self.touch_pad(boat)
+        flipped = self.wait_until(lambda: self.wd(boat, 'state') == 'MANUAL', 2.0)
+        helm = self.wait_until(lambda: self.helm_mode.get(boat) == 'manual', 3.0)
+        self.record('%s: one active Joy message hands it back to manual' % boat,
+                    flipped is not None and helm is not None,
+                    'watchdog %s, helm %s' % (self.wd(boat, 'state'), self.helm_mode.get(boat)))
+        cleared = self.wait_until(lambda: not self.own_tasks(boat, first), 20.0)
+        self.record('%s: the mission is cleared' % boat, cleared is not None,
+                    'still reported: %s' % self.own_tasks(boat, first)[:3])
+
+        def restarted():
+            # the state and the task report are separate topics: wait for both
+            generation = self.wd(boat, 'generation', 0)
+            return (self.wd(boat, 'state') == 'AUTONOMOUS'
+                    and self.wd(boat, 'mission') == 'RUNNING' and generation > first
+                    and any(i.endswith('_l000') for i in self.own_tasks(boat, generation)))
+
+        again = self.wait_until(restarted, WATCHDOG_IDLE + mission_seconds)
+        second = self.wd(boat, 'generation')
+        ids = self.own_tasks(boat, second)
+        self.record('%s: idle again sends the whole section anew from the first line' % boat,
+                    again is not None and self.wd(boat, 'reason') == 'idle'
+                    and any(i.endswith('_l000') for i in ids)
+                    and self.wd(boat, 'lines_done') == 0,
+                    'generation %s, lines done %s of %s' % (
+                        second, self.wd(boat, 'lines_done'), self.wd(boat, 'lines_total')))
+        after = dict(self.fix)
+        still = {b: metres(start[b], after[b]) for b in others}
+        self.record('the boats without a pad stay where they are (manual, nothing to do)',
+                    all(self.wd(b, 'state') == 'BOOT' and d < 1.0 for b, d in still.items()),
+                    ', '.join('%s %s %.1f m' % (b, self.wd(b, 'state'), d)
+                              for b, d in still.items()) or 'none')
+        self.pad_boat = None
+        self.joy_pub[boat].publish(active)       # leave the boat manual
+        self.spin(1.0)
+        self.check_nav_active('after the watchdog scenarios', timeout=30.0)
+
+    def check_watchdog_attract(self, mission_seconds=240.0, drive_seconds=150.0):
+        """
+        With no pad at all every boat surveys its own section (the unattended attract mode).
+
+        Nothing publishes on any ``joy`` topic. After the missing-pad grace each boat must go
+        autonomous (reason pad_missing), have a mission of its own taken (the task ids carry its
+        name) and drive; all nav2 nodes must still be active at the end.
+        """
+        self.reset()
+        start = self.positions()
+        for b in self.boats:
+            took = self.wait_until(lambda b=b: self.wd(b, 'state') == 'AUTONOMOUS', 60.0)
+            self.record('%s: no pad hands the boat to autonomy (reason pad_missing)' % b,
+                        took is not None and self.wd(b, 'reason') == 'pad_missing',
+                        'state %s/%s' % (self.wd(b, 'state'), self.wd(b, 'reason')))
+        for b in self.boats:
+            took = self.wait_until(lambda b=b: self.wd(b, 'mission') == 'RUNNING', mission_seconds)
+            ids = self.own_tasks(b)
+            foreign = [i for other in self.boats if other != b
+                       for i in self.own_tasks(other) if i in ids]
+            self.record('%s: its own section mission is taken' % b,
+                        took is not None and bool(ids) and not foreign,
+                        'mission %s, %d tasks reported' % (self.wd(b, 'mission'), len(ids)))
+        self.wait_until(lambda: all(metres(start[b], self.fix[b]) > 30.0 for b in self.boats),
+                        drive_seconds)
+        moved = {b: metres(start[b], self.fix[b]) for b in self.boats}
+        self.record('every boat drives its section', all(d > 30.0 for d in moved.values()),
+                    ', '.join('%s %.0f m' % (b, d) for b, d in moved.items()))
+        self.check_nav_active('after the attract mode', timeout=30.0)
+
     def check_coverage(self, timeout):
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
@@ -710,10 +948,12 @@ def _terminate(signum, frame):
 # Launch arguments the self-test sets itself and derives its expectations from;
 # a later copy on the command line would override them and make it check the
 # wrong node set.
-OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'enable_nav:=', 'boats:=', 'roster_file:=')
+OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'enable_nav:=', 'enable_watchdog:=', 'idle_timeout:=',
+                   'missing_pad_grace:=', 'boats:=', 'roster_file:=')
 # With --demo the manager is started instead, and these options are the self-test's own.
 OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks',
-                        '--nav', '--no-nav')
+                        '--nav', '--no-nav', '--watchdog', '--no-watchdog',
+                        'enable_watchdog:=', 'idle_timeout:=', 'missing_pad_grace:=')
 
 
 def overridden_launch_args(extra, demo=False) -> list:
@@ -735,6 +975,11 @@ def main(argv=None):
     parser.add_argument('--nav', action='store_true',
                         help='the boats run the navigation stack (the launch is started with '
                              'it): also check nav2 is active and one boat drives a mission')
+    parser.add_argument('--watchdog', choices=('pad', 'attract'), default=None,
+                        help='run the boats with the joystick watchdog (implies --nav) and '
+                             'check it: pad simulates a pad on the first boat (idle -> '
+                             'autonomous, a touch -> manual, idle again -> the section again), '
+                             'attract has no pad at all (every boat surveys its section)')
     parser.add_argument('--nav-seconds', type=float, default=240.0,
                         help='how long the mission boat has to reach the end of its line')
     parser.add_argument('--startup-timeout', type=float, default=None,
@@ -745,6 +990,11 @@ def main(argv=None):
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
+    if args.watchdog and not (args.demo and args.start_launch):
+        parser.error('--watchdog needs --demo --start-launch: the section comes from the '
+                     "manager's target_area group, and the boats launch alone has none")
+    if args.watchdog:
+        args.nav = True
     if args.startup_timeout is None:
         args.startup_timeout = 240.0 if args.nav else 90.0
     roster = args.roster or graph.default_roster_path()
@@ -776,22 +1026,31 @@ def main(argv=None):
             # Everything that can fail sits inside these tries, and the launch (about
             # 50 processes) starts last, so a failed constructor cannot leak it.
             test = SelfTest(boats, args.joysticks, colors, nav=args.nav,
-                            starts=roster_headings(roster))
+                            starts=roster_headings(roster), watchdog=args.watchdog)
             if args.start_launch:
                 proc = start_launch(launch_command(
                     boats if args.boats else None, args.roster, args.joysticks,
-                    args.launch_args, args.demo, args.nav))
+                    args.launch_args, args.demo, args.nav, args.watchdog))
                 test.launch = proc
             try:
                 test.wait_for_nodes(args.startup_timeout)
                 if all(ok for _, ok in test.results):
                     test.check_graph(args.tf_seconds)
                     test.check_platforms()
-                    test.check_solo(args.drive_seconds)
-                    test.check_together(args.drive_seconds + 2.0)
-                    if args.nav:
+                    if args.watchdog:
+                        # the watchdog moves boats nobody drives, so the older scenarios
+                        # (which rely on that not happening) are not run with it
                         test.check_nav_active('after start')
-                        test.check_nav_mission(args.nav_seconds)
+                        if args.watchdog == 'pad':
+                            test.check_watchdog_pad(args.nav_seconds)
+                        else:
+                            test.check_watchdog_attract(args.nav_seconds)
+                    else:
+                        test.check_solo(args.drive_seconds)
+                        test.check_together(args.drive_seconds + 2.0)
+                        if args.nav:
+                            test.check_nav_active('after start')
+                            test.check_nav_mission(args.nav_seconds)
                     test.check_coverage(30.0)
                     if args.demo:
                         test.check_scorer(40.0, scorer_centre(roster, boats))

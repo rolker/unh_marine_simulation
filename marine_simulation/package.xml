@@ -32,6 +32,7 @@
   <exec_depend>mission_manager</exec_depend>
   <exec_depend>nav2_bringup</exec_depend>
   <exec_depend>marine_nav_interfaces</exec_depend>
+  <exec_depend>tf2_ros_py</exec_depend>
   <exec_depend>launch_manager_proto</exec_depend>
   <exec_depend>coverage_assessment</exec_depend>
   <exec_depend>joint_state_publisher</exec_depend>

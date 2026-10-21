@@ -45,7 +45,7 @@ import glob
 import os
 import re
 import sys
-from typing import Callable, Dict, List, Sequence, Tuple
+from typing import Callable, Dict, List, Optional, Sequence, Tuple
 
 from ament_index_python.packages import get_package_prefix
 from ament_index_python.packages import get_package_share_directory
@@ -55,6 +55,7 @@ from launch.actions import ExecuteProcess
 from launch.actions import GroupAction
 from launch.actions import IncludeLaunchDescription
 from launch.actions import OpaqueFunction
+from launch.actions import SetEnvironmentVariable
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import Command
 from launch.substitutions import LaunchConfiguration
@@ -156,6 +157,13 @@ def parse_float(text: str, what: str, low: float = None, high: float = None,
     if positive and value <= 0.0:
         raise ValueError('%s must be greater than zero, got %s' % (what, text))
     return value
+
+
+def optional_float(text: str, what: str, positive: bool = False) -> Optional[float]:
+    """Parse a numeric launch argument that may be empty (empty: ``None``, not given)."""
+    if not text.strip():
+        return None
+    return parse_float(text, what, positive=positive)
 
 
 def parse_tide_speed_factor(text: str) -> float:
@@ -393,8 +401,25 @@ def _frame_parameters(boat: Boat, **names: str) -> List[ScopedSetParameter]:
             for param, suffix in names.items()]
 
 
+def watchdog_parameters(boat: Boat, section_index: int, section_count: int,
+                        overrides: dict) -> dict:
+    """
+    Return the parameters of one boat's watchdog that the launch decides.
+
+    The boat's name and map frame, and its place among the boats that run (section ``index`` of
+    ``count`` in roster order). ``overrides`` are the timing arguments the launch was given;
+    an argument left empty is not passed, so ``config/demo_params.yaml`` stays the one place
+    the demo values live.
+    """
+    params = {'boat': boat.name, 'map_frame': boat.frame('map'),
+              'section_index': section_index, 'section_count': section_count}
+    params.update({k: v for k, v in overrides.items() if v is not None})
+    return params
+
+
 def boat_actions(
-        boat: Boat, joystick: str, settings: dict) -> GroupAction:
+        boat: Boat, joystick: str, settings: dict,
+        section: Tuple[int, int] = (0, 1)) -> GroupAction:
     """
     Build the namespaced group for one boat.
 
@@ -505,6 +530,14 @@ def boat_actions(
         actions.append(_include('mission_manager', 'launch', 'mission_manager_launch.py',
                                 launch_arguments={'map_frame': boat.frame('map')}))
 
+    if settings.get('enable_nav') and settings.get('enable_watchdog'):
+        # decides who drives: the pad, or a survey of this boat's section (see the README)
+        actions.append(Node(
+            package='marine_simulation', executable='demo_watchdog.py', name='demo_watchdog',
+            emulate_tty=True, respawn=True, respawn_delay=2.0,
+            parameters=[watchdog_parameters(boat, section[0], section[1],
+                                            settings['watchdog_overrides'])]))
+
     if joystick is not None:
         actions.append(Node(
             package='joy_linux', executable='joy_linux_node', name='joy_node',
@@ -525,7 +558,7 @@ def boat_actions(
     return GroupAction(actions)
 
 
-def nav_actions(boat: Boat, params_file: str) -> GroupAction:
+def nav_actions(boat: Boat, params_file: str, index: int = 0, shim: str = '') -> GroupAction:
     """
     Build the nav2 stack of one boat: Ben's real bring-up, in this boat's namespace.
 
@@ -537,9 +570,19 @@ def nav_actions(boat: Boat, params_file: str) -> GroupAction:
     brought back up. ``params_file`` is the demo's version of Ben's file
     (``marine_simulation.demo_nav``). nav2's lifecycle manager reads ``bond_timeout`` from the
     scope it is launched in, so the longer demo value is set here (the platform launch file
-    gives it no parameter of its own).
+    gives it no parameter of its own). The navigator's Groot publisher binds fixed ZeroMQ
+    ports, so with ``shim`` the boat's processes get their ports moved by ``index`` times
+    ``demo_nav.ZMQ_PORT_STEP`` (``demo_nav`` says why); the group's environment changes end
+    with the group.
     """
-    return GroupAction([
+    environment = []
+    if shim:
+        environment = [
+            SetEnvironmentVariable('LD_PRELOAD', demo_nav.preload(
+                shim, os.environ.get('LD_PRELOAD', ''))),
+            SetEnvironmentVariable('DEMO_ZMQ_PORT_OFFSET', str(demo_nav.zmq_port_offset(index))),
+        ]
+    return GroupAction(environment + [
         ScopedSetParameter(name='bond_timeout', value=demo_nav.BOND_TIMEOUT_S),
         _include('ben_project11', 'launch', 'nav2_bringup_launch.py', launch_arguments={
             'namespace': boat.name,
@@ -618,6 +661,7 @@ def launch_setup(context, *args, **kwargs):
         return LaunchConfiguration(name).perform(context)
 
     enable_nav = parse_bool(arg('enable_nav'), 'enable_nav')
+    enable_watchdog = parse_bool(arg('enable_watchdog'), 'enable_watchdog')
     enable_joysticks = parse_bool(arg('enable_joysticks'), 'enable_joysticks')
     lifecycle_guard = parse_bool(arg('lifecycle_guard'), 'lifecycle_guard')
 
@@ -638,6 +682,13 @@ def launch_setup(context, *args, **kwargs):
         'deadzone': 0.1,
         'autorepeat_rate': 10.0,
         'enable_nav': enable_nav,
+        'enable_watchdog': enable_watchdog,
+        'watchdog_overrides': {
+            'idle_timeout': optional_float(arg('idle_timeout'), 'idle_timeout', positive=True),
+            'missing_pad_grace': optional_float(
+                arg('missing_pad_grace'), 'missing_pad_grace', positive=True),
+            'line_spacing': optional_float(arg('line_spacing'), 'line_spacing', positive=True),
+        },
     }
     tide_speed_factor = parse_tide_speed_factor(arg('tide_speed_factor'))
     enc_dir = ''
@@ -671,6 +722,10 @@ def launch_setup(context, *args, **kwargs):
 
     if enable_nav:
         # after every check that can refuse the start, so a refused start leaves no file
+        shim = demo_nav.zmq_shim_path(get_package_prefix('marine_simulation'))
+        if not os.path.isfile(shim):
+            raise RuntimeError('%s is not installed (build marine_simulation); without it only '
+                               'one boat can run a navigation goal' % shim)
         nav_params = demo_nav.write_params(os.path.join(demo_support.state_dir(), 'nav'))
 
     actions = [
@@ -685,9 +740,10 @@ def launch_setup(context, *args, **kwargs):
             ],
             remappings=asv_sim_remappings(boats)),
     ]
-    actions.extend(boat_actions(b, joysticks.get(b.name), settings) for b in boats)
+    actions.extend(boat_actions(b, joysticks.get(b.name), settings, (i, len(boats)))
+                   for i, b in enumerate(boats))
     if enable_nav:
-        actions.extend(nav_actions(b, nav_params) for b in boats)
+        actions.extend(nav_actions(b, nav_params, i, shim) for i, b in enumerate(boats))
     if lifecycle_guard:
         executable = os.path.join(get_package_prefix('launch_manager_proto'), 'lib',
                                   'launch_manager_proto', 'launch_manager_proto')
@@ -720,6 +776,18 @@ def generate_launch_description():
                 'Run the navigation stack per boat: mission_manager and the real ben_project11 '
                 'nav2 bring-up (marine_simulation.demo_nav says how its parameters differ). '
                 'Off by default.'),
+        declare('enable_watchdog', TextSubstitution(text='true'),
+                'With enable_nav, run the watchdog of each boat: an idle or pad-less boat '
+                'surveys its own section of the target area. Ignored without enable_nav.'),
+        declare('idle_timeout', TextSubstitution(text=''),
+                'Watchdog: seconds without pad activity before the boat surveys by itself. '
+                'Empty: the demo value in config/demo_params.yaml.'),
+        declare('missing_pad_grace', TextSubstitution(text=''),
+                'Watchdog: seconds after start without any pad message before the boat surveys '
+                'by itself. Empty: the demo value in config/demo_params.yaml.'),
+        declare('line_spacing', TextSubstitution(text=''),
+                'Watchdog: metres between survey lines. Empty: the demo value in '
+                'config/demo_params.yaml.'),
         declare('tide_speed_factor', TextSubstitution(text='10'),
                 'Tide speed multiplier (10 = ~75 min cycle, 3600 = ~12 sec cycle, '
                 '1 = real-time, 0 = a frozen tide).'),
