@@ -444,3 +444,19 @@ def test_a_section_whose_every_line_failed_backs_off_before_repeating():
     assert len(b.sent) == 1
     b.run(55.0, joy=None)
     assert len(b.sent) == 2
+
+
+def test_a_repeat_long_after_the_first_send_is_not_flagged_as_an_unavailable_navigator():
+    # live (4 boats, 9 minute run): the section repeated after a long survey was flagged at once,
+    # because the wait for the navigator was measured from the very first send
+    b = Boat(missing_pad_grace=1.0, repeat_delay=10.0, unavailable_after=120.0)
+    b.run(3.0, joy=None)
+    b.tasks(1)
+    for _ in range(20):                                 # surveying for a long time
+        b.run(20.0, joy=None, step=1.0)
+        b.tasks(1)
+    b.tasks(1, done=(0, 1, 2))
+    b.run(15.0, joy=None)
+    assert b.core.mission_state == wc.LOADING
+    assert b.core.snapshot(b.now)['navigator_unavailable'] is False
+    assert not any('has not taken' in line for line in b.log)

@@ -234,6 +234,7 @@ class WatchdogCore:
                 if 'fail' in (status or '').lower():
                     self._failed.add(line)
         if self.mission_state == LOADING:
+            self._first_sent_at = None      # taken: the next wait for the navigator starts anew
             self._mission_state(RUNNING)
             self.log('mission %s is running (%d lines)' % (self._set_id, len(self._line_ids)))
         if self.mission_state == RUNNING and len(self._done) == len(self._line_ids):
