@@ -96,6 +96,7 @@ import argparse
 import json
 import math
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -193,7 +194,7 @@ WATCHDOG_GRACE_ATTRACT = 8.0
 PAD_REST_AXES = [0.0, 0.0, 1.0, 0.0, 0.0, 1.0, 0.0, 0.0]
 
 
-def watchdog_arguments(nav: bool, watchdog) -> list:
+def watchdog_arguments(nav: bool, watchdog, demo: bool = False) -> list:
     """
     Return the launch arguments that set up the watchdog for a run.
 
@@ -205,7 +206,10 @@ def watchdog_arguments(nav: bool, watchdog) -> list:
         return ['idle_timeout:=%g' % WATCHDOG_IDLE, 'missing_pad_grace:=%g' % WATCHDOG_GRACE_PAD]
     if watchdog == 'attract':
         return ['missing_pad_grace:=%g' % WATCHDOG_GRACE_ATTRACT]
-    return ['enable_watchdog:=false'] if nav else []
+    if not nav:
+        return []
+    # the manager owns enable_watchdog (--no-watchdog); the launch takes the argument itself
+    return ['--no-watchdog'] if demo else ['enable_watchdog:=false']
 
 
 def launch_command(boats, roster, joysticks, extra, demo=False, nav=False,
@@ -222,7 +226,10 @@ def launch_command(boats, roster, joysticks, extra, demo=False, nav=False,
             cmd += ['--boats', ','.join(boats)]
         if roster:
             cmd += ['--roster', roster]
-        return cmd + watchdog_arguments(nav, watchdog) + list(extra)
+        # the manager's options come before its free launch arguments
+        given = watchdog_arguments(nav, watchdog, True)
+        return (cmd + [a for a in given if a.startswith('--')]
+                + [a for a in given if not a.startswith('--')] + list(extra))
     cmd = ['ros2', 'launch', 'marine_simulation', 'demo_boats_launch.py',
            'enable_joysticks:=%s' % ('true' if joysticks else 'false')]
     if nav:
@@ -312,6 +319,17 @@ def line_reached(travelled: float, line_length: float, distance, status: str) ->
     """
     return (travelled > 0.8 * line_length and distance is not None and distance < 30.0
             and 'fail' not in (status or '').lower())
+
+
+def own_task(boat: str, task_id: str, generation=None) -> bool:
+    """
+    Return whether ``task_id`` belongs to the watchdog survey of ``boat`` (of one generation).
+
+    The ids are ``<boat>_s<n>`` and ``<boat>_s<n>/<boat>_s<n>_l<line>``; a prefix match would
+    take ``ben_s10`` for generation 1 of ``ben``, so the number is matched whole.
+    """
+    match = re.match(r'^%s_s(\d+)(?:/|$)' % re.escape(boat), task_id)
+    return bool(match) and (generation is None or int(match.group(1)) == int(generation))
 
 
 def tasks_acknowledge(task_ids, label: str) -> bool:
@@ -688,14 +706,27 @@ class SelfTest:
                 return time.monotonic() - start
         return None
 
+    def touch_pad(self, boat):
+        """
+        Publish one active Joy message on ``boat`` and leave its pad at rest, still sending.
+
+        Returns the active message. ``pad_boat`` stays (or becomes) ``boat``, so the autorepeat
+        of the untouched pad carries on from the next tick.
+        """
+        active = rest_joy()
+        active.axes[THROTTLE_AXIS] = 0.8
+        self.pad_boat = boat
+        self._next_pad = time.monotonic() + 0.1
+        self.joy_pub[boat].publish(active)
+        return active
+
     def wd(self, boat, key, default=None):
         """Return one field of the boat's latest watchdog state."""
         return self.wd_state.get(boat, {}).get(key, default)
 
     def own_tasks(self, boat, generation=None):
         """Return the reported task ids that belong to the boat's survey (of one generation)."""
-        prefix = '%s_s%s' % (boat, '' if generation is None else generation)
-        return [i for i in self.tasks_ids.get(boat, []) if i.startswith(prefix)]
+        return [i for i in self.tasks_ids.get(boat, []) if own_task(boat, i, generation)]
 
     def check_watchdog_pad(self, mission_seconds=240.0, drive_seconds=150.0):
         """
@@ -738,11 +769,9 @@ class SelfTest:
         moved = metres(start[boat], self.fix[boat])
         self.record('%s drives its section' % boat, moved > 30.0, '%.0f m from its start' % moved)
 
-        # one active message, then the pad is at rest again
-        self.pad_boat = None
-        active = rest_joy()
-        active.axes[THROTTLE_AXIS] = 0.8
-        self.joy_pub[boat].publish(active)
+        # one active message, then the pad is at rest again (and keeps sending: a pad that goes
+        # silent for pad_lost_timeout is a missing pad, which would pass for idle below)
+        active = self.touch_pad(boat)
         flipped = self.wait_until(lambda: self.wd(boat, 'state') == 'MANUAL', 2.0)
         helm = self.wait_until(lambda: self.helm_mode.get(boat) == 'manual', 3.0)
         self.record('%s: one active Joy message hands it back to manual' % boat,
@@ -751,8 +780,6 @@ class SelfTest:
         cleared = self.wait_until(lambda: not self.own_tasks(boat, first), 20.0)
         self.record('%s: the mission is cleared' % boat, cleared is not None,
                     'still reported: %s' % self.own_tasks(boat, first)[:3])
-        self._next_pad = 0.0
-        self.pad_boat = boat
 
         def restarted():
             # the state and the task report are separate topics: wait for both
@@ -766,7 +793,7 @@ class SelfTest:
         second = self.wd(boat, 'generation')
         ids = self.own_tasks(boat, second)
         self.record('%s: idle again sends the whole section anew from the first line' % boat,
-                    again is not None and ('%s_s%s/%s_s%s_l000' % (boat, second, boat, second))
+                    again is not None and self.wd(boat, 'reason') == 'idle' and ('%s_s%s/%s_s%s_l000' % (boat, second, boat, second))
                     in ids and self.wd(boat, 'lines_done') == 0,
                     'generation %s, lines done %s of %s' % (
                         second, self.wd(boat, 'lines_done'), self.wd(boat, 'lines_total')))
@@ -924,7 +951,7 @@ OWN_LAUNCH_ARGS = ('enable_joysticks:=', 'enable_nav:=', 'enable_watchdog:=', 'i
                    'missing_pad_grace:=', 'boats:=', 'roster_file:=')
 # With --demo the manager is started instead, and these options are the self-test's own.
 OWN_DEMO_LAUNCH_ARGS = ('--profile', '--boats', '--roster', '--no-joysticks', '--joysticks',
-                        '--nav', '--no-nav', 'enable_watchdog:=', 'idle_timeout:=',
+                        '--nav', '--no-nav', '--watchdog', '--no-watchdog', 'enable_watchdog:=', 'idle_timeout:=',
                         'missing_pad_grace:=')
 
 
@@ -962,6 +989,9 @@ def main(argv=None):
     parser.add_argument('launch_args', nargs='*', help='extra launch arguments (--start-launch)')
     args = parser.parse_args(argv)
 
+    if args.watchdog and not (args.demo and args.start_launch):
+        parser.error('--watchdog needs --demo --start-launch: the section comes from the '
+                     "manager's target_area group, and the boats launch alone has none")
     if args.watchdog:
         args.nav = True
     if args.startup_timeout is None:

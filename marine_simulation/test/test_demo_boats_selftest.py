@@ -173,7 +173,25 @@ def test_the_watchdog_arguments_per_scenario():
     assert 'enable_nav:=true' in cmd and 'idle_timeout:=6' in cmd
     assert 'enable_watchdog:=false' not in cmd
     demo = selftest.launch_command(None, None, False, [], demo=True, nav=True)
-    assert demo.index('--nav') < demo.index('enable_watchdog:=false')
+    assert 'enable_watchdog:=false' not in demo and '--no-watchdog' in demo   # the manager owns it
+    demo_pad = selftest.launch_command(None, None, False, ['x:=1'], demo=True, nav=True,
+                                       watchdog='pad')
+    assert '--no-watchdog' not in demo_pad
+    assert demo_pad.index('idle_timeout:=6') < demo_pad.index('x:=1')
+
+
+def test_the_manager_watchdog_options_are_the_self_tests_own():
+    assert selftest.overridden_launch_args(['--no-watchdog'], demo=True) == ['--no-watchdog']
+    assert selftest.overridden_launch_args(['--watchdog'], demo=True) == ['--watchdog']
+
+
+@pytest.mark.parametrize('task_id, generation, expected', [
+    ('ben_s1', None, True), ('ben_s1/ben_s1_l000', 1, True), ('ben_s10', None, True),
+    ('ben_s10', 1, False), ('ben_s10/ben_s10_l003', 1, False), ('ben_s10/ben_s10_l003', 10, True),
+    ('ben_s1', 2, False), ('bens_s1', None, False), ('xben_s1', None, False),
+    ('ben_s', None, False), ('done_hover', None, False)])
+def test_own_task_matches_the_generation_whole(task_id, generation, expected):
+    assert selftest.own_task('ben', task_id, generation) is expected
 
 
 def test_the_watchdog_arguments_are_the_self_tests_own():
@@ -272,3 +290,36 @@ def test_scorer_centre_is_the_mean_start_of_the_chosen_boats(tmp_path):
         '  - {name: c, color: {red: 1, green: 1, blue: 1}, start: {lat: 0.0, lon: 0.0, '
         'heading: 0}}\n')
     assert selftest.scorer_centre(str(roster), ['a', 'b']) == (44.0, -71.0)
+
+
+class FakePublisher:
+    def __init__(self):
+        self.sent = []
+
+    def publish(self, msg):
+        self.sent.append(msg)
+
+
+def test_touching_the_pad_leaves_it_sending_at_rest():
+    # the pad scenario's last check reads reason idle: a pad silent for longer than
+    # pad_lost_timeout after the touch would be a missing pad instead
+    test = object.__new__(selftest.SelfTest)
+    test.pad_boat, test._next_pad = None, 0.0
+    test.joy_pub = {'a': FakePublisher()}
+    active = test.touch_pad('a')
+    assert test.pad_boat == 'a'
+    assert test.joy_pub['a'].sent == [active]
+    assert active.axes[selftest.THROTTLE_AXIS] == pytest.approx(0.8)
+    test._pad_tick()                                     # not yet due: no double message
+    assert len(test.joy_pub['a'].sent) == 1
+    test._next_pad = 0.0
+    test._pad_tick()
+    rest = test.joy_pub['a'].sent[-1]
+    assert list(rest.axes) == list(selftest.rest_joy().axes)
+
+
+def test_watchdog_without_the_manager_is_refused_early():
+    with pytest.raises(SystemExit):
+        selftest.main(['--watchdog', 'pad'])
+    with pytest.raises(SystemExit):
+        selftest.main(['--watchdog', 'attract', '--start-launch'])
