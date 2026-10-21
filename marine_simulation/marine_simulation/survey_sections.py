@@ -48,6 +48,12 @@ from typing import List, Optional, Sequence, Tuple
 EARTH_RADIUS_M = 6371008.8
 KNOTS_TO_MS = 0.514444
 
+# limits that keep a bad request (a huge area, a tiny spacing) from running for minutes or
+# producing a plan mission_manager cannot take
+MAX_BAND_STEPS = 200000
+MAX_LINES = 500
+MAX_BOATS = 64
+
 # an extra sample of the area per spacing/this many metres when integrating band areas
 _SAMPLES_PER_SPACING = 20.0
 
@@ -147,6 +153,9 @@ def band_edges(points: Sequence[Point], count: int, step: float) -> List[float]:
     low = min(p[1] for p in points)
     high = max(p[1] for p in points)
     steps = max(1, int(math.ceil((high - low) / step)))
+    if steps > MAX_BAND_STEPS:
+        raise SectionError('the area is %.0f spacings across; the limit is %d samples'
+                           % ((high - low) / (step * _SAMPLES_PER_SPACING), MAX_BAND_STEPS))
     h = (high - low) / steps
     cumulative = [0.0]
     for k in range(steps):
@@ -180,6 +189,9 @@ def band_lines(points: Sequence[Point], v_low: float, v_high: float, spacing: fl
     """
     width = v_high - v_low
     count = max(1, int(round(width / spacing)))
+    if count > MAX_LINES:
+        raise SectionError('a band of %.0f m at a spacing of %g m is %d lines; the limit is %d'
+                           % (width, spacing, count, MAX_LINES))
     positions = [v_low + width * (k + 0.5) / count for k in range(count)]
     lines = []
     for index, v in enumerate(positions):
@@ -200,12 +212,12 @@ class Section:
     """One boat's part of the area: its lines in order, as latitude/longitude end points."""
 
     def __init__(self, index: int, count: int, lines: List[List[Tuple[Point, Point]]],
-                 band: Tuple[float, float], heading: float, area_m2: float):
+                 band: Tuple[float, float], angle_deg: float, area_m2: float):
         self.index = index
         self.count = count
         self.lines = lines          # [[(start, end), ...] per line position]
         self.band = band
-        self.heading = heading
+        self.angle_deg = angle_deg      # the lines' direction as a maths angle (east = 0, ccw)
         self.area_m2 = area_m2
 
     def segments(self) -> List[Tuple[Point, Point]]:
@@ -223,6 +235,8 @@ def plan_section(area: Sequence[Point], index: int, count: int, spacing: float,
     the area's smallest bounding box. Raises ``SectionError`` for a bad request or an area that
     leaves this section no line.
     """
+    if count > MAX_BOATS:
+        raise SectionError('%d sections; the limit is %d' % (count, MAX_BOATS))
     if count < 1 or not 0 <= index < count:
         raise SectionError('section %d of %d does not exist' % (index, count))
     if not spacing > 0.0 or edge_margin < 0.0 or min_length < 0.0:

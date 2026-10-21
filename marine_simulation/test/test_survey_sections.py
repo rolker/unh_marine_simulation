@@ -111,7 +111,7 @@ def test_lines_of_neighbouring_boats_are_at_least_a_spacing_apart():
     area = shipped_area()
     plane = ss.LocalPlane(sum(p[0] for p in area) / len(area), sum(p[1] for p in area) / len(area))
     a, b = (ss.plan_section(area, i, 2, 80.0) for i in (0, 1))
-    angle = math.radians(a.heading)
+    angle = math.radians(a.angle_deg)
 
     def across(section):
         return sorted(ss.rotate(plane.to_xy(*line[0][0]), -angle)[1] for line in section.lines)
@@ -221,3 +221,24 @@ def test_generations_give_distinct_task_ids():
 def test_the_mission_message_is_small_enough_for_a_string_topic():
     section = ss.plan_section(shipped_area(), 0, 1, 40.0)       # the largest case: one boat
     assert len(ss.mission_command(ss.mission_plan(section, 'x_s1', 4.0))) < 64 * 1024
+
+
+def test_a_request_that_would_make_thousands_of_lines_is_refused():
+    with pytest.raises(ss.SectionError, match='lines; the limit'):
+        ss.plan_section(square(side=50000.0), 0, 1, 80.0)
+
+
+def test_a_request_that_would_need_millions_of_samples_is_refused():
+    with pytest.raises(ss.SectionError, match='samples'):
+        ss.plan_section(square(side=50000.0), 0, 1, 1.0)
+
+
+def test_an_absurd_number_of_boats_is_refused():
+    with pytest.raises(ss.SectionError, match='sections'):
+        ss.plan_section(square(), 0, ss.MAX_BOATS + 1, 80.0)
+
+
+def test_the_section_carries_the_maths_angle_not_a_heading():
+    section = ss.plan_section(square(), 0, 1, 100.0, heading_deg=90.0)     # due east
+    assert section.angle_deg % 180.0 == pytest.approx(0.0, abs=0.5)
+    assert not hasattr(section, 'heading')
