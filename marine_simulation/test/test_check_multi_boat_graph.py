@@ -105,10 +105,11 @@ def test_without_a_server_nothing_is_set():
     assert environ == {}
 
 
-def test_a_super_client_setting_the_operator_made_is_kept():
+def test_a_conflicting_super_client_setting_is_replaced_not_trusted():
+    # an incomplete graph would read as a broken demo
     environ = {'ROS_DISCOVERY_SERVER': '127.0.0.1:11853', 'ROS_SUPER_CLIENT': 'FALSE'}
     graph.enable_super_client(environ)
-    assert environ['ROS_SUPER_CLIENT'] == 'FALSE'
+    assert environ['ROS_SUPER_CLIENT'] == 'TRUE'
 
 
 def test_what_the_checker_starts_is_never_a_super_client():

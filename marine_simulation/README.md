@@ -707,7 +707,7 @@ boat's own map frame, so the per-boat map origins need no change.
 nav2's lifecycle nodes are brought up by nav2's own lifecycle manager; the launch manager's `boats`
 group (`exclude` in `demo_manager.yaml`) and the guard (`--exclude`) leave them alone, so each node
 has one writer. nav2 takes its whole stack down when one of its nodes dies, and the boats' nodes
-are not respawned, so a nav2 failure shows as a dead boat navigator, not as a restart. Two things nothing
+are not respawned (composed, a crash of any server takes the container, lifecycle manager included, so the boat's whole nav2 is gone at once; `nav_composition:=false` is the way back), so a nav2 failure shows as a dead boat navigator, not as a restart. Two things nothing
 checks outside the self-test: the manager's `READY` for the boats counts `mission_manager` and
 not nav2 (which it does not own), so a boat whose nav2 bring-up failed still shows `READY`; and
 the launch's own guard (without the manager) exits once the nodes are up, so a `mission_manager`

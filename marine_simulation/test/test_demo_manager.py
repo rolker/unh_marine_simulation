@@ -395,7 +395,7 @@ def test_the_scorer_waits_for_the_target_area_and_the_boats(spec):
 def test_the_target_area_publisher_is_a_group_that_stops_with_camp(spec):
     group = spec.groups['target_area']
     assert (group.package, group.file) == ('marine_simulation', 'demo_target_area_launch.py')
-    assert group.requires == [] and group.follows == ['camp']
+    assert group.requires == ['discovery'] and group.follows == ['camp']
     assert group.restart == 'on-failure'
     assert group.ready_nodes == ['/survey_area_publisher']
     assert group.arguments['target_area_file'].default == '/t.json'
@@ -859,7 +859,7 @@ def test_manager_camp_start_passes_fresh_to_the_actions(monkeypatch, tmp_path):
 def test_the_rqt_group_needs_nothing_stops_with_camp_and_is_never_restarted(spec):
     group = spec.groups['rqt']
     assert (group.package, group.file) == ('marine_simulation', 'demo_rqt_launch.py')
-    assert group.requires == [] and group.follows == ['camp']
+    assert group.requires == ['discovery'] and group.follows == ['camp']
     assert group.restart == 'never'
     assert group.arguments['rqt_fresh'].default == 'false'
     assert group.arguments['boats'].default == '' and 'roster_file' in group.arguments
@@ -1053,7 +1053,9 @@ def test_a_missing_rqt_is_a_message_not_a_failed_demo(monkeypatch):
 def test_the_discovery_group_runs_the_server_launch_first_and_the_boats_wait_for_it(spec):
     group = spec.groups['discovery']
     assert (group.package, group.file) == ('marine_simulation', 'demo_discovery_server_launch.py')
-    assert group.restart == 'on-failure' and group.follows == ['camp']
+    assert group.restart == 'never' and group.follows == ['camp']
+    assert spec.groups['target_area'].requires == ['discovery']
+    assert spec.groups['rqt'].requires == ['discovery']
     assert spec.groups['boats'].requires == ['discovery']
     for name in ('demo', 'headless', 'boats'):
         assert spec.profiles[name][0] == 'discovery'
@@ -1202,3 +1204,17 @@ def test_main_runs_the_watchdog_by_default(run_manager_spy):
     assert demo_manager.main(['--no-joysticks', '--nav']) == 0
     (spec,) = run_manager_spy
     assert spec.groups['boats'].arguments['enable_watchdog'].default == 'true'
+
+
+def test_a_missing_fastdds_tool_is_refused_with_the_reason(monkeypatch):
+    monkeypatch.setattr(demo_support.shutil, 'which', lambda name: None)
+    with pytest.raises(ValueError, match='fastdds tool is not on the PATH'):
+        demo_support.check_discovery_tool()
+
+
+def test_a_super_client_exported_in_the_callers_shell_does_not_reach_the_groups(
+        run_manager_spy, monkeypatch):
+    monkeypatch.setenv('ROS_SUPER_CLIENT', 'TRUE')
+    assert demo_manager.main(['--no-joysticks', '--discovery-server']) == 0
+    assert environments == [{'ROS_SUPER_CLIENT': 'TRUE'}]
+    assert 'ROS_SUPER_CLIENT' not in os.environ

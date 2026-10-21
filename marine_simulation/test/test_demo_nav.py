@@ -249,11 +249,13 @@ def test_the_lifecycle_managers_list_is_bens_list_in_bens_order():
     if source is None:
         pytest.skip('ben_project11 is not installed')
     import ast
+    names = None
     for node in ast.walk(ast.parse(source)):
         if (isinstance(node, ast.Assign)
                 and getattr(node.targets[0], 'id', '') == 'lifecycle_nodes'):
             names = [e.value for e in node.value.elts]
             break
+    assert names is not None, 'ben_project11 no longer has a lifecycle_nodes list'
     assert names == list(demo_nav.NAV2_SERVERS)
 
 

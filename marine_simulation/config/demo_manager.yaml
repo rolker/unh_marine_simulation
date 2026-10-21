@@ -31,10 +31,10 @@ groups:
       port: {type: string, default: '${discovery_port}'}
     follows: [camp]
     # READY once the process is running: a server that cannot bind exits at once (FAILED,
-    # and the boats then wait, BLOCKED, naming this group). A server that dies later takes
-    # every participant's discovery with it, so it is brought back; the clients announce
-    # themselves again.
-    restart: on-failure
+    # and the groups that require it then wait, BLOCKED, naming this group). The manager does
+    # not restart processes: a server that dies later is FAILED here and loses discovery for
+    # the running demo, which has to be started again.
+    restart: never
 
   boats:
     description: the boats, their sonars and CUBE chains (demo_boats_launch.py)
@@ -88,6 +88,7 @@ groups:
     # READY once the node is up; a file that cannot be published exits non-zero (FAILED), and
     # the scorer then waits, BLOCKED, naming this group.
     ready: {nodes: [/survey_area_publisher], timeout: 60}
+    requires: [discovery]
     restart: on-failure
 
   scorer:
@@ -127,6 +128,7 @@ groups:
     # Needs nothing to exist: the coverage plugin latches and tolerates a scorer that comes
     # later. Not placed (rqt restores its own geometry) and never restarted: closing it is an
     # operator decision, like CAMP, and it stops with CAMP.
+    requires: [discovery]
     follows: [camp]
     restart: never
 

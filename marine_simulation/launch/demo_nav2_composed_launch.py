@@ -63,7 +63,7 @@ from nav2_common.launch import ReplaceString
 from nav2_common.launch import RewrittenYaml
 
 
-def composed_nodes(configured_params, log_level, autostart, lifecycle_nodes):
+def composed_nodes(configured_params, autostart, lifecycle_nodes):
     """Return the ``ComposableNode`` of every server and of the lifecycle manager."""
     nodes = [
         ComposableNode(package=package, plugin=plugin, name=name,
@@ -108,7 +108,7 @@ def generate_launch_description():
             target_container=[TextSubstitution(text='/'), namespace,
                               TextSubstitution(text='/' + demo_nav.CONTAINER_NAME)],
             composable_node_descriptions=composed_nodes(
-                configured_params, log_level, autostart, lifecycle_nodes)),
+                configured_params, autostart, lifecycle_nodes)),
         LifecycleNode(
             package='manda_coverage', executable='manda_coverage_action_server',
             name='manda_coverage', namespace='', output='screen',

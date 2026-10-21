@@ -53,6 +53,8 @@ NAV2_SERVERS = (
 )
 # The costmap nodes the controller and planner servers create (also lifecycle nodes, also
 # configured by their parent server).
+NAV2_COSTMAPS = ('local_costmap/local_costmap', 'global_costmap/global_costmap')
+
 # The nav2 servers of one boat as composable nodes (issue 116): ``(package, plugin, name,
 # remappings)``, the same nodes with the same remappings as the non-composed branch of
 # ben_project11's ``navigation_launch.py`` (test_demo_nav compares the two, so a platform change
@@ -78,7 +80,6 @@ COMPOSED_SEPARATE = {'manda_coverage': (('soundings', 'sensors/mbes/soundings'),
 CONTAINER_NAME = 'nav2_container'
 LIFECYCLE_MANAGER_NAME = 'lifecycle_manager_navigation'
 LIFECYCLE_MANAGER_PLUGIN = 'nav2_lifecycle_manager::LifecycleManager'
-NAV2_COSTMAPS = ('local_costmap/local_costmap', 'global_costmap/global_costmap')
 
 # Lifecycle nodes the demo launch manager owns per boat when navigation is on, on top of the
 # nine of a boat without it: ``mission_manager``.

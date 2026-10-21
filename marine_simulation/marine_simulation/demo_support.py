@@ -961,6 +961,13 @@ def discovery_server_command(port: int) -> List[str]:
     return ['fastdds', 'discovery', '-i', '0', '-l', DISCOVERY_SERVER_HOST, '-p', str(port)]
 
 
+def check_discovery_tool() -> None:
+    """Raise ``ValueError`` unless the ``fastdds`` tool (package ``fastrtps``) is on the PATH."""
+    if shutil.which('fastdds') is None:
+        raise ValueError('the fastdds tool is not on the PATH (ros-jazzy-fastrtps, with the '
+                         'workspace sourced); it runs the discovery server')
+
+
 def check_discovery_port_free(port: int) -> None:
     """
     Raise ``ValueError`` with the reason when something already holds the server's UDP port.

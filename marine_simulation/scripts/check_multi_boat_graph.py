@@ -217,7 +217,7 @@ def enable_super_client(environ=None) -> bool:
     environ = os.environ if environ is None else environ
     if not environ.get('ROS_DISCOVERY_SERVER'):
         return False
-    environ.setdefault('ROS_SUPER_CLIENT', 'TRUE')
+    environ['ROS_SUPER_CLIENT'] = 'TRUE'
     return True
 
 

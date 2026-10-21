@@ -370,14 +370,18 @@ def main(argv: List[str] = None) -> int:
             preflight(spec.profiles[spec.default_profile], not args.no_joysticks, joysticks,
                       layout, target)
             if 'discovery' in spec.profiles[spec.default_profile]:
+                demo_support.check_discovery_tool()
                 demo_support.check_discovery_port_free(discovery_port)
         except ValueError as error:
             print('THE DEMO DID NOT START: %s' % error, file=sys.stderr)
             return 2
         # every group inherits the server; only the manager's own node is a super client
         os.environ.update(discovery_env)
-        node_environment = ({demo_support.SUPER_CLIENT_VARIABLE: 'TRUE'}
-                            if os.environ.get(demo_support.DISCOVERY_SERVER_VARIABLE) else None)
+        node_environment = None
+        if os.environ.get(demo_support.DISCOVERY_SERVER_VARIABLE):
+            node_environment = {demo_support.SUPER_CLIENT_VARIABLE: 'TRUE'}
+            # a super client exported in the caller's shell must not reach the groups either
+            os.environ.pop(demo_support.SUPER_CLIENT_VARIABLE, None)
         return run_manager(spec, node_environment)
     finally:
         shutil.rmtree(state_dir, ignore_errors=True)
