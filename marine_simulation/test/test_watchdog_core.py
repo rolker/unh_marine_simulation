@@ -213,15 +213,19 @@ def test_the_mission_waits_for_the_map_frame_and_then_for_the_command_gap():
     assert len(b.sent) == 1
 
 
-def test_no_area_is_a_state_and_the_boat_still_goes_autonomous():
+def test_no_area_is_a_state_and_the_boat_stays_manual_until_there_is_one():
     b = Boat(missing_pad_grace=1.0)
     b.core.has_area = False
     b.core.mission_state = wc.NO_AREA
     b.run(3.0, joy=None)
     assert b.core.snapshot(b.now)['mission'] == wc.NO_AREA and b.sent == []
+    assert ('mode', 'autonomous') not in b.take()
+    assert b.core.desired_mode() == 'manual'
     b.core.on_area(b.now)
     b.run(1.0, joy=None)
     assert len(b.sent) == 1
+    assert b.core.desired_mode() == 'autonomous'
+    assert ('mode', 'autonomous') in b.take()       # told when there is a section to run
 
 
 def test_a_plan_that_cannot_be_made_says_so_and_does_not_spin():
@@ -326,3 +330,117 @@ def test_the_state_is_json_with_the_numbers_the_self_test_reads():
 def test_bad_parameters_are_refused(name, value):
     with pytest.raises(ValueError, match=name):
         wc.Params(**{name: value}).validate()
+
+
+def test_an_area_that_cannot_be_split_is_asked_once_not_every_tick():
+    b = Boat(missing_pad_grace=1.0)
+    calls = []
+
+    def refuse(generation):
+        calls.append(generation)
+        raise ValueError('too small')
+
+    b.core.mission = refuse
+    b.run(10.0, joy=None)                           # a hundred ticks
+    assert len(calls) == 1
+    b.core.on_area(b.now)                           # a new area is tried again
+    b.run(2.0, joy=None)
+    assert len(calls) == 2
+
+
+def test_takeover_clears_a_plan_mission_manager_may_still_hold():
+    b = Boat(idle_timeout=5.0)
+    b.run(8.0)                                      # the section is sent, unacknowledged
+    assert len(b.sent) == 1
+    b.core.on_area(b.now)                           # the area changed: NOT_LOADED again
+    assert b.core.mission_state == wc.NOT_LOADED
+    b.now += 0.1
+    actions = b.core.on_joy(b.now, *touched())
+    assert actions == [('mode', 'manual'), ('command', 'clear_tasks')]
+    b.now += 0.1
+    b.core.on_joy(b.now, *REST)
+    b.run(7.0)                                      # autonomous again, sent again
+    b.take()
+    b.now += 0.1
+    assert ('command', 'clear_tasks') in b.core.on_joy(b.now, *touched())
+
+
+def test_takeover_of_a_boat_that_never_sent_anything_clears_nothing():
+    b = Boat(missing_pad_grace=1.0)
+    b.core.has_area = False
+    b.run(3.0, joy=None)
+    b.now += 0.1
+    b.core.on_joy(b.now, *REST)
+    b.now += 0.1
+    assert b.core.on_joy(b.now, *touched()) == [('mode', 'manual')]
+
+
+def test_a_standby_helm_is_not_overridden_by_the_idle_timeout():
+    b = Boat(idle_timeout=5.0)
+    b.run(1.0)
+    b.core.on_heartbeat(b.now, 'standby')
+    b.run(15.0, heartbeat=None)
+    assert b.core.state == wc.AUTONOMOUS
+    out = b.take()
+    assert ('mode', 'autonomous') not in out and b.sent == []
+    b.now += 0.1
+    assert ('mode', 'manual') in b.core.on_joy(b.now, *touched())
+
+
+@pytest.mark.parametrize('held', [0, 3, 10])
+def test_a_button_held_as_the_pad_appears_takes_the_boat(held):
+    b = Boat(missing_pad_grace=2.0)
+    b.run(5.0, joy=None)
+    b.take()
+    buttons = [0] * 11
+    buttons[held] = 1
+    b.now += 0.1
+    assert ('mode', 'manual') in b.core.on_joy(b.now, list(REST[0]), buttons)
+    assert b.core.state == wc.MANUAL
+
+
+def test_a_button_held_on_a_pad_that_was_already_there_stays_activity():
+    b = Boat(idle_timeout=5.0)
+    b.run(1.0)
+    buttons = [1] + [0] * 10
+    b.run(20.0, joy=(REST[0], buttons))
+    assert b.core.state == wc.MANUAL                # held: never idle
+
+
+def test_a_stick_held_through_a_short_joy_gap_is_not_the_new_rest():
+    b = Boat(idle_timeout=100.0, pad_lost_timeout=3.0, missing_pad_grace=100.0)
+    b.run(1.0)
+    b.run(6.0, joy=None)                            # the pad dropped out: autonomous
+    assert b.core.state == wc.AUTONOMOUS
+    b.take()
+    b.now += 0.1
+    assert ('mode', 'manual') in b.core.on_joy(b.now, *touched(0.7))
+
+
+def test_a_pad_gone_for_long_gets_a_new_rest_state():
+    b = Boat(idle_timeout=100.0, pad_lost_timeout=3.0, missing_pad_grace=100.0)
+    b.run(1.0)
+    b.run(wc.BASELINE_KEEP_SECONDS + 5.0, joy=None)
+    b.take()
+    b.run(2.0, joy=touched(0.7))                    # a different pad, resting off-centre
+    assert b.core.state == wc.AUTONOMOUS
+
+
+def test_the_navigator_flipping_unavailable_and_back_is_logged():
+    b = Boat(missing_pad_grace=1.0, resend_period=30.0, unavailable_after=70.0)
+    b.run(80.0, joy=None)
+    assert any('has not taken the section' in line for line in b.log)
+    b.tasks(len(b.sent))
+    b.run(1.0, joy=None)
+    assert any('answering again' in line for line in b.log)
+
+
+def test_a_section_whose_every_line_failed_backs_off_before_repeating():
+    b = Boat(missing_pad_grace=1.0, repeat_delay=10.0, failed_repeat_delay=100.0)
+    b.run(3.0, joy=None)
+    b.tasks(1, failed=(0, 1, 2))
+    assert b.core.mission_state == wc.COMPLETE
+    b.run(50.0, joy=None)
+    assert len(b.sent) == 1
+    b.run(55.0, joy=None)
+    assert len(b.sent) == 2

@@ -60,6 +60,8 @@ RUNNING = 'RUNNING'
 COMPLETE = 'COMPLETE'
 NO_AREA = 'NO_AREA'            # nothing to survey: no area has arrived (or it cannot be split)
 
+BASELINE_KEEP_SECONDS = 60.0   # a pad back within this keeps the rest state it had
+
 REASON_IDLE = 'idle'
 REASON_PAD_MISSING = 'pad_missing'
 
@@ -81,6 +83,7 @@ class Params:
     reconcile_period: float = 1.0       # s between re-publishes
     on_complete: str = 'repeat'         # 'repeat' sends the section again, 'hold' stays
     repeat_delay: float = 10.0          # s between the end of a section and its repeat
+    failed_repeat_delay: float = 120.0  # s before repeating a section whose every line failed
 
     def validate(self) -> None:
         """Raise ``ValueError`` for a value the machine cannot work with."""
@@ -90,7 +93,7 @@ class Params:
         for name in positive:
             if not getattr(self, name) > 0.0:
                 raise ValueError('%s must be greater than zero' % name)
-        for name in ('activity_threshold', 'tf_settle', 'repeat_delay'):
+        for name in ('activity_threshold', 'tf_settle', 'repeat_delay', 'failed_repeat_delay'):
             if not getattr(self, name) >= 0.0:
                 raise ValueError('%s must not be negative' % name)
         if self.on_complete not in ('repeat', 'hold'):
@@ -103,13 +106,14 @@ def is_active(axes: Sequence[float], buttons: Sequence[int], baseline_axes: Sequ
     """
     Return whether a Joy message shows somebody touching the pad.
 
-    Any button that differs from the pad's rest state or from the previous message, any axis
+    Any button that is pressed or that differs from the previous message (a button counts
+    whatever the learned rest state is: one held when the pad appeared is still input), any axis
     farther than ``threshold`` from its rest value, or any axis that moved more than
     ``threshold`` since the previous message. Rest is the first message after the pad appeared,
     so trigger rest values need no knowledge; a held stick is far from rest, and the autorepeat
     copies of an untouched pad never differ from either.
     """
-    if list(buttons) != list(baseline_buttons) or list(buttons) != list(previous_buttons):
+    if any(buttons) or list(buttons) != list(previous_buttons):
         return True
     for axis, rest, before in zip(axes, baseline_axes, previous_axes):
         if abs(axis - rest) > threshold or abs(axis - before) > threshold:
@@ -162,6 +166,8 @@ class WatchdogCore:
         self._yielded = False
         self._tf_since: Optional[float] = None
         self._announce = False
+        self._may_be_loaded = False   # a command went out that mission_manager may still hold
+        self._unavailable_logged = False
         self.changes = 0            # bumped on every change a state message should carry
 
     # -- inputs ------------------------------------------------------------------------------
@@ -170,20 +176,29 @@ class WatchdogCore:
         """Take a Joy message; hand the boat back to the pad when it shows activity."""
         axes, buttons = tuple(axes), tuple(buttons)
         present = self.pad_present(now)
+        gap = None if self._last_joy is None else now - self._last_joy
         self._last_joy = now
-        if not present or self._baseline is None:
-            # the pad has just appeared: its state now is its rest state
+        appeared = not present
+        # The first message after the pad appeared is its rest state, but a pad that came back
+        # after a short gap keeps the rest state it had: a stick held through a dropout is
+        # input, not a new rest.
+        keep = (self._baseline is not None and gap is not None and gap < BASELINE_KEEP_SECONDS
+                and len(axes) == len(self._baseline[0]))
+        fresh = self._baseline is None or (appeared and not keep)
+        if fresh:
             self._baseline = (axes, buttons)
             self._previous = (axes, buttons)
-            if self._last_activity is None or not present:
-                self._last_activity = now
-            if self.state == BOOT:
-                self._to(MANUAL, '', now)
-            return []
-        active = is_active(axes, buttons, self._baseline[0], self._baseline[1],
-                           self._previous[0], self._previous[1], self.p.activity_threshold)
+        if appeared:
+            self._last_activity = now           # the pad was seen just now, touched or not
+        if fresh:
+            active = any(buttons)               # axes have no rest value to compare with yet
+        else:
+            active = is_active(axes, buttons, self._baseline[0], self._baseline[1],
+                               self._previous[0], self._previous[1], self.p.activity_threshold)
         self._previous = (axes, buttons)
         if not active:
+            if self.state == BOOT:
+                self._to(MANUAL, '', now)
             return []
         self._last_activity = now
         self._yielded = False
@@ -263,12 +278,21 @@ class WatchdogCore:
                          % self.p.idle_timeout)
         if self._announce:
             # a decision of the clock is told to the helm at once, not after the reconcile wait
+            # (unless the helm is in standby: that is respected until the pad is touched)
             self._announce = False
-            self._last_publish = now
-            actions.append(('mode', self.desired_mode()))
+            if not self._yielded and self.desired_mode() is not None:
+                self._last_publish = now
+                actions.append(('mode', self.desired_mode()))
         if self.state == AUTONOMOUS:
             actions += self._autonomous_tick(now)
         actions += self._reconcile(now)
+        unavailable = self.navigator_unavailable(now)
+        if unavailable != self._unavailable_logged:
+            self._unavailable_logged = unavailable
+            self.changes += 1
+            self.log('the navigator has not taken the section for %g s; still trying'
+                     % self.p.unavailable_after if unavailable else
+                     'the navigator is answering again')
         return actions
 
     # -- queries ------------------------------------------------------------------------------
@@ -278,7 +302,14 @@ class WatchdogCore:
         return self._last_joy is not None and now - self._last_joy < self.p.pad_lost_timeout
 
     def desired_mode(self) -> Optional[str]:
-        """Return the piloting mode the watchdog wants, or ``None`` before it has decided."""
+        """
+        Return the piloting mode the watchdog wants, or ``None`` before it has decided.
+
+        With nothing to survey (``NO_AREA``) the boat stays ``manual`` even in the autonomous
+        state: ``autonomous`` is announced when there is a section to run.
+        """
+        if self.state == AUTONOMOUS and self.mission_state == NO_AREA:
+            return 'manual'
         return {MANUAL: 'manual', AUTONOMOUS: 'autonomous'}.get(self.state)
 
     def snapshot(self, now: float) -> dict:
@@ -317,20 +348,22 @@ class WatchdogCore:
         if state == AUTONOMOUS:
             self._mission_state(NOT_LOADED if self.has_area else NO_AREA)
             self._mismatch_since = None
-            self._yielded = False
-            self._announce = True
+            self._announce = not self._yielded
 
     def _mission_state(self, state: str) -> None:
         if state != self.mission_state:
+            if self.state == AUTONOMOUS and (state == NO_AREA) != (self.mission_state == NO_AREA):
+                self._announce = True       # the mode the helm should have just changed
             self.mission_state = state
             self.changes += 1
 
     def _take_over(self, now: float) -> List[Action]:
         """Hand back after a touch while autonomous: manual first, then stop the survey."""
         actions: List[Action] = [('mode', 'manual')]
-        if self.mission_state in (LOADING, RUNNING, COMPLETE):
+        if self._may_be_loaded or self.mission_state in (LOADING, RUNNING, COMPLETE):
             actions.append(('command', 'clear_tasks'))
             self._last_command = now
+            self._may_be_loaded = False
         self._to(MANUAL, '', now)
         self._mission_state(NOT_LOADED)
         self._reset_mission()
@@ -346,11 +379,14 @@ class WatchdogCore:
 
     def _autonomous_tick(self, now: float) -> List[Action]:
         actions: List[Action] = []
-        if self.mission_state == NO_AREA and self.has_area:
-            self._mission_state(NOT_LOADED)
+        if self.mission_state == NO_AREA:
+            return actions      # waits for on_area: an area that cannot be split is not retried
+        if self._yielded:
+            return actions      # the helm is in standby: nothing to send until the pad is touched
         if self.mission_state == COMPLETE:
-            if self.p.on_complete == 'repeat' and now - (self._completed_at or now) \
-                    >= self.p.repeat_delay:
+            delay = self.p.failed_repeat_delay if self._failed and \
+                len(self._failed) >= len(self._line_ids) else self.p.repeat_delay
+            if self.p.on_complete == 'repeat' and now - (self._completed_at or now) >= delay:
                 self.log('repeating the section')
                 self._mission_state(NOT_LOADED)
             return actions
@@ -384,6 +420,7 @@ class WatchdogCore:
             self._first_sent_at = now
         self._sent_at = now
         self._last_command = now
+        self._may_be_loaded = True
         self._mission_state(LOADING)
         self.log('sending section %s (%d lines)' % (set_id, len(lines)))
         return [('command', command)]
