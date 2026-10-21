@@ -399,6 +399,41 @@ def test_with_nav_every_boat_gets_mission_manager_and_nav2_in_its_own_namespace(
     assert sum(isinstance(a, GroupAction) for a in actions) == 2 * len(roster)
 
 
+def test_each_boat_gets_its_own_zeromq_port_offset_and_it_ends_with_the_group(
+        monkeypatch, roster):
+    monkeypatch.setenv('LD_PRELOAD', '/lib/other.so')
+    inside = []
+
+    def record(package, *path, launch_arguments=None):
+        def run(context):
+            inside.append((context.environment.get('LD_PRELOAD'),
+                           context.environment.get('DEMO_ZMQ_PORT_OFFSET')))
+        return OpaqueFunction(function=run)
+
+    monkeypatch.setattr(demo, '_include', record)
+    after = []
+    shim = '/x/libdemo_zmq_ports.so'
+    groups = [demo.nav_actions(b, '/p.yaml', i, shim) for i, b in enumerate(roster[:3])]
+    _run([*groups, OpaqueFunction(function=lambda c: after.append(
+        (c.environment.get('LD_PRELOAD'), c.environment.get('DEMO_ZMQ_PORT_OFFSET'))))])
+    assert [offset for _, offset in inside] == ['0', '10', '20']
+    assert all(p == shim + ' /lib/other.so' for p, _ in inside)
+    assert after == [('/lib/other.so', None)]          # nothing leaks past the groups
+
+
+def test_without_the_shim_the_environment_is_untouched(included):
+    group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml')
+    from launch.actions import SetEnvironmentVariable
+    assert not any(isinstance(e, SetEnvironmentVariable) for e in group.get_sub_entities())
+
+
+def test_a_missing_shim_is_refused_with_the_reason(
+        tmp_path, no_host_checks, nav_state, monkeypatch, included):
+    monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/nonexistent/' + package)
+    with pytest.raises(RuntimeError, match='only one boat can run a navigation goal'):
+        demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+
+
 def test_nav2_sits_outside_the_boats_namespace_with_a_longer_bond_timeout(included):
     from launch_ros.actions import PushROSNamespace
     group = demo.nav_actions(demo.Boat('a', '', (0, 0, 0), 43.0, -70.0, 0.0, 0), '/p.yaml')
@@ -665,6 +700,8 @@ def _setup_context(tmp_path, **overrides):
         'tide_speed_factor': '10',
         'current_speed': '0.0', 'mbes_grid_file': str(grid), 'cell_size': '1.0',
         'ping_interval': '0.2', 'beam_count': '120', 'lifecycle_guard': 'true',
+        'enable_watchdog': 'true', 'idle_timeout': '', 'missing_pad_grace': '',
+        'line_spacing': '',
         'charted_objects': 'false',
     }
     values.update(overrides)
@@ -678,10 +715,16 @@ def _processes(actions):
 
 
 @pytest.fixture
-def no_host_checks(monkeypatch):
+def no_host_checks(monkeypatch, tmp_path_factory):
+    prefix = tmp_path_factory.mktemp('prefix')
+    shim = pathlib.Path(demo.demo_nav.zmq_shim_path(str(prefix)))
+    shim.parent.mkdir(parents=True)
+    shim.write_bytes(b'x')              # the shim only has to exist here
     monkeypatch.setattr(demo, 'check_datum_grids', lambda *a, **k: None)
     monkeypatch.setattr(demo, 'check_mbes_grid', lambda *a, **k: [])    # the grid is a stub
-    monkeypatch.setattr(demo, 'get_package_prefix', lambda package: '/opt/' + package)
+    monkeypatch.setattr(demo, 'get_package_prefix',
+                        lambda package: str(prefix) if package == 'marine_simulation'
+                        else '/opt/' + package)
 
 
 def test_the_guard_runs_by_default_after_the_boats(tmp_path, no_host_checks):
@@ -758,6 +801,81 @@ def test_the_guard_with_nav_expects_mission_manager_and_leaves_nav2_to_nav2(rost
     exclude = command[command.index('--exclude') + 1]
     assert exclude == demo.demo_nav.nav_exclude_regex([b.name for b in boats])
     assert '--exclude' not in demo.lifecycle_guard_command(boats, '/x/guard')
+
+
+# -- the joystick watchdog --------------------------------------------------------------------
+
+@pytest.fixture
+def watchdogs(monkeypatch):
+    """Record the watchdog parameters the launch asks for: (boat, index, count, overrides)."""
+    calls = []
+    real = demo.watchdog_parameters
+
+    def record(boat, index, count, overrides):
+        calls.append((boat.name, index, count, dict(overrides)))
+        return real(boat, index, count, overrides)
+
+    monkeypatch.setattr(demo, 'watchdog_parameters', record)
+    return calls
+
+
+def test_with_nav_each_boat_gets_a_watchdog_that_knows_its_section(
+        tmp_path, no_host_checks, nav_state, included, watchdogs, roster):
+    names = [b.name for b in roster][:3]
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true', boats=','.join(names)))
+    assert [(n, i, c) for n, i, c, _ in watchdogs] == [(n, i, 3) for i, n in enumerate(names)]
+
+
+def test_a_subset_of_boats_is_split_among_the_boats_that_run(
+        tmp_path, no_host_checks, nav_state, included, watchdogs, roster):
+    # the second and fourth boats: sections 0 and 1 of 2, not their roster positions
+    names = [roster[1].name, roster[3].name]
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true', boats=','.join(names)))
+    assert [(n, i, c) for n, i, c, _ in watchdogs] == [(names[0], 0, 2), (names[1], 1, 2)]
+
+
+def test_no_watchdog_without_nav_or_when_turned_off(
+        tmp_path, no_host_checks, nav_state, included, watchdogs):
+    demo.launch_setup(_setup_context(tmp_path))
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true', enable_watchdog='false'))
+    assert watchdogs == []
+
+
+def test_the_timing_arguments_reach_the_watchdog_only_when_given(
+        tmp_path, no_host_checks, nav_state, included, watchdogs):
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true'))
+    assert set(watchdogs[0][3].values()) == {None}
+    watchdogs.clear()
+    demo.launch_setup(_setup_context(tmp_path, enable_nav='true', idle_timeout='5',
+                                     missing_pad_grace='8', line_spacing='60'))
+    assert watchdogs[0][3] == {'idle_timeout': 5.0, 'missing_pad_grace': 8.0,
+                               'line_spacing': 60.0}
+
+
+@pytest.mark.parametrize('name, value', [('idle_timeout', '0'), ('missing_pad_grace', '-1'),
+                                         ('line_spacing', 'abc'), ('enable_watchdog', 'ture')])
+def test_bad_watchdog_arguments_are_refused(tmp_path, no_host_checks, name, value):
+    with pytest.raises(ValueError, match=name):
+        demo.launch_setup(_setup_context(tmp_path, **{name: value}))
+
+
+def test_the_watchdog_parameters_name_the_boat_its_frame_and_its_place(roster):
+    boat = roster[2]
+    params = demo.watchdog_parameters(boat, 1, 3, {'idle_timeout': 5.0, 'line_spacing': None})
+    assert params == {'boat': boat.name, 'map_frame': boat.name + '/map', 'section_index': 1,
+                      'section_count': 3, 'idle_timeout': 5.0}
+
+
+def test_the_demo_values_of_the_watchdog_are_in_the_params_file():
+    from marine_simulation import watchdog_core
+    params = yaml.safe_load(PARAMS.read_text())['/**/demo_watchdog']['ros__parameters']
+    assert params['idle_timeout'] == 30.0 and params['missing_pad_grace'] == 10.0
+    known = set(watchdog_core.Params.__dataclass_fields__) | {
+        'line_spacing', 'edge_margin', 'min_line_length', 'survey_speed_knots',
+        'line_heading_deg'}
+    assert set(params) <= known, set(params) - known
+    watchdog_core.Params(**{k: v for k, v in params.items()
+                            if k in watchdog_core.Params.__dataclass_fields__}).validate()
 
 
 def test_the_guard_declares_its_launch_argument():

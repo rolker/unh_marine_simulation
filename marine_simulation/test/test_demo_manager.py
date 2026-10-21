@@ -1177,3 +1177,28 @@ def test_the_server_launch_refuses_a_port_that_is_not_one(port):
     module = _launch_module('demo_discovery_server_launch.py')
     with pytest.raises(RuntimeError, match='not a port number'):
         _perform_launch_setup(module, port=port)
+
+
+def test_the_watchdog_is_on_by_default_and_the_option_has_a_no_form():
+    parser = demo_manager.build_parser()
+    assert parser.parse_args([]).watchdog is True
+    assert parser.parse_args(['--no-watchdog']).watchdog is False
+    assert parser.parse_args(['--no-watchdog', '--watchdog']).watchdog is True
+
+
+def test_enable_watchdog_is_owned_by_the_manager_so_an_extra_one_is_refused(spec):
+    with pytest.raises(ValueError, match='set by the demo'):
+        demo_manager.boats_launch_arguments(
+            spec, ['enable_watchdog:=false'], ['boats', 'enable_watchdog'])
+
+
+def test_main_passes_no_watchdog_to_the_boats_group(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', '--nav', '--no-watchdog']) == 0
+    (spec,) = run_manager_spy
+    assert spec.groups['boats'].arguments['enable_watchdog'].default == 'false'
+
+
+def test_main_runs_the_watchdog_by_default(run_manager_spy):
+    assert demo_manager.main(['--no-joysticks', '--nav']) == 0
+    (spec,) = run_manager_spy
+    assert spec.groups['boats'].arguments['enable_watchdog'].default == 'true'

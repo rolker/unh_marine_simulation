@@ -44,6 +44,7 @@ groups:
       roster_file: {type: string, default: '${roster_file}'}
       enable_joysticks: {type: bool, default: '${enable_joysticks}'}
       enable_nav: {type: bool, default: '${enable_nav}'}
+      enable_watchdog: {type: bool, default: '${enable_watchdog}'}
       joystick_config: {type: string, default: '${joystick_config}'}
       # The manager is the one convergence loop; the launch's own guard stays off.
       lifecycle_guard: {type: bool, default: false}

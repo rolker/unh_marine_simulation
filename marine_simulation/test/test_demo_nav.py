@@ -60,7 +60,11 @@ global_costmap:
       inflation_layer: {plugin: "nav2_costmap_2d::InflationLayer"}
 planner_server:
   ros__parameters:
-    GridBased: {minimum_turning_radius: 5.0}
+    planner_plugins: ["GridBased"]
+    GridBased:
+      plugin: "nav2_smac_planner::SmacPlannerHybrid"
+      tolerance: 1.5
+      minimum_turning_radius: 5.0
 """)
 
 
@@ -84,10 +88,25 @@ def test_everything_outside_the_delta_is_the_source():
         node = expected[costmap][costmap]['ros__parameters']
         node['plugins'] = ['inflation_layer']
         del node['chart_layer']
+    expected['planner_server']['ros__parameters']['GridBased'] = {
+        'plugin': demo_nav.PLANNER_PLUGIN, 'tolerance': 1.5, 'use_astar': True,
+        'allow_unknown': True}
     expected['global_costmap']['global_costmap']['ros__parameters'].update(
         width=demo_nav.GLOBAL_COSTMAP_SIZE_M, height=demo_nav.GLOBAL_COSTMAP_SIZE_M,
         resolution=demo_nav.GLOBAL_COSTMAP_RESOLUTION_M)
     assert out == expected
+
+
+def test_the_planner_keeps_its_id_and_tolerance_but_is_navfn():
+    out = demo_nav.nav2_params(SOURCE)['planner_server']['ros__parameters']
+    assert out['planner_plugins'] == ['GridBased']
+    assert out['GridBased']['plugin'] == 'nav2_navfn_planner::NavfnPlanner'
+    assert out['GridBased']['tolerance'] == 1.5 and out['GridBased']['use_astar'] is True
+
+
+def test_the_window_covers_the_whole_demo_target_from_any_start():
+    # the target is about 1.8 km across and a boat can start at one corner of it
+    assert demo_nav.GLOBAL_COSTMAP_SIZE_M / 2.0 >= 1500.0
 
 
 def test_the_source_is_not_changed():
@@ -98,6 +117,7 @@ def test_the_source_is_not_changed():
 
 @pytest.mark.parametrize('mutate', [
     lambda p: p.pop('local_costmap'),
+    lambda p: p['planner_server']['ros__parameters'].pop('GridBased'),
     lambda p: p['global_costmap']['global_costmap']['ros__parameters'].pop('plugins'),
     lambda p: p['global_costmap']['global_costmap']['ros__parameters']['plugins'].remove(
         'chart_layer'),
@@ -235,3 +255,18 @@ def test_the_lifecycle_managers_list_is_bens_list_in_bens_order():
             names = [e.value for e in node.value.elts]
             break
     assert names == list(demo_nav.NAV2_SERVERS)
+
+
+def test_the_port_offsets_step_by_boat_and_the_first_boat_keeps_its_ports():
+    assert [demo_nav.zmq_port_offset(i) for i in range(4)] == [0, 10, 20, 30]
+    with pytest.raises(ValueError):
+        demo_nav.zmq_port_offset(-1)
+
+
+def test_the_preload_has_the_shim_first_and_keeps_the_rest_once():
+    shim = '/p/libdemo_zmq_ports.so'
+    assert demo_nav.preload(shim) == shim
+    assert demo_nav.preload(shim, '/a.so:/b.so') == shim + ' /a.so /b.so'
+    assert demo_nav.preload(shim, shim + ' /a.so') == shim + ' /a.so'
+    assert demo_nav.zmq_shim_path('/prefix') == '/prefix/lib/marine_simulation/' + \
+        demo_nav.ZMQ_SHIM_LIBRARY

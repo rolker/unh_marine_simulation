@@ -94,15 +94,30 @@ BOND_TIMEOUT_S = 30.0
 # The global costmap of Ben's file is 5000 m x 5000 m at 1 m (25 million cells per boat, sent
 # in full every second). The demo target is under 2 km across and the window follows the boat.
 # 2400 m at 1 m (5.8 million cells) still made four boats' planners miss nav2's ten second
-# acknowledge timeout on a 16 core computer, so the resolution is coarser too (1.4 million
-# cells); the planner only plans transits between survey lines, the lines themselves are
+# acknowledge timeout on a 16 core computer, so the resolution is coarser too (2.6 million cells
+# at 3200 m); the planner only plans transits between survey lines, the lines themselves are
 # followed as sent.
-GLOBAL_COSTMAP_SIZE_M = 2400
+GLOBAL_COSTMAP_SIZE_M = 3200
 GLOBAL_COSTMAP_RESOLUTION_M = 2.0
+
+# Ben's planner is SmacPlannerHybrid, tuned for the harbour's charted shallows. On the demo's
+# empty costmap it gave up on a transit of 700 m or more (`no valid path found` after its 5 s
+# budget, seen live), and a survey section starts with exactly such a transit. A boat's first
+# line is up to a kilometre and a half away and the window follows the boat, hence 3200 m too.
+# NavFn plans a straight line in open water in a moment; the planner id (GridBased) is kept.
+PLANNER_PLUGIN = 'nav2_navfn_planner::NavfnPlanner'
 
 # Ben's chart layer needs the S57 ENC tree and one ``s57_grids`` node per boat; the demo has
 # neither, and its boats are put on open water.
 CHART_LAYER = 'chart_layer'
+
+# marine_nav_bt_task_navigator opens a BT::Groot2Publisher (ZeroMQ, ports 1667 and 1668) on every
+# goal with no way to change or switch it off, so a second boat on the same computer cannot run a
+# goal ("Address already in use", seen live: only one boat ever ran its section). The nav2
+# processes of each boat are started with this library preloaded and DEMO_ZMQ_PORT_OFFSET set
+# to a different number, which moves their ZeroMQ binds (src/demo_zmq_ports.c).
+ZMQ_SHIM_LIBRARY = 'libdemo_zmq_ports.so'
+ZMQ_PORT_STEP = 10
 
 SOURCE_PACKAGE = 'ben_project11'
 SOURCE_FILE = 'nav2_params.yaml'
@@ -120,10 +135,10 @@ def nav2_params(source: dict) -> dict:
     Return Ben's nav2 parameters with the demo's delta applied (``source`` is not changed).
 
     The delta: the chart layer is removed from both costmaps (no ENC tree, no ``s57_grids``),
-    and the global costmap is ``GLOBAL_COSTMAP_SIZE_M`` square at
-    ``GLOBAL_COSTMAP_RESOLUTION_M`` instead of 5000 m at 1 m. Raises ``ValueError`` when the
-    source does not have the shape the delta needs, so a platform change cannot make it a
-    silent no-op.
+    the global costmap is ``GLOBAL_COSTMAP_SIZE_M`` square at ``GLOBAL_COSTMAP_RESOLUTION_M``
+    instead of 5000 m at 1 m, and the ``GridBased`` planner is ``PLANNER_PLUGIN``. Raises
+    ``ValueError`` when the source does not have the shape the delta needs, so a platform
+    change cannot make it a silent no-op.
     """
     params = copy.deepcopy(source)
     for costmap in ('local_costmap', 'global_costmap'):
@@ -149,6 +164,16 @@ def nav2_params(source: dict) -> dict:
         node['resolution'] = GLOBAL_COSTMAP_RESOLUTION_M
     except KeyError as error:
         raise ValueError('the global costmap of the nav2 parameters has no %s' % error) from None
+    try:
+        planner = params['planner_server']['ros__parameters']['GridBased']
+    except (KeyError, TypeError):
+        raise ValueError('the nav2 parameters have no planner_server GridBased planner') from None
+    params['planner_server']['ros__parameters']['GridBased'] = {
+        'plugin': PLANNER_PLUGIN,
+        'tolerance': planner.get('tolerance', 1.5),
+        'use_astar': True,
+        'allow_unknown': True,
+    }
     return params
 
 
@@ -206,3 +231,21 @@ def container_name(boat: str) -> str:
 def nav_node_names(boat: str) -> Dict[str, str]:
     """Return ``{short name: fully qualified name}`` of one boat's nav2 lifecycle nodes."""
     return {n: '/%s/%s' % (boat, n) for n in NAV2_SERVERS + NAV2_COSTMAPS}
+
+
+def zmq_port_offset(index: int) -> int:
+    """Return the ZeroMQ port offset of the ``index``-th boat that runs (the first keeps 0)."""
+    if index < 0:
+        raise ValueError('a boat index is not negative')
+    return index * ZMQ_PORT_STEP
+
+
+def zmq_shim_path(prefix: str) -> str:
+    """Return where the ZeroMQ port shim is installed under a package ``prefix``."""
+    return os.path.join(prefix, 'lib', 'marine_simulation', ZMQ_SHIM_LIBRARY)
+
+
+def preload(shim: str, existing: str = '') -> str:
+    """Return an ``LD_PRELOAD`` value that has ``shim`` first and keeps what was there."""
+    kept = [p for p in existing.replace(':', ' ').split() if p != shim]
+    return ' '.join([shim] + kept)
