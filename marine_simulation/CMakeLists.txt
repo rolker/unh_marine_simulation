@@ -37,6 +37,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_survey_sections test/test_survey_sections.py)
   ament_add_pytest_test(test_demo_zmq_ports test/test_demo_zmq_ports.py)
   ament_add_pytest_test(test_watchdog_core test/test_watchdog_core.py)
+  ament_add_pytest_test(test_demo_watchdog test/test_demo_watchdog.py)
   ament_add_pytest_test(test_demo_boats_selftest test/test_demo_boats_selftest.py)
   ament_add_pytest_test(test_demo_manager test/test_demo_manager.py)
   # host-only and slow (about two minutes): the default 60 s CTest timeout would kill it
