@@ -86,7 +86,7 @@ def test_tcp_binds_move_by_the_offset_and_nothing_else_does(tools):
         'tcp://*:1677', 'tcp://*:1678', 'ipc:///tmp/x:5', 'tcp://127.0.0.1:65530']   # no wrap
 
 
-@pytest.mark.parametrize('offset', [None, '', 'abc', '0', '5x', '1000000'])
+@pytest.mark.parametrize('offset', [None, '', 'abc', '0', '5x', '1000000', '9223372036854775807', '-9223372036854775808', '99999999999999999999'])
 def test_no_offset_or_a_bad_one_changes_nothing(tools, offset):
     assert bind_addresses(tools, offset) == [
         'tcp://*:1667', 'tcp://*:1668', 'ipc:///tmp/x:5', 'tcp://127.0.0.1:65530']

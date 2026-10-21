@@ -56,7 +56,8 @@ static int shifted_address(const char * address, char * out, size_t size)
   }
   char * end = NULL;
   long offset = strtol(offset_text, &end, 10);  // NOLINT(runtime/int)
-  if (end == offset_text || *end != '\0' || offset == 0) {
+  // an offset outside the port range could overflow the sums below (undefined behaviour)
+  if (end == offset_text || *end != '\0' || offset == 0 || offset > 65535 || offset < -65535) {
     return 0;
   }
   const char * colon = strrchr(address, ':');
