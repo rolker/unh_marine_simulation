@@ -103,3 +103,11 @@ Read: the Issue Review of 119 (well-scoped, right repository, no design change).
 - Cause 1: the link fix names `marine_autonomy::marine_autonomy` and the message and `rclcpp_lifecycle` targets `pid.h` needs.
 - CI fails when `asv_sim` or `mbes_sim` ran no Python test, so cause 4 cannot return unnoticed.
 - The flake8 `A005` failure: the review's facts (raised by `flake8-builtins` 3.1.0 on this machine; not established for Jazzy; `ament_flake8` ignores the repository's own flake8 config; a rename touches one import; a file-level `# flake8: noqa: A005` on line 2 of `platform.py` exempts that one file and code) go to the owner, who decides; the host is asking him now and passes his answer to the planner.
+
+## Plan Authored
+**Status**: complete
+**When**: 2026-11-23 12:52 -05:00
+**By**: Claude Code Agent (claude-sonnet-5-5)
+**Plan**: `.agent/work-plans/issue-119/plan.md` at `1d7d704`
+
+Nine commits on `rolling` (causes 1, 11 x3, 4, 9, the owner-chosen rename of `platform.py` to `sim_platform.py`, a first CI workflow with a Python test-count guard, and a docs line), all backported by hand. Planned from a measured baseline and a scratch copy: 251 tests, 0 failures, 1 skipped; 290 repeat runs with no intermittent failure; the Rolling job rehearsed in a clean environment; Jazzy facts by reading only.
