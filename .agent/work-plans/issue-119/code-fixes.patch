@@ -1,0 +1,330 @@
+From 8bc22cf098b971b4fdc6cb60010457cb78cec63b Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:23:39 -0500
+Subject: [PATCH 1/8] asv_helm: target_link_libraries (cause 1)
+
+---
+ asv_helm/CMakeLists.txt | 12 +++++++++++-
+ 1 file changed, 11 insertions(+), 1 deletion(-)
+
+diff --git a/asv_helm/CMakeLists.txt b/asv_helm/CMakeLists.txt
+index 944d36d..347314b 100644
+--- a/asv_helm/CMakeLists.txt
++++ b/asv_helm/CMakeLists.txt
+@@ -14,10 +14,20 @@ find_package(nav_msgs REQUIRED)
+ find_package(marine_autonomy REQUIRED)
+ find_package(marine_interfaces REQUIRED)
+ find_package(rclcpp REQUIRED)
++find_package(rclcpp_lifecycle REQUIRED)
++find_package(std_msgs REQUIRED)
+ 
+ add_executable(${PROJECT_NAME} src/asv_helm_node.cpp)
+ 
+-ament_target_dependencies(${PROJECT_NAME} geometry_msgs nav_msgs marine_autonomy marine_interfaces rclcpp)
++target_link_libraries(${PROJECT_NAME}
++  ${geometry_msgs_TARGETS}
++  ${nav_msgs_TARGETS}
++  ${marine_interfaces_TARGETS}
++  ${std_msgs_TARGETS}
++  marine_autonomy::marine_autonomy
++  rclcpp::rclcpp
++  rclcpp_lifecycle::rclcpp_lifecycle
++)
+ 
+ install(TARGETS ${PROJECT_NAME}
+   DESTINATION lib/${PROJECT_NAME}
+-- 
+2.53.0
+
+
+From de6fbf8fd9041bffac2e7393c0a9dc4820938c91 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:23:59 -0500
+Subject: [PATCH 2/8] asv_sim, mbes_sim: extras_require test (cause 4)
+
+---
+ asv_sim/setup.py  | 2 +-
+ mbes_sim/setup.py | 2 +-
+ 2 files changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/asv_sim/setup.py b/asv_sim/setup.py
+index 054d847..d121db8 100644
+--- a/asv_sim/setup.py
++++ b/asv_sim/setup.py
+@@ -27,7 +27,7 @@ setup(
+     maintainer_email='roland@ccom.unh.edu',
+     description='Simple ASV simulator',
+     license='BSD-2-Clause',
+-    tests_require=['pytest'],
++    extras_require={'test': ['pytest']},
+     entry_points={
+         'console_scripts': [
+             'asv_sim = asv_sim.asv_sim_node:main',
+diff --git a/mbes_sim/setup.py b/mbes_sim/setup.py
+index 6590c11..5a6cd5e 100644
+--- a/mbes_sim/setup.py
++++ b/mbes_sim/setup.py
+@@ -10,7 +10,7 @@ setup(
+     version='0.0.0',
+     packages=find_packages(exclude=['test']),
+     install_requires=['setuptools'],
+-    tests_require=['pytest'],
++    extras_require={'test': ['pytest']},
+     zip_safe=True,
+     data_files=[
+         ('share/ament_index/resource_index/packages',
+-- 
+2.53.0
+
+
+From b32d5ba80cc3626692e3c3ead6da5c802e7867a9 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:23:59 -0500
+Subject: [PATCH 3/8] asv_sim_msgs: package.xml order (cause 9)
+
+---
+ asv_sim_msgs/package.xml | 4 ++--
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+
+diff --git a/asv_sim_msgs/package.xml b/asv_sim_msgs/package.xml
+index 768df88..da0a8ef 100644
+--- a/asv_sim_msgs/package.xml
++++ b/asv_sim_msgs/package.xml
+@@ -15,11 +15,11 @@
+ 
+   <exec_depend>rosidl_default_runtime</exec_depend>
+ 
+-  <member_of_group>rosidl_interface_packages</member_of_group>
+-
+   <test_depend>ament_lint_auto</test_depend>
+   <test_depend>ament_lint_common</test_depend>
+ 
++  <member_of_group>rosidl_interface_packages</member_of_group>
++
+   <export>
+     <build_type>ament_cmake</build_type>
+   </export>
+-- 
+2.53.0
+
+
+From 11632a74d2d70e9fa3ef8521ce3c905b743ac8c7 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:26:43 -0500
+Subject: [PATCH 4/8] asv_sim: rename platform.py to sim_platform.py (A005)
+
+---
+ .agents/README.md                                | 2 +-
+ asv_sim/asv_sim/asv_sim_node.py                  | 4 ++--
+ asv_sim/asv_sim/{platform.py => sim_platform.py} | 0
+ asv_sim/config/bizzyboat.yaml                    | 2 +-
+ asv_sim/config/environment.yaml                  | 2 +-
+ 5 files changed, 5 insertions(+), 5 deletions(-)
+ rename asv_sim/asv_sim/{platform.py => sim_platform.py} (100%)
+
+diff --git a/.agents/README.md b/.agents/README.md
+index bc5bf8c..ad45ee4 100644
+--- a/.agents/README.md
++++ b/.agents/README.md
+@@ -21,7 +21,7 @@
+ ```
+ unh_marine_simulation/
+ ├── asv_sim/                           # ASV dynamics simulator
+-│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform, collision, charts)
++│   ├── asv_sim/                       #   Python module (dynamics, environment, model, sim_platform, collision, charts)
+ │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
+ │   ├── enc/                           #   NOAA S-57 cells US5PSMCC/US5PSMCD (+ update, README, user agreement) for charted-object collision
+ │   └── test/                          #   Linting, tide tests, test_multi_platform.py (in-process)
+diff --git a/asv_sim/asv_sim/asv_sim_node.py b/asv_sim/asv_sim/asv_sim_node.py
+index 1ac2bac..24d4018 100755
+--- a/asv_sim/asv_sim/asv_sim_node.py
++++ b/asv_sim/asv_sim/asv_sim_node.py
+@@ -9,7 +9,7 @@ import asv_sim.collision
+ import asv_sim.dynamics
+ import asv_sim.environment
+ import asv_sim.model
+-import asv_sim.platform
++import asv_sim.sim_platform
+ from asv_sim_msgs.msg import Collision
+ from rcl_interfaces.msg import ParameterDescriptor
+ import rclpy
+@@ -38,7 +38,7 @@ class AsvSim(rclpy.node.Node):
+         self.platforms = []
+         for platform_name in self.platforms_param.value:
+             self.platforms.append(
+-                asv_sim.platform.Platform(platform_name, self))
++                asv_sim.sim_platform.Platform(platform_name, self))
+ 
+         self.reset_subscriber = self.create_subscription(
+             Bool, '~/sim_reset', self.reset_callback, 1)
+diff --git a/asv_sim/asv_sim/platform.py b/asv_sim/asv_sim/sim_platform.py
+similarity index 100%
+rename from asv_sim/asv_sim/platform.py
+rename to asv_sim/asv_sim/sim_platform.py
+diff --git a/asv_sim/config/bizzyboat.yaml b/asv_sim/config/bizzyboat.yaml
+index 4a2ce73..77c7e21 100644
+--- a/asv_sim/config/bizzyboat.yaml
++++ b/asv_sim/config/bizzyboat.yaml
+@@ -7,7 +7,7 @@ asv_sim:
+ 
+     # Lake Massabesic — last recorded pose from the 2026-06-12 deployment
+     # (mavros/global_position/global + SBG gps_hdt true heading, end of bag).
+-    # start_heading is compass-true degrees (platform.py: yaw = 90 - heading).
++    # start_heading is compass-true degrees (sim_platform.py: yaw = 90 - heading).
+     platforms.bizzy.start_lat: 42.99055860
+     platforms.bizzy.start_lon: -71.39295800
+     platforms.bizzy.start_heading: 353.6
+diff --git a/asv_sim/config/environment.yaml b/asv_sim/config/environment.yaml
+index a4d790f..322bd2e 100644
+--- a/asv_sim/config/environment.yaml
++++ b/asv_sim/config/environment.yaml
+@@ -13,7 +13,7 @@
+ # Set all amplitudes to [0.0] to disable waves.
+ #
+ # Sensor noise (Layer 3) is per-platform, not per-environment.
+-# Defaults in platform.py:
++# Defaults in sim_platform.py:
+ #   sensor_noise.gps.horizontal: 0.02 m (RTK quality)
+ #   sensor_noise.gps.vertical:   0.04 m
+ #   sensor_noise.imu.orientation: 0.1 deg
+-- 
+2.53.0
+
+
+From c4950f521c9d7ec032f6f4f7d996d0cb13639f48 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:27:03 -0500
+Subject: [PATCH 5/8] asv_helm: declare rclcpp_lifecycle, std_msgs (cause 11)
+
+---
+ asv_helm/package.xml | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/asv_helm/package.xml b/asv_helm/package.xml
+index a0b8399..9ae0f74 100644
+--- a/asv_helm/package.xml
++++ b/asv_helm/package.xml
+@@ -15,6 +15,8 @@
+   <depend>marine_autonomy</depend>
+   <depend>marine_interfaces</depend>
+   <depend>rclcpp</depend>
++  <depend>rclcpp_lifecycle</depend>
++  <depend>std_msgs</depend>
+ 
+   <export>
+     <build_type>ament_cmake</build_type>
+-- 
+2.53.0
+
+
+From 9db231932701cfb54340d857d8fa736ddd6797a9 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:27:03 -0500
+Subject: [PATCH 6/8] mbes_sim: declare (cause 11)
+
+---
+ mbes_sim/package.xml | 5 +++++
+ 1 file changed, 5 insertions(+)
+
+diff --git a/mbes_sim/package.xml b/mbes_sim/package.xml
+index ca4643f..ba92799 100644
+--- a/mbes_sim/package.xml
++++ b/mbes_sim/package.xml
+@@ -12,12 +12,17 @@
+   <depend>marine_acoustic_msgs</depend>
+   <depend>sensor_msgs</depend>
+   <depend>sensor_msgs_py</depend>
++  <depend>std_msgs</depend>
+   <depend>marine_autonomy</depend>
+   <depend>python3-gdal</depend>
+   <depend>python3-numpy</depend>
+   <depend>ament_index_python</depend>
+   <depend>rclpy</depend>
+ 
++  <exec_depend>launch</exec_depend>
++  <exec_depend>launch_ros</exec_depend>
++  <exec_depend>lifecycle_msgs</exec_depend>
++
+   <test_depend>python3-pytest</test_depend>
+ 
+   <export>
+-- 
+2.53.0
+
+
+From cfdbd29769892dbf9c878c0065506180b0ada786 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:27:03 -0500
+Subject: [PATCH 7/8] asv_sim: declare (cause 11)
+
+---
+ asv_sim/package.xml | 6 ++++++
+ 1 file changed, 6 insertions(+)
+
+diff --git a/asv_sim/package.xml b/asv_sim/package.xml
+index 653726a..d48aa82 100644
+--- a/asv_sim/package.xml
++++ b/asv_sim/package.xml
+@@ -9,6 +9,7 @@
+ 
+   <depend>asv_sim_msgs</depend>
+   <depend>geometry_msgs</depend>
++  <depend>rcl_interfaces</depend>
+   <depend>rclpy</depend>
+   <depend>sensor_msgs</depend>
+   <depend>std_msgs</depend>
+@@ -17,12 +18,17 @@
+   <exec_depend>mbes_sim</exec_depend>
+   <!-- Only needed when collision.enc_dir is set (OGR reads the S-57 cells). -->
+   <exec_depend>python3-gdal</exec_depend>
++  <!-- The launch/*_launch.xml files. -->
++  <exec_depend>launch_xml</exec_depend>
++  <exec_depend>launch_ros</exec_depend>
+ 
+   <test_depend>ament_copyright</test_depend>
+   <test_depend>ament_flake8</test_depend>
+   <test_depend>ament_pep257</test_depend>
+   <test_depend>python3-pytest</test_depend>
+   <test_depend>python3-numpy</test_depend>
++  <test_depend>python3-yaml</test_depend>
++  <test_depend>launch</test_depend>
+   <test_depend>launch_testing</test_depend>
+   <test_depend>launch_testing_ros</test_depend>
+   <test_depend>launch_ros</test_depend>
+-- 
+2.53.0
+
+
+From 46b8153c36e7855f121853cec8275c5f824d31b3 Mon Sep 17 00:00:00 2001
+From: scratch <s@x>
+Date: Mon, 23 Nov 2026 12:36:51 -0500
+Subject: [PATCH 8/8] docs: name the workflow in the agent guide
+
+---
+ .agents/README.md | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/.agents/README.md b/.agents/README.md
+index ad45ee4..c6fbd5c 100644
+--- a/.agents/README.md
++++ b/.agents/README.md
+@@ -20,6 +20,7 @@
+ 
+ ```
+ unh_marine_simulation/
++├── .github/workflows/ci.yml           # CI: the four ported packages, Jazzy and Rolling
+ ├── asv_sim/                           # ASV dynamics simulator
+ │   ├── asv_sim/                       #   Python module (dynamics, environment, model, sim_platform, collision, charts)
+ │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
+@@ -104,6 +105,8 @@ colcon build --packages-select asv_sim asv_sim_msgs asv_helm vrx_project11 mbes_
+ source ../../../.agent/scripts/setup.bash && colcon test --packages-select asv_sim && colcon test-result --verbose
+ ```
+ 
++CI (`.github/workflows/ci.yml`, carried on `jazzy` and `rolling`): builds and tests `asv_sim_msgs`, `asv_helm`, `asv_sim` and `mbes_sim` only, a Jazzy job and a Rolling job (skipped on `jazzy`), with `marine_autonomy` and `marine_interfaces` from a sparse clone of `rolker/unh_marine_autonomy` on the branch of the same name; it fails if `asv_sim` or `mbes_sim` ran no Python test. The other five packages are not built there.
++
+ Known build issues:
+ - `mbes_sim` includes a 69 MB chart bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
+ - `marine_charts_to_gazebo_world` requires GDAL (`python3-gdal`) and may fail to build if GDAL headers are missing
+-- 
+2.53.0
+
