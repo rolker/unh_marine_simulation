@@ -12,11 +12,16 @@
   <depend>marine_acoustic_msgs</depend>
   <depend>sensor_msgs</depend>
   <depend>sensor_msgs_py</depend>
+  <depend>std_msgs</depend>
   <depend>marine_autonomy</depend>
   <depend>python3-gdal</depend>
   <depend>python3-numpy</depend>
   <depend>ament_index_python</depend>
   <depend>rclpy</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 
   <test_depend>python3-pytest</test_depend>
 
