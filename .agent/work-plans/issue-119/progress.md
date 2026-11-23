@@ -162,3 +162,48 @@ The plan is sound and ready: the rename is a pure 100 % move plus the one import
 **Decision**: proceed
 
 Read: the Plan Review at `1d7d704`, verdict ready, five findings. The implementer applies them as follows. F1: the pull request text and the follow-up issue draft say that `test_tide_integration.py` runs under `colcon test` only because released `launch_testing` overrides `collect_ignore` (fixed upstream by ros2/launch#1048, not yet released), so after a sync the `asv_sim` count drops from 163 to 162 and that test then runs nowhere in CI; no code change. F2: the plan and pull request text name which tests are timing-sensitive (`test_multi_platform` wall-clock in one process; `test_tide_integration` the fragile one: a launched process, cross-process discovery, a 5 s window) so a first-run failure is read correctly; the simulator and its tests are not changed for it. F3: the advice for pending work on `platform.py` says `git cherry-pick` or `git am -3`, not `--directory`. F4: the test-count guard subtracts `errors` as well as `skipped`, so colcon's placeholder file cannot read as one test. F5: the colcon-core version wording is corrected. Decisions: the module is renamed to `sim_platform.py` (owner: "Rename the module"; the name is the planner's) and the rename is backported to `jazzy` with the other commits, although Jazzy's lint does not need it, so both branches carry the same code (the owner may veto before the backport). The lint finding is #415 cause 15. The velocity block is neither changed nor asserted.
+
+## Implementation
+**Status**: complete
+**When**: 2026-11-23 13:18 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+**Branch**: feature/issue-119 at `ece8d37`
+
+The plan's nine steps as nine commits, in its order, one fix per commit, each ending "Backport to jazzy."; plan corrections in a separate records commit.
+
+- `e0ee056` asv_helm: link with target_link_libraries (cause 1)
+- `7e88fe9` asv_helm: declare rclcpp_lifecycle and std_msgs (cause 11)
+- `9bd0d00` asv_sim, mbes_sim: test extra in place of tests_require (cause 4)
+- `f24c5a7` asv_sim_msgs: test_depend before member_of_group (cause 9)
+- `ee69dff` mbes_sim: declare std_msgs, launch, launch_ros, lifecycle_msgs (cause 11)
+- `addbe15` asv_sim: declare rcl_interfaces, launch_xml, launch_ros, python3-yaml, launch (cause 11)
+- `b842a0e` asv_sim: rename platform.py to sim_platform.py (cause 15: flake8-builtins `A005`, Rolling-only, noble ships 2.1.0 and A005 arrived in 2.3.0); `git` records `{platform.py => sim_platform.py}` 100 %, blob `298bb10` unchanged; only `asv_sim_node.py` (2 lines), two YAML comments and `.agents/README.md:24` change. Velocity block untouched; no velocity/twist/odometry test added.
+- `bc0b66f` ci: build and test the four ported packages on Jazzy and Rolling (the draft, with the guard subtracting `errors`, finding 4)
+- `996a4f9` docs: name the CI workflow in the agent guide
+- `ece8d37` plan: corrections from the plan review (findings 1, 2, 3, 5 and 4, each marked "Corrected 2026-11-23")
+
+Each hunk of `code-fixes.patch` was checked against the source before it was written; the results equal the patch. Nothing differed from the plan except the guard's `errors` term (checkpoint F4).
+
+### Verification (Rolling, Ubuntu 26.04, Python 3.14)
+
+- `./build.sh --parallel-workers 4 --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim`: `Summary: 4 packages finished [9.57s]`, `2 packages had stderr output: asv_helm asv_sim_msgs` (the `cmake_minimum_required` deprecation warnings, left alone). `asv_helm` binary: NEEDED rclcpp, rclcpp_lifecycle and the geometry_msgs, nav_msgs, std_msgs, marine_interfaces typesupports; starts and runs until killed (3 s, rc 124).
+- `./test.sh --parallel-workers 4 --packages-select asv_sim_msgs asv_helm asv_sim mbes_sim` (ROS_DOMAIN_ID 171): `84 passed in 30.08s`; `162 passed, 1 skipped in 115.69s (0:01:55)`; asv_sim_msgs `lint_cmake` and `xmllint` Passed; `Summary: 4 packages finished [2min 27s]`, `Summary: 251 tests, 0 errors, 0 failures, 1 skipped`. `test_flake8` and `test_pep257` pass; no lint failure remains (the skip is `test_copyright.py`).
+- Repeats, separate `python3 -m pytest` processes, 6 at a time, own ROS_DOMAIN_ID per run: `asv_sim` 10 of 10 (`162 passed, 1 skipped`, domains 174 to 183, about 116 s each), `mbes_sim` 10 of 10 (`84 passed`, domains 184 to 193). No failure.
+- Rolling job rehearsed: the workflow's own `run:` blocks from the committed `ci.yml`, `env -i` (HOME, `PATH=/usr/bin:/bin`, ROS_DOMAIN_ID 173, ROS_DISTRO/VERSION/PYTHON_VERSION), a clone of this branch as the checkout, `../ws` laid out by the workflow, sparse clone of unh_marine_autonomy `rolling` (`ec4fd5d`), rosdep as `--simulate` (nothing to install): every step rc=0; Build `Summary: 6 packages finished [23.6s]`; Test `Summary: 4 packages finished [2min 29s]`; `Summary: 251 tests, 0 errors, 0 failures, 1 skipped`; guard `build/asv_sim/pytest.xml: 163 tests, 1 skipped, 0 errors`, `build/mbes_sim/pytest.xml: 84 tests, 0 skipped, 0 errors`, rc 0. Not rehearsable here: apt, rosdep init/update, the container.
+- Guard cases: (1) normal run: rc 0 (above). (2) `tests_require` restored in both `setup.py`, fresh build/install/log, steps Build to guard: Test rc 5 (`NO TESTS RAN`), guard rc 1 naming both missing files. (3) no build folder: rc 1, both files named; one file missing (mbes_sim) with a good asv_sim file: rc 1. (4) colcon's placeholder (`tests="1" errors="1"`) in both: `1 tests, 0 skipped, 1 errors` / `no Python test ran`, rc 1; the draft guard without `errors` passed it (rc 0).
+
+### Pull request statements (ready to paste)
+
+- `test_tide_integration.py` runs under `colcon test` only because released `launch_testing` (Rolling 3.10.3, Jazzy 3.4.13) overrides `collect_ignore` in `asv_sim/test/conftest.py` (its `pytest_ignore_collect` hook returns `False`). ros2/launch#1048 fixes that and is not yet released; after a sync the `asv_sim` count drops from 163 to 162 and that test then runs nowhere in CI. The test-count guard will not notice (the count stays above zero).
+- Timing-sensitive tests: `test_tide_integration` is the fragile one (a launched process, cross-process DDS discovery, a 5 s collection window starting at `ReadyToTest`, more than 5 messages and a 0.5 m range needed); `test_multi_platform` uses the wall clock (8 s, 6 s and 18 s drives on `time.monotonic`) but in one process with one executor. `test_dynamics_stability`, `test_tide_model` and `test_collision` use explicit timestamps and no messaging. A first-run failure of `test_tide_integration` on a shared runner should be read as timing, not as a port defect, until shown otherwise.
+- `asv_sim/asv_sim/platform.py` is renamed to `asv_sim/asv_sim/sim_platform.py` with no content or symbol change. Pending work that edits `platform.py` is carried over with `git cherry-pick` or `git am -3`, which follow the rename; plain `git am` or `git apply` does not.
+
+### Not verified
+
+Nothing was run on Jazzy (not installed here; no Docker). The pull request's Jazzy job, which builds this branch's code on Jazzy, is the first Jazzy evidence and this repository's first CI run ever; in particular, older flake8 plugins on noble (flake8 7.0.0, import-order 0.18.2, comprehensions 3.14.0) were not run against this code. The GitHub runner, apt, rosdep init/update and the container were not exercised. No simulator run and no helm command through `asv_helm`.
+
+### Found and left alone (for the follow-up issue)
+
+- `vrx_project11/CMakeLists.txt:22` also uses `ament_target_dependencies` (one of the five unported packages; it will fail the same way on Rolling).
+- `launch_ros` is now both `exec_depend` and `test_depend` in `asv_sim/package.xml` (valid; `catkin_pkg` validate gives no warning).
+- Plus the plan's list: the five other packages, the `cmake_minimum_required` warnings, stale `asv_sim/doc`, `test_copyright` skipped, no unit tests in `asv_helm`/`asv_sim_msgs`, the pre-commit `flake8-builtins==2.1.0` pin, and `test_tide_integration` after ros2/launch#1048.
