@@ -238,3 +238,24 @@ Outside reviewers: Gemini and Codex completed. Not kept: Codex's launch-test cov
 **Decision**: publish
 
 Read: the Local Review (Pre-Push) at `5017b7c`, verdict approved, ship recommended, one suggestion open: `asv_helm` installs `launch/asv_helm_launch.py`, which imports `launch`, `launch_ros` and `lifecycle_msgs`, and its manifest declares none (`asv_helm/package.xml:19`; cause 11, as done for `asv_sim` and `mbes_sim`). It stays open and goes through triage after publish together with whatever the first CI run shows, so one fix pass serves both. This is a project issue, so the host runs no full pre-commit pass. The pull request says `Part of #119`.
+
+## Integrated Review
+**Status**: complete
+**When**: 2026-11-23 13:40 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+
+**PR**: #121 at `f837578`
+**Sources**: 2 (Local Review (Pre-Push) @ `5017b7c` (covers `f837578` via bookkeeping), CI rollup run 45239158663 @ `f837578`); no GitHub reviews, inline or conversation comments, and no Copilot review or check-run on the head
+**Cross-source confirmations**: 0 (no GitHub comments to correlate)
+**CI**: all-pass
+
+CI, the repository's first run (run 45239158663, both jobs at `f837578`):
+- build-and-test (jazzy), `ros:jazzy-ros-core` on noble: success in 5m14s. rosdep "#All required rosdeps installed successfully"; build "Summary: 6 packages finished [1min 16s]"; test "Summary: 4 packages finished [2min 34s]"; test-result "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard "build/asv_sim/pytest.xml: 163 tests, 1 skipped, 0 errors" and "build/mbes_sim/pytest.xml: 84 tests, 0 skipped, 0 errors". Lint tests pass under noble's plugins; `test_tide_integration` and `test_multi_platform` pass. Compiler warnings only in `marine_autonomy/include/marine_autonomy/gz4d_geo.h` (another repository, -Wlogical-not-parentheses / -Wparentheses).
+- build-and-test (rolling), `ros:rolling-ros-core` on resolute: success in 4m58s. Build "Summary: 6 packages finished [1min 3s]"; test "Summary: 4 packages finished [2min 30s]"; "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard lines identical to Jazzy (163/1 skipped, 84/0). stderr: CMake deprecation warning for `asv_helm` and `asv_sim_msgs` (finding 2).
+
+### Findings
+- [ ] (suggestion, Local Review (Pre-Push) @ `5017b7c`, valid) `asv_helm` installs `launch/` (`asv_helm/CMakeLists.txt:36`) and `asv_helm/launch/asv_helm_launch.py:1-7` imports `launch`, `launch_ros` and `lifecycle_msgs`, none declared. Add `<exec_depend>launch</exec_depend>`, `<exec_depend>launch_ros</exec_depend>`, `<exec_depend>lifecycle_msgs</exec_depend>` after the `<depend>` block, as `mbes_sim/package.xml:22-24` does. All three keys resolve: jazzy/noble → ros-jazzy-launch, ros-jazzy-launch-ros, ros-jazzy-lifecycle-msgs; rolling/resolute → ros-rolling-launch, ros-rolling-launch-ros, ros-rolling-lifecycle-msgs (rolling/noble has no definition, expected: Rolling now targets resolute, and the CI rolling image is resolute). CI passed without them because the build never runs the launch file — `asv_helm/package.xml:19`
+- [ ] (nit, CI rolling job, valid, pre-existing lines) CMake on resolute prints "CMake Deprecation Warning at CMakeLists.txt:1 (cmake_minimum_required): Compatibility with CMake < 3.10 will be removed from a future version of CMake." for `asv_helm` (`VERSION 3.5.1`) and `asv_sim_msgs` (`VERSION 3.8`). Not a failure. Smallest fix that holds on both distros: `cmake_minimum_required(VERSION 3.10)` in both (noble ships 3.28); may go to the follow-up issue instead — `asv_helm/CMakeLists.txt:1`, `asv_sim_msgs/CMakeLists.txt:1`
+
+### False positives
+- None.
