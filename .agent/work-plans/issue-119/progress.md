@@ -111,3 +111,44 @@ Read: the Issue Review of 119 (well-scoped, right repository, no design change).
 **Plan**: `.agent/work-plans/issue-119/plan.md` at `1d7d704`
 
 Nine commits on `rolling` (causes 1, 11 x3, 4, 9, the owner-chosen rename of `platform.py` to `sim_platform.py`, a first CI workflow with a Python test-count guard, and a docs line), all backported by hand. Planned from a measured baseline and a scratch copy: 251 tests, 0 failures, 1 skipped; 290 repeat runs with no intermittent failure; the Rolling job rehearsed in a clean environment; Jazzy facts by reading only.
+
+## Plan Review
+**Status**: complete
+**When**: 2026-11-23 12:58 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+**Verdict**: ready
+
+**Issue**: #119 — Build on ROS 2 Rolling: port asv_sim_msgs, asv_helm, asv_sim and mbes_sim, and add CI
+**Plan**: `.agent/work-plans/issue-119/plan.md` at `1d7d704`
+**Branch**: `feature/issue-119`
+
+### Evaluation
+
+| Dimension | Verdict | Notes |
+|---|---|---|
+| Scope | Good | Four packages, nine small commits, CI separate; the five other packages and the velocity block are left alone as the owner set. |
+| Issue alignment | Good | Every row of the issue's cause table is covered; the issue review's five recommendations are all taken (no `geodesy`, widened cause 11, A005 facts to the owner, test-count guard, named link targets). Serves: "none recorded (no goals or design document in this repository); the work serves #415 and #120" — acceptable for a project with no goals written down. |
+| File targeting | Good | Rename: the only importer is `asv_sim/asv_sim/asv_sim_node.py:12,41`; no test, launch file, entry point or other package imports `asv_sim.platform` (searched this repository, `/home/roland/project11/rolling/*/src`, every remote branch ahead of `origin/jazzy`, `git log --all`). Text mentions are the two YAML comments and `.agents/README.md`, all in the patch. |
+| Consequences | Good | Rename, workflow and agent guide covered. One unrecorded consequence of upstream behaviour: finding 1. |
+| Principle alignment | Good | Each fix has a check that fails without it (build, `xmllint`, `test_flake8`, the guard, strict `rosdep` plus no overlay in the test step). Verify before claiming: Jazzy and the GitHub jobs are stated as unrun. |
+| ADR compliance | Good | 0013 (entries), 0002 (worktree), 0004/0005 (first workflow is the authority). |
+| ROS conventions | Good | Modern CMake targets as in `helm_manager`; `marine_autonomy::marine_autonomy` exists with the same `CMakeLists.txt` on `origin/jazzy` and `origin/rolling` (ALIAS :25, `ament_export_targets` :59, include dir installed so `marine_autonomy/pid.h` resolves); dependency kinds match use (`launch_xml`/`launch_ros`/`lifecycle_msgs` exec, `python3-yaml`/`launch` test). |
+
+### Findings
+
+1. **[Consequences]** (minor) — `test_tide_integration.py` runs under `colcon test` only because of an upstream bug. `asv_sim/test/conftest.py` sets `collect_ignore = ['test_tide_integration.py']` and the file's docstring says it must run under `launch_test`; but `launch_testing`'s `pytest_ignore_collect` hook is `tryfirst` and returns `False` in the released versions (Rolling 3.10.3 installed here, Jazzy 3.4.13 per rosdistro), which overrides `collect_ignore` (checked: `pytest --collect-only` here collects 163 including it). ros2/launch#1048 fixes that (on `rolling` 2026-10-26, backported to `jazzy` 2026-11-02, not yet released on either). After the next sync the `asv_sim` count drops from 163 to 162 on both jobs and the tide integration test then runs nowhere in CI (an `ament_python` package registers no `launch_test`); the guard will not notice (count still > 0). Resolution: say this in the PR text next to the 251/163 counts, and list it in the follow-up issue. No code change here.
+2. **[Principle alignment]** (minor) — Wall-clock tests: the plan should name which tests are timing-sensitive instead of "these tests use the wall clock". From reading them: `test_dynamics_stability`, `test_tide_model` and `test_collision` drive the model with explicit timestamps and create nodes only for parameters (no wall clock, no messaging). `test_multi_platform` is wall-clock (8 s / 6 s / 18 s drives on `time.monotonic`) but in one process with one executor (no cross-process discovery), and the dynamics sub-step any gap up to `max_substeps` 100 × `max_step` 0.1 s, so CPU starvation on a 4-core runner is unlikely to change distances. `test_tide_integration` is the fragile one: a separate launched process, cross-process DDS discovery, a 5 s collection window that starts at `ReadyToTest` (emitted at launch, before the node is up), needing more than 5 messages and a 0.5 m range, and `test_tide_varies` reuses data from the previous test. No test sets `ROS_DOMAIN_ID` (harmless on a GitHub job VM; matters on a shared machine). On a runner, `colcon test` also runs `mbes_sim`'s GDAL tests and the lints concurrently with it. Resolution: state this in the plan/PR so a first-run failure of `test_tide_integration` is read correctly.
+3. **[Consequences]** (minor) — The PR text's advice for pending patches against `platform.py` ("a patch needs `--directory`/hand edit") is wrong about `--directory`: it prepends a path and cannot map `platform.py` to `sim_platform.py` (`git apply --directory=x` → `x/platform.py: No such file or directory`). Checked on a throwaway repository: plain `git am` fails, `git am -3` applies the edit to `sim_platform.py` (rename detection), as does `git cherry-pick`. Resolution: say "`git cherry-pick` or `git am -3`" instead.
+4. **[ROS conventions]** (nit) — The guard reads colcon's `pytest.xml`; colcon writes a placeholder there before running pytest (`tests="1" errors="1"`), so if pytest dies before writing results the guard reports "1 tests" and passes. The Test step fails in that case, so there is no false pass of the job and no false failure; only the guard's message is misleading. Subtracting `errors` would make it exact; optional. Root element (`testsuites` or `testsuite`) and attribute names are handled; a skipped-only suite fails, as intended; a package run by `unittest` writes no `pytest.xml` and fails, as intended.
+5. **[Issue alignment]** (nit) — "`colcon-core` 0.15.2 (noble)": the CI container gets `python3-colcon-core` with `ros-dev-tools` from packages.ros.org, not Ubuntu's 0.15.2. The conclusion holds either way (0.15.2 already maps `extras_require` `test`, as does 0.21.3 here, `package_augmentation/python.py`).
+
+### Summary
+
+The plan is sound and ready: the rename is a pure 100 % move plus the one importer and three text mentions; cause 4's form matches `joy_to_helm`, `command_bridge` and `marine_web_view` in rolker/unh_marine_autonomy and colcon maps it to pytest on both distros; the workflow matches `mru_transform`'s working shape and every rosdep key of the six-package closure resolves for noble and resolute (and is installed here for resolute); nothing touches or tests the velocity block. The findings are PR-text and follow-up items, none blocks implementation.
+
+### Recommended Actions
+
+- [ ] PR text: say `test_tide_integration` currently runs only because of the `launch_testing` collect-ignore bug (ros2/launch#1048) and that the count will drop to 162 when it is released; add it to the follow-up issue.
+- [ ] Plan/PR: name `test_tide_integration` as the timing- and discovery-sensitive test and `test_multi_platform` as wall-clock but in-process; the rest are clock-free.
+- [ ] PR text: replace "`--directory`/hand edit" with "`git cherry-pick` or `git am -3`".
+- [ ] Optional: subtract `errors` in the guard.
