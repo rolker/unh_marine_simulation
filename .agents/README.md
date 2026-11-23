@@ -20,6 +20,7 @@
 
 ```
 unh_marine_simulation/
+├── .github/workflows/ci.yml           # CI: the four ported packages, Jazzy and Rolling
 ├── asv_sim/                           # ASV dynamics simulator
 │   ├── asv_sim/                       #   Python module (dynamics, environment, model, sim_platform, collision, charts)
 │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
@@ -103,6 +104,8 @@ colcon build --packages-select asv_sim asv_sim_msgs asv_helm vrx_project11 mbes_
 # Testing requires setup.bash in the same shell
 source ../../../.agent/scripts/setup.bash && colcon test --packages-select asv_sim && colcon test-result --verbose
 ```
+
+CI (`.github/workflows/ci.yml`, carried on `jazzy` and `rolling`): builds and tests `asv_sim_msgs`, `asv_helm`, `asv_sim` and `mbes_sim` only, a Jazzy job and a Rolling job (skipped on `jazzy`), with `marine_autonomy` and `marine_interfaces` from a sparse clone of `rolker/unh_marine_autonomy` on the branch of the same name; it fails if `asv_sim` or `mbes_sim` ran no Python test. The other five packages are not built there.
 
 Known build issues:
 - `mbes_sim` includes a 69 MB chart bathymetry TIFF (`data/US5NH02M.tiff`); initial clone is large
