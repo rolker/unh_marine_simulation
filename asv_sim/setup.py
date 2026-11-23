@@ -27,7 +27,7 @@ setup(
     maintainer_email='roland@ccom.unh.edu',
     description='Simple ASV simulator',
     license='BSD-2-Clause',
-    tests_require=['pytest'],
+    extras_require={'test': ['pytest']},
     entry_points={
         'console_scripts': [
             'asv_sim = asv_sim.asv_sim_node:main',
