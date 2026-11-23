@@ -152,3 +152,13 @@ The plan is sound and ready: the rename is a pure 100 % move plus the one import
 - [ ] Plan/PR: name `test_tide_integration` as the timing- and discovery-sensitive test and `test_multi_platform` as wall-clock but in-process; the rest are clock-free.
 - [ ] PR text: replace "`--directory`/hand edit" with "`git cherry-pick` or `git am -3`".
 - [ ] Optional: subtract `errors` in the guard.
+
+## Checkpoint
+**Status**: complete
+**When**: 2026-11-23 13:03 -05:00
+**By**: Claude Code Agent (claude-fable-5-2)
+**Decided-by**: host (the plan review's verdict is ready; its five findings are minor or nits and each is a wording or one-line correction the implementer applies; none changes scope or an owner decision)
+**After**: plan
+**Decision**: proceed
+
+Read: the Plan Review at `1d7d704`, verdict ready, five findings. The implementer applies them as follows. F1: the pull request text and the follow-up issue draft say that `test_tide_integration.py` runs under `colcon test` only because released `launch_testing` overrides `collect_ignore` (fixed upstream by ros2/launch#1048, not yet released), so after a sync the `asv_sim` count drops from 163 to 162 and that test then runs nowhere in CI; no code change. F2: the plan and pull request text name which tests are timing-sensitive (`test_multi_platform` wall-clock in one process; `test_tide_integration` the fragile one: a launched process, cross-process discovery, a 5 s window) so a first-run failure is read correctly; the simulator and its tests are not changed for it. F3: the advice for pending work on `platform.py` says `git cherry-pick` or `git am -3`, not `--directory`. F4: the test-count guard subtracts `errors` as well as `skipped`, so colcon's placeholder file cannot read as one test. F5: the colcon-core version wording is corrected. Decisions: the module is renamed to `sim_platform.py` (owner: "Rename the module"; the name is the planner's) and the rename is backported to `jazzy` with the other commits, although Jazzy's lint does not need it, so both branches carry the same code (the owner may veto before the backport). The lint finding is #415 cause 15. The velocity block is neither changed nor asserted.
