@@ -228,3 +228,13 @@ Outside reviewers: Gemini and Codex completed. Not kept: Codex's launch-test cov
 
 ### Findings
 - [ ] (suggestion) `asv_helm` installs `launch/asv_helm_launch.py`, which imports `launch`, `launch_ros` and `lifecycle_msgs`, but its manifest declares none of them. Add three `exec_depend` entries, as cause 11 did for `asv_sim` and `mbes_sim` (Claude adversarial and Codex both found this) — `asv_helm/package.xml:19`
+
+## Checkpoint
+**Status**: complete
+**When**: 2026-11-23 13:30 -05:00
+**By**: Claude Code Agent (claude-fable-5-2)
+**Decided-by**: host (the pre-push review approved round 1 with no must-fix; Jazzy cannot be built on the development machine and this repository has never had CI, so the pushed branch's first run is the first Jazzy evidence and the first test of the workflow)
+**After**: publish
+**Decision**: publish
+
+Read: the Local Review (Pre-Push) at `5017b7c`, verdict approved, ship recommended, one suggestion open: `asv_helm` installs `launch/asv_helm_launch.py`, which imports `launch`, `launch_ros` and `lifecycle_msgs`, and its manifest declares none (`asv_helm/package.xml:19`; cause 11, as done for `asv_sim` and `mbes_sim`). It stays open and goes through triage after publish together with whatever the first CI run shows, so one fix pass serves both. This is a project issue, so the host runs no full pre-commit pass. The pull request says `Part of #119`.
