@@ -331,3 +331,13 @@ No open findings.
 
 ### False positives
 - None.
+
+## Checkpoint
+**Status**: complete
+**When**: 2026-11-23 14:05 -05:00
+**By**: Claude Code Agent (claude-fable-5-2)
+**Decided-by**: owner
+**After**: merge
+**Decision**: merge
+
+The owner's answers, 2026-11-23: "Merge when CI is green (Recommended)" for pull request 121; "All ten, right after (Recommended)" for the hand backport to `jazzy`, the rename included; "Post it (Recommended)" for the comment on rolker/unh_marine_autonomy#415 (cause 15 and two observations); "Open it (Recommended)" for the follow-up issue in this repository. The host merges only after the CI run on the pushed records passes.
