@@ -87,3 +87,19 @@ Checked against the source at `423ff56` (read only; nothing built).
 - [ ] In the plan, give the owner the flake8 facts above (what raises `A005`, whose config applies, what each remedy touches) and no default; the Jazzy behavior is unverified and only the Jazzy job will show it (within scope).
 - [ ] Make the CI fail when `asv_sim` or `mbes_sim` ran no Python test, so cause 4 cannot come back unnoticed (within scope; it is the issue's "counts not zero" condition made checkable).
 - [ ] For cause 1, name the link targets in the plan (`marine_autonomy::marine_autonomy` plus the message and `rclcpp_lifecycle` targets the header needs) and check the form builds on both distros (within scope).
+
+## Checkpoint
+**Status**: complete
+**When**: 2026-11-23 12:19 -05:00
+**By**: Claude Code Agent (claude-fable-5-2)
+**Decided-by**: host (the Issue Review found the issue well-scoped; its actions correct or extend the cause list inside the same four packages, and the one that narrows the CI work is a correction of a wrong statement in the issue)
+**After**: issue-actions
+**Decision**: proceed
+
+Read: the Issue Review of 119 (well-scoped, right repository, no design change). Its actions go to the planner as inputs:
+
+- CI correction: `marine_autonomy` and `marine_interfaces` need no `geodesy`; the workflow needs only a sparse clone of rolker/unh_marine_autonomy for those two packages (branch per distro) and no `geographic_info` clone. The issue's sentence saying otherwise is wrong.
+- Cause 11, the full list, one commit per package, each key confirmed before it is declared: `asv_helm` (`rclcpp_lifecycle`, `std_msgs`); `mbes_sim` (`std_msgs`, `launch`, `launch_ros`, `lifecycle_msgs`); `asv_sim` (`python3-yaml` for a test, `rcl_interfaces`, `launch_xml`, `launch_ros`).
+- Cause 1: the link fix names `marine_autonomy::marine_autonomy` and the message and `rclcpp_lifecycle` targets `pid.h` needs.
+- CI fails when `asv_sim` or `mbes_sim` ran no Python test, so cause 4 cannot return unnoticed.
+- The flake8 `A005` failure: the review's facts (raised by `flake8-builtins` 3.1.0 on this machine; not established for Jazzy; `ament_flake8` ignores the repository's own flake8 config; a rename touches one import; a file-level `# flake8: noqa: A005` on line 2 of `platform.py` exempts that one file and code) go to the owner, who decides; the host is asking him now and passes his answer to the planner.
