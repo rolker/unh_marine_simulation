@@ -13,7 +13,7 @@
 # Set all amplitudes to [0.0] to disable waves.
 #
 # Sensor noise (Layer 3) is per-platform, not per-environment.
-# Defaults in platform.py:
+# Defaults in sim_platform.py:
 #   sensor_noise.gps.horizontal: 0.02 m (RTK quality)
 #   sensor_noise.gps.vertical:   0.04 m
 #   sensor_noise.imu.orientation: 0.1 deg

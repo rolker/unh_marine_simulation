@@ -14,10 +14,20 @@ find_package(nav_msgs REQUIRED)
 find_package(marine_autonomy REQUIRED)
 find_package(marine_interfaces REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(rclcpp_lifecycle REQUIRED)
+find_package(std_msgs REQUIRED)
 
 add_executable(${PROJECT_NAME} src/asv_helm_node.cpp)
 
-ament_target_dependencies(${PROJECT_NAME} geometry_msgs nav_msgs marine_autonomy marine_interfaces rclcpp)
+target_link_libraries(${PROJECT_NAME}
+  ${geometry_msgs_TARGETS}
+  ${nav_msgs_TARGETS}
+  ${marine_interfaces_TARGETS}
+  ${std_msgs_TARGETS}
+  marine_autonomy::marine_autonomy
+  rclcpp::rclcpp
+  rclcpp_lifecycle::rclcpp_lifecycle
+)
 
 install(TARGETS ${PROJECT_NAME}
   DESTINATION lib/${PROJECT_NAME}

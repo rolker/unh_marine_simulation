@@ -10,7 +10,7 @@ setup(
     version='0.0.0',
     packages=find_packages(exclude=['test']),
     install_requires=['setuptools'],
-    tests_require=['pytest'],
+    extras_require={'test': ['pytest']},
     zip_safe=True,
     data_files=[
         ('share/ament_index/resource_index/packages',
