@@ -207,3 +207,24 @@ Nothing was run on Jazzy (not installed here; no Docker). The pull request's Jaz
 - `vrx_project11/CMakeLists.txt:22` also uses `ament_target_dependencies` (one of the five unported packages; it will fail the same way on Rolling).
 - `launch_ros` is now both `exec_depend` and `test_depend` in `asv_sim/package.xml` (valid; `catkin_pkg` validate gives no warning).
 - Plus the plan's list: the five other packages, the `cmake_minimum_required` warnings, stale `asv_sim/doc`, `test_copyright` skipped, no unit tests in `asv_helm`/`asv_sim_msgs`, the pre-commit `flake8-builtins==2.1.0` pin, and `test_tide_integration` after ros2/launch#1048.
+
+## Local Review (Pre-Push)
+**Status**: complete
+**When**: 2026-11-23 13:26 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+**Verdict**: approved
+
+**Branch**: feature/issue-119 at `5017b7c`
+**Base**: origin/rolling
+**Depth**: Deep (reason: 286 changed lines in 13 files outside `.agent/`, including a new `.github/workflows/ci.yml`)
+**Must-fix**: 0 | **Suggestions**: 1
+**Round**: 1 | **Ship**: recommended — no must-fix findings; the one suggestion can be applied or tracked
+
+Re-run here (Rolling, this machine, ROS_DOMAIN_ID 173): `./build.sh --parallel-workers 4 --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim` gives `Summary: 4 packages finished`; `./test.sh --parallel-workers 4 --packages-select` the same four gives `Summary: 251 tests, 0 errors, 0 failures, 1 skipped`; the workflow's guard script, run on those results, prints asv_sim 163 tests (1 skipped), mbes_sim 84 tests, and exits 0. The guard text is identical in both jobs. `colcon list --packages-up-to` exits 1 on an unknown package name, so the dependency step's `set -euo pipefail` fails the job if a package is not found.
+
+Checked by reading, no finding: the rename is a 100 percent move and nothing else in this repository or under `rolling/*/src` imports `asv_sim.platform` (only `/asv_sim/platforms/...` parameter names, and the unbranched copy of `asv_sim_node.py` in `rolling/simulation`). `marine_autonomy` exports `marine_autonomy::marine_autonomy` and the same include directory on `origin/jazzy` and `origin/rolling`. The `asv_helm` link set matches its includes. colcon-core maps `extras_require['test']` to test dependencies, as it does `tests_require`. The workflow matches `mru_transform`'s step for step. Not verified: anything on Jazzy, and whether every rosdep key resolves in a bare `ros:rolling-ros-core` container. The first CI run will show both.
+
+Outside reviewers: Gemini and Codex completed. Not kept: Codex's launch-test coverage point (the owner settled it), Codex's `persist-credentials: false` (the model workflows don't set it and the token is read-only), Gemini's `if: always()` gating, duplication, concurrency and `PRIVATE` points (style, or matching the model workflows), Gemini's dropped-package point (false: colcon exits 1 on an unknown name), Gemini's rename-callers point (checked, none), and Gemini's redundant `launch_ros` test_depend point (valid in format 3, harmless).
+
+### Findings
+- [ ] (suggestion) `asv_helm` installs `launch/asv_helm_launch.py`, which imports `launch`, `launch_ros` and `lifecycle_msgs`, but its manifest declares none of them. Add three `exec_depend` entries, as cause 11 did for `asv_sim` and `mbes_sim` (Claude adversarial and Codex both found this) — `asv_helm/package.xml:19`
