@@ -259,3 +259,13 @@ CI, the repository's first run (run 45239158663, both jobs at `f837578`):
 
 ### False positives
 - None.
+
+## Checkpoint
+**Status**: complete
+**When**: 2026-11-23 13:40 -05:00
+**By**: Claude Code Agent (claude-fable-5-2)
+**Decided-by**: host (two valid findings are open, one with a three-line fix and one a note for the follow-up issue; merging past open findings is the owner's answer only)
+**After**: findings
+**Decision**: address
+
+Read: the Integrated Review of pull request 121 at `f837578`: two valid findings, no false positives, CI all-pass (run 45239158663: Jazzy 6 packages built, 251 tests, 0 errors, 0 failures, 1 skipped, guard 163 and 84, 5m14s; Rolling the same counts, 4m58s; lint passes under noble's plugins). Addressed: (1) `asv_helm/package.xml` gains `exec_depend` on `launch`, `launch_ros` and `lifecycle_msgs` for its installed launch file (cause 11), as one commit for backport. (2) the `cmake_minimum_required` deprecation warning in `asv_helm` and `asv_sim_msgs` is in lines this branch did not write and is already on the owner's left-alone list for the follow-up issue; its box is ticked as deferred there, no change.
