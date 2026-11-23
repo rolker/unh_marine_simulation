@@ -308,3 +308,26 @@ CI on the new head: run 45241158607 at `7388390` passed both jobs. Its strict `r
 
 ### Findings
 - [ ] No issues found. LGTM.
+
+## Integrated Review
+**Status**: complete
+**When**: 2026-11-23 14:01 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+**Dispatch**: resumed (agent a7497cafd13cee2b9, resume 1 of 3)
+
+**PR**: #121 at `d9adcc8`
+**Sources**: 3 (Local Review @ `7388390` (covers `d9adcc8` via bookkeeping; `7388390..d9adcc8` touches only `progress.md`), prior Integrated Review @ `f837578`, CI rollup run 45243296119 @ `d9adcc8`); no GitHub reviews, inline or conversation comments, and no Copilot review or check-run on the head
+**Cross-source confirmations**: 0 (no GitHub comments to correlate)
+**CI**: all-pass
+
+Since the previous Integrated Review at `f837578`: `git diff --stat 3aac485 d9adcc8 -- . ':!.agent'` shows only `asv_helm/package.xml | 4 ++++` (`e877d8b`). Its finding 1 is fixed: `asv_helm/package.xml:21-23` declares `launch`, `launch_ros` and `lifecycle_msgs` as `exec_depend`. The `sources` helper now lists the pre-push review at `5017b7c` as stale (that file changed), so nothing carries over. Its finding 2, the `cmake_minimum_required` deprecation warning, was deferred by the host to the follow-up issue and is settled. The Local Review at `7388390` approved with nothing open.
+
+CI run 45243296119 at `d9adcc8` (same code as `7388390`, which run 45241158607 also passed):
+- build-and-test (jazzy), noble: success in 5m02s. "#All required rosdeps installed successfully"; build "Summary: 6 packages finished [1min 11s]"; test "Summary: 4 packages finished [2min 37s]"; "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard "build/asv_sim/pytest.xml: 163 tests, 1 skipped, 0 errors", "build/mbes_sim/pytest.xml: 84 tests, 0 skipped, 0 errors".
+- build-and-test (rolling), resolute: success in 5m36s. "#All required rosdeps installed successfully" (strict rosdep, so the three new keys resolve there); build "Summary: 6 packages finished [1min 17s]"; test "Summary: 4 packages finished [2min 34s]"; "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard lines the same as Jazzy. The build's stderr in `asv_helm` and `asv_sim_msgs` is the deferred CMake deprecation warning.
+
+### Findings
+No open findings.
+
+### False positives
+- None.
