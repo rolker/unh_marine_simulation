@@ -9,7 +9,7 @@ import asv_sim.collision
 import asv_sim.dynamics
 import asv_sim.environment
 import asv_sim.model
-import asv_sim.platform
+import asv_sim.sim_platform
 from asv_sim_msgs.msg import Collision
 from rcl_interfaces.msg import ParameterDescriptor
 import rclpy
@@ -38,7 +38,7 @@ class AsvSim(rclpy.node.Node):
         self.platforms = []
         for platform_name in self.platforms_param.value:
             self.platforms.append(
-                asv_sim.platform.Platform(platform_name, self))
+                asv_sim.sim_platform.Platform(platform_name, self))
 
         self.reset_subscriber = self.create_subscription(
             Bool, '~/sim_reset', self.reset_callback, 1)

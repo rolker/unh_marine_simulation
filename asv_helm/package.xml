@@ -15,6 +15,12 @@
   <depend>marine_autonomy</depend>
   <depend>marine_interfaces</depend>
   <depend>rclcpp</depend>
+  <depend>rclcpp_lifecycle</depend>
+  <depend>std_msgs</depend>
+
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>lifecycle_msgs</exec_depend>
 
   <export>
     <build_type>ament_cmake</build_type>

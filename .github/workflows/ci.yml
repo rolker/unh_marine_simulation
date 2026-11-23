@@ -1,0 +1,250 @@
+# CI for unh_marine_simulation. The same file is carried on the rolling and
+# jazzy branches; pushes and pull requests to either run it.
+#
+# Both jobs build and test asv_sim_msgs, asv_helm, asv_sim and mbes_sim (the
+# four packages ported to ROS 2 Rolling). The other five packages in this
+# repository are not built: they need repositories that are not ported yet, or
+# Gazebo. Their folders are visible to colcon, so every colcon command names
+# the four packages (--packages-up-to, --packages-select); none runs without a
+# selector.
+#
+# The workspace is this checkout plus marine_autonomy and marine_interfaces,
+# which are not rosdep keys. They come from a sparse clone of
+# rolker/unh_marine_autonomy that checks out those two package folders. The
+# branch matches the job's distro (jazzy or rolling), not a pinned commit:
+# accepted, as in unh_marine_autonomy's own CI and in mru_transform's. Neither
+# package needs geodesy (nothing in marine_autonomy, marine_interfaces or the
+# four packages here includes or links it), so there is no geographic_info
+# clone.
+#
+# rosdep is given only the paths of the build step's --packages-up-to closure,
+# taken from colcon list, with no -r: a key that does not install fails the
+# job. The test step does not source install/setup.bash: colcon test gives each
+# package the environment of its declared workspace dependencies only, so a
+# missing workspace test_depend fails here instead of being hidden by the whole
+# overlay.
+#
+# The step "Python tests ran" fails the job if asv_sim or mbes_sim ran no
+# Python test. With tests_require in setup.py, Rolling's setuptools hides
+# pytest from colcon, which then runs nothing and writes no pytest.xml; the
+# test step alone would not say so. It counts tests minus skipped minus
+# errors: colcon writes a placeholder pytest.xml (1 test, 1 error) before
+# pytest runs, and that must not read as one test that ran.
+#
+# Job "rolling" is skipped for pull requests to and pushes on jazzy
+# (github.base_ref is the target branch of a pull request; github.ref_name is
+# the pushed branch), so on the jazzy branch this file runs the jazzy job only.
+
+name: CI
+
+on:
+  push:
+    branches: [rolling, jazzy]
+  pull_request:
+    branches: [rolling, jazzy]
+
+jobs:
+  jazzy:
+    name: build-and-test (jazzy)
+    # The container supplies the distro's OS; the host runner only runs it.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    container:
+      image: ros:jazzy-ros-core
+
+    steps:
+      - name: Update apt
+        run: apt-get update
+
+      - name: Install ros dev tools
+        run: DEBIAN_FRONTEND=noninteractive apt-get -y install ros-dev-tools git
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Init rosdep
+        run: |
+          if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
+            rosdep init
+          fi
+
+      - name: Update rosdep
+        run: rosdep update
+
+      - name: Create workspace
+        run: mkdir -p ../ws/src && ln -s "$GITHUB_WORKSPACE" ../ws/src/unh_marine_simulation
+
+      - name: Sparse clone of unh_marine_autonomy (jazzy) for marine_autonomy and marine_interfaces
+        working-directory: ../ws
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse -b jazzy https://github.com/rolker/unh_marine_autonomy.git src/unh_marine_autonomy
+          git -C src/unh_marine_autonomy sparse-checkout set marine_autonomy marine_interfaces
+
+      - name: Install ROS dependencies
+        working-directory: ../ws
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths="$(colcon list --base-paths src --paths-only --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim)"
+          if [ -z "$paths" ]; then
+            echo "colcon list returned no package paths" >&2
+            exit 1
+          fi
+          echo "$paths"
+          # shellcheck disable=SC2086
+          DEBIAN_FRONTEND=noninteractive rosdep install --ignore-src -y --from-paths $paths
+
+      - name: Build
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon build --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim
+
+      - name: Test
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon test --packages-select asv_sim_msgs asv_helm asv_sim mbes_sim \
+            --event-handlers console_direct+ --return-code-on-test-failure
+
+      - name: Test results
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/jazzy/setup.bash
+          colcon test-result --verbose
+        if: always()
+
+      - name: Python tests ran
+        working-directory: ../ws
+        shell: bash
+        run: |
+          python3 - build/asv_sim/pytest.xml build/mbes_sim/pytest.xml <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          failed = False
+          for path in sys.argv[1:]:
+              try:
+                  root = ET.parse(path).getroot()
+              except (OSError, ET.ParseError) as error:
+                  print(f'{path}: no usable pytest result ({error}); no Python test ran')
+                  failed = True
+                  continue
+              suites = [root] if root.tag == 'testsuite' else list(root.iter('testsuite'))
+              total = sum(int(suite.get('tests', 0)) for suite in suites)
+              skipped = sum(int(suite.get('skipped', 0)) for suite in suites)
+              errors = sum(int(suite.get('errors', 0)) for suite in suites)
+              print(f'{path}: {total} tests, {skipped} skipped, {errors} errors')
+              if total - skipped - errors <= 0:
+                  print(f'{path}: no Python test ran')
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY
+        if: always()
+
+  rolling:
+    name: build-and-test (rolling)
+    if: (github.base_ref || github.ref_name) != 'jazzy'
+    # The container supplies the distro's OS; the host runner only runs it.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    container:
+      image: ros:rolling-ros-core
+
+    steps:
+      - name: Update apt
+        run: apt-get update
+
+      - name: Install ros dev tools
+        run: DEBIAN_FRONTEND=noninteractive apt-get -y install ros-dev-tools git
+
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Init rosdep
+        run: |
+          if [ ! -f /etc/ros/rosdep/sources.list.d/20-default.list ]; then
+            rosdep init
+          fi
+
+      - name: Update rosdep
+        run: rosdep update
+
+      - name: Create workspace
+        run: mkdir -p ../ws/src && ln -s "$GITHUB_WORKSPACE" ../ws/src/unh_marine_simulation
+
+      - name: Sparse clone of unh_marine_autonomy (rolling) for marine_autonomy and marine_interfaces
+        working-directory: ../ws
+        run: |
+          git clone --depth 1 --filter=blob:none --sparse -b rolling https://github.com/rolker/unh_marine_autonomy.git src/unh_marine_autonomy
+          git -C src/unh_marine_autonomy sparse-checkout set marine_autonomy marine_interfaces
+
+      - name: Install ROS dependencies
+        working-directory: ../ws
+        shell: bash
+        run: |
+          set -euo pipefail
+          paths="$(colcon list --base-paths src --paths-only --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim)"
+          if [ -z "$paths" ]; then
+            echo "colcon list returned no package paths" >&2
+            exit 1
+          fi
+          echo "$paths"
+          # shellcheck disable=SC2086
+          DEBIAN_FRONTEND=noninteractive rosdep install --ignore-src -y --from-paths $paths
+
+      - name: Build
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/rolling/setup.bash
+          colcon build --packages-up-to asv_sim_msgs asv_helm asv_sim mbes_sim
+
+      - name: Test
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/rolling/setup.bash
+          colcon test --packages-select asv_sim_msgs asv_helm asv_sim mbes_sim \
+            --event-handlers console_direct+ --return-code-on-test-failure
+
+      - name: Test results
+        working-directory: ../ws
+        shell: bash
+        run: |
+          source /opt/ros/rolling/setup.bash
+          colcon test-result --verbose
+        if: always()
+
+      - name: Python tests ran
+        working-directory: ../ws
+        shell: bash
+        run: |
+          python3 - build/asv_sim/pytest.xml build/mbes_sim/pytest.xml <<'PY'
+          import sys
+          import xml.etree.ElementTree as ET
+
+          failed = False
+          for path in sys.argv[1:]:
+              try:
+                  root = ET.parse(path).getroot()
+              except (OSError, ET.ParseError) as error:
+                  print(f'{path}: no usable pytest result ({error}); no Python test ran')
+                  failed = True
+                  continue
+              suites = [root] if root.tag == 'testsuite' else list(root.iter('testsuite'))
+              total = sum(int(suite.get('tests', 0)) for suite in suites)
+              skipped = sum(int(suite.get('skipped', 0)) for suite in suites)
+              errors = sum(int(suite.get('errors', 0)) for suite in suites)
+              print(f'{path}: {total} tests, {skipped} skipped, {errors} errors')
+              if total - skipped - errors <= 0:
+                  print(f'{path}: no Python test ran')
+                  failed = True
+          sys.exit(1 if failed else 0)
+          PY
+        if: always()
