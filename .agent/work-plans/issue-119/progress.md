@@ -269,3 +269,22 @@ CI, the repository's first run (run 45239158663, both jobs at `f837578`):
 **Decision**: address
 
 Read: the Integrated Review of pull request 121 at `f837578`: two valid findings, no false positives, CI all-pass (run 45239158663: Jazzy 6 packages built, 251 tests, 0 errors, 0 failures, 1 skipped, guard 163 and 84, 5m14s; Rolling the same counts, 4m58s; lint passes under noble's plugins). Addressed: (1) `asv_helm/package.xml` gains `exec_depend` on `launch`, `launch_ros` and `lifecycle_msgs` for its installed launch file (cause 11), as one commit for backport. (2) the `cmake_minimum_required` deprecation warning in `asv_helm` and `asv_sim_msgs` is in lines this branch did not write and is already on the owner's left-alone list for the follow-up issue; its box is ticked as deferred there, no change.
+
+## Implementation
+**Status**: complete
+**When**: 2026-11-23 13:42 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+
+**PR**: #121 at `e877d8b`
+**Addressed**: Integrated Review at `f837578` (2026-11-23 13:40 -05:00)
+**Commits**: e877d8b (fix), 61b6cae (records: box ticks)
+
+### Actions
+- [x] `asv_helm` declares `launch`, `launch_ros`, `lifecycle_msgs` as `exec_depend` after the `<depend>` block, as `mbes_sim` does (cause 11, rolker/unh_marine_autonomy#415); validates against package_format2.xsd — `asv_helm/package.xml:21-23`
+- [x] `cmake_minimum_required` deprecation warning in `asv_helm` and `asv_sim_msgs` — `asv_helm/CMakeLists.txt:1`, `asv_sim_msgs/CMakeLists.txt:1` (deferred: not this pull request's: pre-existing; on the left-alone list for the follow-up issue the host drafts for the owner)
+
+### Verification
+- `./build.sh --parallel-workers 4 --packages-up-to asv_helm`: `Summary: 1 package finished [0.67s]` (stderr is the deferred CMake deprecation warning only)
+- `./test.sh --parallel-workers 4 --packages-select asv_helm asv_sim_msgs`: `Summary: 2 packages finished [0.42s]`; `Summary: 251 tests, 0 errors, 0 failures, 1 skipped`
+- `ros2 launch asv_helm asv_helm_launch.py --show-args` from the built install parses: "No arguments."
+- No full pre-commit pass run here; left to the host before the push.
