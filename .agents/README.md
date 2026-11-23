@@ -21,7 +21,7 @@
 ```
 unh_marine_simulation/
 ├── asv_sim/                           # ASV dynamics simulator
-│   ├── asv_sim/                       #   Python module (dynamics, environment, model, platform, collision, charts)
+│   ├── asv_sim/                       #   Python module (dynamics, environment, model, sim_platform, collision, charts)
 │   ├── config/                        #   Platform configs (ben.yaml, cw4.yaml, drix.yaml, demo.yaml, ...)
 │   ├── enc/                           #   NOAA S-57 cells US5PSMCC/US5PSMCD (+ update, README, user agreement) for charted-object collision
 │   └── test/                          #   Linting, tide tests, test_multi_platform.py (in-process)
