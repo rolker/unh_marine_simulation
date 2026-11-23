@@ -288,3 +288,23 @@ Read: the Integrated Review of pull request 121 at `f837578`: two valid findings
 - `./test.sh --parallel-workers 4 --packages-select asv_helm asv_sim_msgs`: `Summary: 2 packages finished [0.42s]`; `Summary: 251 tests, 0 errors, 0 failures, 1 skipped`
 - `ros2 launch asv_helm asv_helm_launch.py --show-args` from the built install parses: "No arguments."
 - No full pre-commit pass run here; left to the host before the push.
+
+## Local Review
+**Status**: complete
+**When**: 2026-11-23 13:47 -05:00
+**By**: Claude Code Agent (claude-opus-5-5)
+**Dispatch**: resumed (agent ab6129a738204bd78, resume 1 of 3)
+**Verdict**: approved
+
+**PR**: #121 at `7388390`
+**Depth**: Deep (reason: a narrow check per the handoff: round 1 had no must-fix, so this covers only the one open suggestion and the fix diff since `5017b7c`; no cross-model reviewers)
+**Must-fix**: 0 | **Suggestions**: 0
+
+Scope: since `5017b7c`, `git diff --stat 996a4f9..HEAD -- . ':!.agent'` shows only `asv_helm/package.xml | 4 ++++`, from `e877d8b`. The rest of the range is records. The one suggestion from round 1 is resolved: `<exec_depend>` on `launch`, `launch_ros` and `lifecycle_msgs` sits after the `<depend>` block and before `<export>`. That position is valid for `format="2"`, where the dependency elements are an unordered choice. The new lines follow the layout of `mbes_sim/package.xml`. `catkin_pkg` parses and validates the manifest, and its exec_depends now include the three. The `cmake_minimum_required` warning was deferred to the follow-up issue by the host and is settled, so it is not a finding.
+
+CI on the new head: run 45241158607 at `7388390` passed both jobs. Its strict `rosdep install` checks that the three keys resolve in both containers.
+- build-and-test (jazzy), noble: "#All required rosdeps installed successfully"; "Summary: 6 packages finished [1min 3s]"; "Summary: 4 packages finished [2min 27s]"; "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard "build/asv_sim/pytest.xml: 163 tests, 1 skipped, 0 errors", "build/mbes_sim/pytest.xml: 84 tests, 0 skipped, 0 errors".
+- build-and-test (rolling), resolute: "#All required rosdeps installed successfully"; "Summary: 6 packages finished [1min 3s]"; "Summary: 4 packages finished [2min 37s]"; "Summary: 251 tests, 0 errors, 0 failures, 1 skipped"; guard lines the same as Jazzy (163/1 skipped, 84/0).
+
+### Findings
+- [ ] No issues found. LGTM.
